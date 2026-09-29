@@ -29,7 +29,7 @@ export function Section(props: {
  *
  *  `aria-hidden` with the word beside it, because an asterisk is a convention
  *  for sighted readers and silence for everyone else. */
-export function RequiredMark() {
+function RequiredMark() {
   return (
     <>
       <span aria-hidden="true" className="text-red-600">*</span>
@@ -50,7 +50,7 @@ export function Field(props: {
         {props.label}{props.required && <RequiredMark />}
       </span>
       {props.children}
-      {props.hint && <span className="text-[11px] text-slate-400">{props.hint}</span>}
+      {props.hint && <span className="text-2xs text-slate-400">{props.hint}</span>}
     </label>
   );
 }
@@ -132,7 +132,7 @@ export function Check(props: {
       />
       <span>
         {props.label}
-        {props.hint && <span className="block text-[11px] text-slate-400">{props.hint}</span>}
+        {props.hint && <span className="block text-2xs text-slate-400">{props.hint}</span>}
       </span>
     </label>
   );
@@ -181,9 +181,9 @@ export function Figure(props: {
       <div className={"font-bold text-slate-900 leading-none "
         + (props.big ? "text-2xl" : "text-lg")}>{props.n}</div>
       <div className={"font-medium text-slate-600 "
-        + (props.big ? "text-xs mt-1" : "text-[11px] mt-0.5")}>{props.unit}</div>
+        + (props.big ? "text-xs mt-1" : "text-2xs mt-0.5")}>{props.unit}</div>
       <div className={"text-slate-400 "
-        + (props.big ? "text-[11px] mt-0.5" : "text-[10px]")}>{props.sub}</div>
+        + (props.big ? "text-2xs mt-0.5" : "text-3xs")}>{props.sub}</div>
     </div>
   );
 }
@@ -229,7 +229,7 @@ export function PlanCaveats(props: {
       {assumed.map((a) => (
         <div key={a.unit}
           className={small ? "" : "border border-amber-300 bg-amber-50 rounded-lg p-3"}>
-          <p className={small ? "text-[11px] text-amber-700" : "text-xs text-amber-900"}>
+          <p className={small ? "text-2xs text-amber-700" : "text-xs text-amber-900"}>
             <b>{a.figure.toLocaleString()} {a.unit} is
             assumed</b>, not measured — it is what a pod of this size is
             rated for. How much one pod really carries depends
@@ -242,7 +242,7 @@ export function PlanCaveats(props: {
       {props.warnings.map((w) => (
         <div key={w}
           className={small ? "" : "border border-slate-200 bg-slate-50 rounded-lg p-3"}>
-          <p className={small ? "text-[11px] text-slate-500" : "text-xs text-slate-600"}>
+          <p className={small ? "text-2xs text-slate-500" : "text-xs text-slate-600"}>
             {w}
           </p>
         </div>
@@ -287,7 +287,7 @@ export function Button(props: {
     ghost: "border border-slate-300 text-slate-600 hover:bg-slate-50",
   };
   return (
-    <button className={`${base} ${kinds[props.kind ?? "primary"]}`}
+    <button type="button" className={`${base} ${kinds[props.kind ?? "primary"]}`}
       onClick={props.onClick} disabled={props.disabled || props.busy}
       aria-busy={props.busy || undefined}>
       {props.busy && <Spinner />}
@@ -303,7 +303,7 @@ export function Switch({ on, onChange, label }: {
   on: boolean; onChange: (v: boolean) => void; label?: string;
 }) {
   return (
-    <button role="switch" aria-checked={on} aria-label={label}
+    <button type="button" role="switch" aria-checked={on} aria-label={label}
       onClick={() => onChange(!on)}
       className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${on ? "bg-bzm" : "bg-slate-300"}`}>
       <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${on ? "left-[18px]" : "left-0.5"}`} />
@@ -346,14 +346,10 @@ export function SubSection(props: {
   action?: ReactNode;
 }) {
   const collapsible = props.open !== undefined && !!props.onToggle;
-  const open = !collapsible || props.open;
+  const open = !collapsible || !!props.open;
   const heading = (
     <>
-      {collapsible && (
-        <span aria-hidden="true"
-          className={"text-slate-400 text-sm leading-none transition-transform "
-            + "duration-150 shrink-0 " + (open ? "rotate-90" : "")}>›</span>
-      )}
+      {collapsible && <Chevron open={open} className="text-sm" />}
       {/* Only the finished state is marked. An "unfinished" glyph on every step
           you have not reached yet reads as a list of failures. */}
       <span className="text-xs text-emerald-600 w-2.5 shrink-0">
@@ -361,7 +357,7 @@ export function SubSection(props: {
       </span>
       <h3 className="text-sm font-semibold text-slate-800">{props.title}</h3>
       {props.summary && (
-        <span className="text-[11px] text-slate-500 truncate">
+        <span className="text-2xs text-slate-500 truncate">
           {props.summary}
         </span>
       )}
@@ -387,31 +383,17 @@ export function SubSection(props: {
           {props.action && <div className="ml-auto">{props.action}</div>}
         </div>
       )}
-      {/* The same open/close as an agent row: grid-rows 0fr -> 1fr, because the
-          body's height is not knowable in advance and `height: auto` does not
-          transition. Kept mounted while closed so what was typed into it is
-          still there when it reopens. */}
-      {/* `invisible` as well as zero-height, and that is not decoration: the body
-          stays mounted while closed so what was typed into it survives, and a
-          mounted body inside a 0fr row is still in the hit-testing and
-          accessibility trees. Its buttons took clicks aimed at whatever was
-          drawn over them, and a keyboard tab walked into a section nobody could
-          see. visibility:hidden takes it out of both while keeping the state. */}
-      <div aria-hidden={!open}
-        className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
-          + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr] invisible")}>
-        <div className="overflow-hidden">
-          <div className="p-3">
-            {props.hint && <p className="text-xs text-slate-500 mb-2">{props.hint}</p>}
-            {props.children}
-          </div>
+      <Collapse open={open}>
+        <div className="p-3">
+          {props.hint && <p className="text-xs text-slate-500 mb-2">{props.hint}</p>}
+          {props.children}
         </div>
-      </div>
+      </Collapse>
     </section>
   );
 }
 
-export interface SegmentOption {
+interface SegmentOption {
   value: string;
   label: string;
   /** One line under the label, always visible -- these are choices someone
@@ -445,7 +427,7 @@ export function SegmentedControl(props: {
           const on = o.value === props.value;
           const off = !!o.disabledReason;
           return (
-            <button key={o.value} role="radio" aria-checked={on} disabled={off}
+            <button type="button" key={o.value} role="radio" aria-checked={on} disabled={off}
               title={o.disabledReason}
               onClick={() => props.onChange(o.value)}
               className={"text-left rounded-md border px-3 py-2 transition-colors " +
@@ -460,7 +442,7 @@ export function SegmentedControl(props: {
                 {o.label}
               </span>
               {(o.disabledReason ?? o.hint) && (
-                <span className="block text-[11px] leading-snug mt-0.5 pl-[18px]">
+                <span className="block text-2xs leading-snug mt-0.5 pl-[18px]">
                   {o.disabledReason ?? o.hint}
                 </span>
               )}
@@ -472,7 +454,7 @@ export function SegmentedControl(props: {
   );
 }
 
-export interface SelectOption {
+interface SelectOption {
   value: string | number;
   label: string;
 }
@@ -693,10 +675,10 @@ export function Modal(props: {
         <div className="flex items-baseline gap-2 px-4 py-3 border-b border-slate-200">
           <h2 className="text-sm font-semibold text-slate-900">{props.title}</h2>
           {props.hint && (
-            <span className="text-[11px] text-slate-500 truncate">{props.hint}</span>
+            <span className="text-2xs text-slate-500 truncate">{props.hint}</span>
           )}
           <span className="grow" />
-          <button onClick={props.onClose} aria-label="Close"
+          <button type="button" onClick={props.onClose} aria-label="Close"
             className="text-slate-400 hover:text-slate-700 text-sm leading-none px-1">
             ✕
           </button>
@@ -707,9 +689,12 @@ export function Modal(props: {
   );
 }
 
-export function ErrorMsg({ msg }: { msg: string | null }) {
+/** A refusal or failure, in red. `className` replaces the default size and spacing. */
+export function ErrorMsg({ msg, className = "text-xs mt-1.5" }: {
+  msg: string | null; className?: string;
+}) {
   if (!msg) return null;
-  return <p className="text-xs text-red-600 mt-1.5 break-words">{msg}</p>;
+  return <p className={"text-red-600 break-words " + className}>{msg}</p>;
 }
 
 /** Something the operator has to act on, where the thing they asked for still
@@ -720,5 +705,114 @@ export function NoticeMsg({ msg }: { msg: string | null }) {
   if (!msg) return null;
   return <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200
                        rounded-md px-2 py-1.5 mt-1.5 break-words">{msg}</p>;
+}
+
+const CALLOUT = {
+  amber: "border-amber-200 bg-amber-50 text-amber-800",
+  red: "border-red-300 bg-red-50 text-red-900",
+  emerald: "border-emerald-200 bg-emerald-50 text-emerald-800",
+};
+
+/** An inline box of prose in one of three tones: amber to warn, red for what a
+ *  click will destroy, emerald for what just succeeded. */
+export function Callout(props: {
+  tone: keyof typeof CALLOUT; children: ReactNode; className?: string;
+}) {
+  return (
+    <div className={"rounded-md border px-3 py-2 " + CALLOUT[props.tone]
+      + (props.className ? " " + props.className : "")}>
+      {props.children}
+    </div>
+  );
+}
+
+/** The disclosure chevron: points right when closed and down when open. */
+export function Chevron({ open, className = "text-xs" }: {
+  open: boolean; className?: string;
+}) {
+  return (
+    <span aria-hidden="true"
+      className={"text-slate-400 leading-none shrink-0 transition-transform duration-150 "
+        + (open ? "rotate-90 " : "") + className}>›</span>
+  );
+}
+
+/** A body that folds open and shut under its header.
+ *
+ *  Kept mounted while closed so what was typed into it survives; `invisible`
+ *  and aria-hidden while closed so its controls leave the tab order and stop
+ *  taking clicks. Rows animate 0fr -> 1fr because `height: auto` does not. */
+export function Collapse(props: { open: boolean; id?: string; children: ReactNode }) {
+  return (
+    <div id={props.id} aria-hidden={!props.open}
+      className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
+        + (props.open ? "grid-rows-[1fr]" : "grid-rows-[0fr] invisible")}>
+      <div className="overflow-hidden">{props.children}</div>
+    </div>
+  );
+}
+
+/** A small header that shows or hides what is under it. The body is rendered
+ *  only while open, so a closed one holds no fields. */
+export function Disclosure(props: {
+  open: boolean; onToggle: () => void; header: ReactNode; children: ReactNode;
+  /** Classes for the header button. */
+  className?: string;
+}) {
+  return (
+    <>
+      <button type="button" onClick={props.onToggle} aria-expanded={props.open}
+        className={"flex items-center gap-1.5 text-left "
+          + (props.className ?? "text-2xs text-slate-500 hover:text-slate-700")}>
+        <Chevron open={props.open} />
+        {props.header}
+      </button>
+      {props.open && props.children}
+    </>
+  );
+}
+
+/** A text field inside an editable row. Not inputCls: its w-full refuses to
+ *  shrink in a flex row and pushes the rest of the row off the panel. */
+export const rowFieldCls =
+  "rounded-md border border-slate-300 px-2 py-1.5 text-xs bg-white " +
+  "focus:outline-none focus:ring-2 focus:ring-bzm/40 focus:border-bzm";
+export const rowInputCls = rowFieldCls + " flex-1 min-w-0";
+export const rowSelectCls = rowFieldCls + " shrink-0";
+
+/** Rows of fields with a remove button each and an add button under them.
+ *
+ *  `renderRow` draws one row's fields and writes a changed row with `edit`;
+ *  `below` renders under a row, for its error. */
+export function RowEditor<T>(props: {
+  rows: T[];
+  onChange: (rows: T[]) => void;
+  blank: () => T;
+  addLabel: string;
+  removeLabel: (i: number) => string;
+  renderRow: (row: T, i: number, edit: (row: T) => void) => ReactNode;
+  below?: (row: T, i: number) => ReactNode;
+}) {
+  const { rows, onChange } = props;
+  return (
+    <div className="space-y-1.5">
+      {rows.map((r, i) => (
+        <div key={i}>
+          <div className="flex items-center gap-1.5">
+            {props.renderRow(r, i,
+              (next) => onChange(rows.map((x, j) => (j === i ? next : x))))}
+            <button type="button" title="Remove" aria-label={props.removeLabel(i)}
+              className="text-slate-400 hover:text-red-600 text-sm px-1 shrink-0"
+              onClick={() => onChange(rows.filter((_, j) => j !== i))}>×</button>
+          </div>
+          {props.below?.(r, i)}
+        </div>
+      ))}
+      <button type="button" className="text-xs text-bzm hover:underline"
+        onClick={() => onChange([...rows, props.blank()])}>
+        {props.addLabel}
+      </button>
+    </div>
+  );
 }
 

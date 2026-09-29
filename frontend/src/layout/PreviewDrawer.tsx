@@ -61,10 +61,10 @@ export function PreviewDrawer(props: {
       {open ? (
         <>
           <div className="flex items-center h-12 px-3 gap-2 border-b border-slate-200 shrink-0">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 grow">
+            <span className="text-2xs font-semibold uppercase tracking-wide text-slate-400 grow">
               Preview{files.length > 0 ? ` · ${files.length} files` : ""}
             </span>
-            <button
+            <button type="button"
               onClick={() => props.setOpen(false)}
               aria-expanded
               aria-label="Collapse the preview"
@@ -90,14 +90,14 @@ export function PreviewDrawer(props: {
                     <option key={f.name} value={f.name}>{f.name}</option>
                   ))}
                 </select>
-                <button className={barBtn} onClick={() => go(-1)}
+                <button type="button" className={barBtn} onClick={() => go(-1)}
                   disabled={files.length < 2} title="previous file (←)">←</button>
-                <span className="text-[10px] text-slate-500 whitespace-nowrap">
+                <span className="text-3xs text-slate-500 whitespace-nowrap">
                   {files.length === 0 ? "0 of 0" : `${idx + 1} of ${files.length}`}
                 </span>
-                <button className={barBtn} onClick={() => go(1)}
+                <button type="button" className={barBtn} onClick={() => go(1)}
                   disabled={files.length < 2} title="next file (→)">→</button>
-                <button className={barBtn} disabled={!file}
+                <button type="button" className={barBtn} disabled={!file}
                   onClick={() => file && navigator.clipboard.writeText(file.content)}>
                   copy
                 </button>
@@ -122,7 +122,7 @@ export function PreviewDrawer(props: {
       ) : (
         // The rail. Vertical, so the label fits the width the closed drawer has,
         // and the whole strip is the control rather than a button floating on it.
-        <button
+        <button type="button"
           onClick={() => props.setOpen(true)}
           aria-expanded={false}
           aria-label="Open the manifest preview"
@@ -134,7 +134,7 @@ export function PreviewDrawer(props: {
             strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 5l-5 5 5 5" />
           </svg>
-          <span className="text-[11px] font-medium [writing-mode:vertical-rl]">
+          <span className="text-2xs font-medium [writing-mode:vertical-rl]">
             Preview{files.length > 0 ? ` (${files.length})` : ""}
           </span>
         </button>

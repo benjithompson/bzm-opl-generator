@@ -56,7 +56,7 @@ function memQuantity(mb: number): string {
  *  - "bundle" / "override": explicit options (an imported profile, or the
  *    sizing on step 1) -- they outrank the location, and where the
  *    location asks for something else that is said, never silent. */
-export interface SizeStatement {
+interface SizeStatement {
   kind: "location" | "default" | "noLocation" | "bundle" | "override";
   /** The size the bundle will carry, as the quantities it emits. */
   cpu: string;

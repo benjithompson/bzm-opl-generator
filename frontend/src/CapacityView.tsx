@@ -28,7 +28,7 @@ import { Capacity, CapLocation } from "./api";
 import {
   accountBands, byWorkspace, matching, WorkspaceRollup,
 } from "./capacity";
-import { Button, cardCls, inputCls } from "./components";
+import { Button, cardCls, Chevron, Collapse, inputCls } from "./components";
 import { useFoldSet } from "./foldSet";
 import { plural } from "./text";
 
@@ -112,7 +112,7 @@ export function CapacityView({ cap, refresh, refreshing }: {
             <div className="text-2xl font-bold text-slate-900 tabular-nums leading-none">
               {n(cap.rated_vus)}
             </div>
-            <div className="text-[11px] text-slate-500 mt-0.5">account rated VUs</div>
+            <div className="text-2xs text-slate-500 mt-0.5">account rated VUs</div>
           </div>
           <div className="text-xs text-slate-500">
             {/* Workspaces that hold a location. The account has far more, and
@@ -154,7 +154,7 @@ export function CapacityView({ cap, refresh, refreshing }: {
                 account's, and a headline that changed as you typed would read as
                 the sum of what is on screen. */}
             {filter.trim() && (
-              <p className="text-[11px] text-slate-400 mt-1">
+              <p className="text-2xs text-slate-400 mt-1">
                 {spaces.length} of {holding} shown ·{" "}
                 {n(spaces.reduce((t, w) => t + w.total, 0))} rated VUs in view
               </p>
@@ -187,7 +187,7 @@ export function CapacityView({ cap, refresh, refreshing }: {
                   }} />
               ))}
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">
+            <p className="text-2xs text-slate-400 mt-1">
               One segment per workspace, sized by what only it can claim.
               {bands.some((b) => b.shared) && (
                 <> The striped segment is capacity two or more workspaces can
@@ -247,7 +247,7 @@ function WorkspaceCard(props: {
           reads as an index rather than as a list of names. What folds is
           the bar and the table, which are one thing (see the top of this
           file) and are the detail behind that summary. */}
-      <button onClick={props.onToggle} aria-expanded={open} aria-controls={body}
+      <button type="button" onClick={props.onToggle} aria-expanded={open} aria-controls={body}
         className="w-full text-left px-3 pt-2.5 pb-2 hover:bg-slate-50
                    transition-colors">
         <div className="flex items-baseline gap-2">
@@ -260,7 +260,7 @@ function WorkspaceCard(props: {
           )}
           <span className="text-sm font-semibold text-slate-800">{w.name}</span>
           {w.shared.length > 0 && (
-            <span className="text-[10px] font-bold uppercase tracking-wide
+            <span className="text-3xs font-bold uppercase tracking-wide
                              bg-amber-100 text-amber-800 rounded px-1.5 py-0.5">
               {w.shared.length} shared
             </span>
@@ -270,12 +270,10 @@ function WorkspaceCard(props: {
           </span>
           <span className="grow" />
           <span className="text-sm font-bold tabular-nums">{n(w.total)}</span>
-          <span className="text-[11px] text-slate-400">
+          <span className="text-2xs text-slate-400">
             {Math.round((w.total / (props.accountVus || 1)) * 100)}% of the account
           </span>
-          <span className={"text-slate-400 text-xs self-center "
-            + "transition-transform duration-150 "
-            + (open ? "rotate-90" : "")}>›</span>
+          <Chevron open={open} className="text-xs self-center" />
         </div>
 
         {/* The bar stays out of the fold. It is the same total the line above
@@ -303,10 +301,7 @@ function WorkspaceCard(props: {
           profile's own disclosure: a folded table is out of the tab order and
           out of the accessibility tree, rather than merely nought pixels
           tall. */}
-      <div id={body} aria-hidden={!open}
-        className={"grid transition-[grid-template-rows] duration-[180ms] "
-          + "ease-out " + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr] invisible")}>
-      <div className="overflow-hidden">
+      <Collapse id={body} open={open}>
       <table className="w-full text-xs border-t border-slate-100">
         <thead className="text-slate-500">
           <tr className="border-b border-slate-100">
@@ -328,7 +323,7 @@ function WorkspaceCard(props: {
           reads as a rounding error rather than as "nothing is deployed
           there". Both are worth saying; they are not the same sentence. */}
       {w.shared.length > 0 && (
-        <p className="px-3 py-1.5 text-[11px] text-amber-800 bg-amber-50 border-t border-amber-200">
+        <p className="px-3 py-1.5 text-2xs text-amber-800 bg-amber-50 border-t border-amber-200">
           {w.sharedVus > 0 ? (
             <>
               Striped segments are shared — {n(w.sharedVus)} of this
@@ -346,8 +341,7 @@ function WorkspaceCard(props: {
           )}
         </p>
       )}
-        </div>
-      </div>
+      </Collapse>
     </div>
   );
 }
@@ -362,7 +356,7 @@ function Row({ l, i, workspace }: { l: CapLocation; i: number; workspace: string
           <Swatch i={i} shared={l.shared} />
           <span className="font-medium text-slate-800">{l.name}</span>
           {l.shared && elsewhere.length > 0 && (
-            <span className="text-[10px] text-amber-700">
+            <span className="text-3xs text-amber-700">
               also in {elsewhere.join(", ")}
             </span>
           )}
@@ -372,12 +366,12 @@ function Row({ l, i, workspace }: { l: CapLocation; i: number; workspace: string
               redeployed. The rating covers both either way -- it is what the
               location is sized for, not what is up this minute. */}
           {down > 0 && (
-            <span className="text-[10px] text-amber-700">
+            <span className="text-3xs text-amber-700">
               {down} not reporting
             </span>
           )}
           {l.agents_unknown > 0 && (
-            <span className="text-[10px] text-slate-400"
+            <span className="text-3xs text-slate-400"
               title="this listing carries no heartbeat for them — ask the agent itself">
               {l.agents_unknown} unchecked
             </span>

@@ -55,7 +55,7 @@ export function matching(rows: WorkspaceRollup[], filter: string) {
   return q ? rows.filter((w) => w.name.toLowerCase().includes(q)) : rows;
 }
 
-export interface AccountBand {
+interface AccountBand {
   /** Workspace id, or one of the two synthetic buckets below. */
   key: string;
   name: string;

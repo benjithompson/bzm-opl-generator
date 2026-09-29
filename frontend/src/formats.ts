@@ -18,7 +18,7 @@
 // possible without a DOM -- and what lets optionGroups.ts import *this*, which
 // it does for the one option whose default depends on the format.
 
-export interface OutputFormat {
+interface OutputFormat {
   id: string;
   label: string;
   /** One line on what you get and how you install it. */
@@ -54,7 +54,7 @@ export const isDocker = (format: string) => format === "docker";
 
 /** {option: why} for the options ONE format drops -- one entry of the served
  *  table below. Empty is a real answer here: a format that ignores nothing. */
-export type IgnoredOptions = Record<string, string>;
+type IgnoredOptions = Record<string, string>;
 
 /** ...and the table itself, {format: what it drops}, from
  *  /api/ignored-options (generate.IGNORED_BY_FORMAT).

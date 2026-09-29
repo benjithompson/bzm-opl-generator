@@ -37,7 +37,7 @@ interface StepFlowProps {
 }
 
 const dotCls = (state: "done" | "now" | "todo") =>
-  "w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold "
+  "w-6 h-6 rounded-full flex items-center justify-center text-2xs font-bold "
   + ({
     done: "bg-emerald-500 text-white",
     now: "bg-bzm text-white",
@@ -90,7 +90,7 @@ export function StepFlow({ at, onGo, done, blockedBy, footer, children }: StepFl
               this the step titles ran under the buttons. */}
           <div className="flex items-center gap-1.5 grow min-w-0 overflow-x-auto">
             {steps.map((s, i) => (
-              <button key={s.n} onClick={() => go(i)}
+              <button type="button" key={s.n} onClick={() => go(i)}
                 className={"flex items-center gap-1.5 rounded-full pl-1 pr-3 py-1 "
                   + (i === at ? "bg-white shadow-sm" : "hover:bg-white/60")}>
                 <span className={dotCls(stateOf(i))}>
@@ -104,15 +104,15 @@ export function StepFlow({ at, onGo, done, blockedBy, footer, children }: StepFl
             ))}
           </div>
           <div className="flex items-center gap-3 shrink-0">
-            <span className="text-[11px] text-slate-400 whitespace-nowrap">
+            <span className="text-2xs text-slate-400 whitespace-nowrap">
               Step {at + 1} of {steps.length}
             </span>
-            <button
+            <button type="button"
               className="rounded-md px-3 py-1.5 text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-40"
               disabled={at === 0} onClick={() => go(at - 1)}>
               ← Back
             </button>
-            <button
+            <button type="button"
               className={"rounded-md px-4 py-1.5 text-sm font-medium "
                 + (ready && !last ? "bg-bzm text-white hover:bg-bzm-dark"
                                   : "bg-slate-200 text-slate-400 cursor-not-allowed")}
@@ -123,7 +123,7 @@ export function StepFlow({ at, onGo, done, blockedBy, footer, children }: StepFl
         </div>
       </div>
       {!ready && blockedBy[at] && (
-        <p className="text-[11px] text-amber-700 pt-2">{blockedBy[at]}</p>
+        <p className="text-2xs text-amber-700 pt-2">{blockedBy[at]}</p>
       )}
       {/* The step owns the scrolling, not the page, so the bar above never
           leaves the top of the window. The height leaves room for the footer,

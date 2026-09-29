@@ -11,7 +11,7 @@
 // than being folded because it was not in a set built before it existed.
 import { useState } from "react";
 
-export interface FoldSet {
+interface FoldSet {
   folded: (id: number) => boolean;
   /** Fold this one, or unfold it if it already is. */
   toggle: (id: number) => void;

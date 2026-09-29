@@ -4,7 +4,7 @@ import {
   Ship, SizingModel, Workspace,
 } from "./api";
 import { Attempt, NO_ATTEMPT } from "./attempt";
-import { Section } from "./components";
+import { ErrorMsg, Section } from "./components";
 import { downloadPlan, Recall, recalled, recallNote } from "./token";
 import {
   blockingGroups, configureBlockedBy, detectGroups, enabledFunctionalities,
@@ -753,7 +753,7 @@ export default function App({ api }: { api: Api }) {
   /** One segment of the path under the flow; `warn` says "none yet" in amber. */
   const pathSeg = (label: string, value: string | null, warn = false) => (
     <span className="flex items-center gap-1.5">
-      <span className="text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
+      <span className="text-3xs uppercase tracking-wide text-slate-400">{label}</span>
       <span className={"text-xs font-medium "
         + (value ? "text-slate-800" : warn ? "text-amber-700" : "text-slate-400")}>
         {value ?? (warn ? "none yet" : "—")}
@@ -782,7 +782,7 @@ export default function App({ api }: { api: Api }) {
   const body = view === "capacity" ? (
     <main className="max-w-screen-xl mx-auto p-6">
       {!accountId && <p className="text-sm text-slate-500">Connect first.</p>}
-      {capErr && <p className="text-sm text-red-600">{capErr}</p>}
+      <ErrorMsg msg={capErr} className="text-sm" />
       {!cap && accountId && !capErr && (
         <p className="text-sm text-slate-500">reading the account…</p>
       )}
@@ -806,7 +806,7 @@ export default function App({ api }: { api: Api }) {
                      ships.find((x) => x.id === shipId)?.name ?? null,
                      !!location)}
             {!!location && ships.length === 0 && (
-              <span className="text-[11px] text-amber-700 ml-1">
+              <span className="text-2xs text-amber-700 ml-1">
                 — this location is empty; the first agent has to be created
               </span>
             )}

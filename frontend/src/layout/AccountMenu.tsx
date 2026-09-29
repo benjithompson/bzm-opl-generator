@@ -28,7 +28,7 @@ import {
 
 export interface ConnectBody { path?: string; id?: string; secret?: string; save?: boolean }
 
-export interface ConnectProps {
+interface ConnectProps {
   who: { email: string; keyId: string } | null;
   disconnect: () => void;
   // -- what the key can see. Owned by App, like everything else here.
@@ -133,7 +133,7 @@ export function AccountMenu(p: ConnectProps) {
 
   return (
     <div ref={root} className="relative">
-      <button onClick={() => setMenu(!menu)} aria-expanded={menu}
+      <button type="button" onClick={() => setMenu(!menu)} aria-expanded={menu}
         title={connected ? `${p.who!.email} — the key everything is read with`
           : "not connected — no account is being read"}
         className={"flex items-center gap-2 rounded-md border text-xs w-full "
@@ -155,7 +155,7 @@ export function AccountMenu(p: ConnectProps) {
                 {connected ? p.who!.email : "Not connected"}
               </span>
               {connected && (
-                <span className={"block truncate text-[10px] "
+                <span className={"block truncate text-3xs "
                   + (account ? "text-slate-400" : "text-amber-700")}>
                   {account
                     ? account.name + (workspace ? ` · ${workspace.name}` : "")
@@ -189,13 +189,13 @@ export function AccountMenu(p: ConnectProps) {
           <div className="px-2 py-1.5">
             {/* Room kept for the button, so a long address wraps beside it
                 rather than under it. */}
-            <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold pr-6">
+            <p className="text-2xs uppercase tracking-wide text-slate-400 font-semibold pr-6">
               Connected as
             </p>
             {connected ? (
               <>
                 <p className="text-xs text-slate-800 mt-0.5 break-all">{p.who!.email}</p>
-                <p className="text-[11px] text-slate-400 break-all">
+                <p className="text-2xs text-slate-400 break-all">
                   key {p.who!.keyId.slice(0, 12)}…
                 </p>
               </>
@@ -237,7 +237,7 @@ export function AccountMenu(p: ConnectProps) {
                 </div>
               </div>
               {!account && (
-                <p className="text-[11px] text-amber-700">
+                <p className="text-2xs text-amber-700">
                   Choose an account: without one there are no locations to pick
                   from and nothing for Account capacity to add up.
                 </p>
@@ -256,7 +256,7 @@ export function AccountMenu(p: ConnectProps) {
             )}
           </div>
           {connected && (
-            <p className="px-2 pt-1.5 text-[11px] text-slate-400">
+            <p className="px-2 pt-1.5 text-2xs text-slate-400">
               Disconnecting forgets the key here. One saved to disk stays there.
             </p>
           )}
@@ -353,7 +353,7 @@ function MenuItem(props: {
   onClick: () => void; children: React.ReactNode; danger?: boolean;
 }) {
   return (
-    <button onClick={props.onClick}
+    <button type="button" onClick={props.onClick}
       className={"w-full text-left px-2 py-1.5 rounded text-xs font-medium "
         + (props.danger
           ? "text-red-700 hover:bg-red-50"

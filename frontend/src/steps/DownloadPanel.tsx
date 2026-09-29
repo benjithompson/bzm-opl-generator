@@ -44,7 +44,7 @@ import { DownloadPlan } from "../token";
 import { Sv } from "../sv";
 
 /** What is being generated, for whom, and whether it can be. */
-export interface BundleHandover {
+interface BundleHandover {
   facts: Facts | null;
   shipId: string | null;
   /** The options as they stand. Spread into the request, and read for what
@@ -96,7 +96,7 @@ export interface BundleHandover {
 }
 
 /** What the next download will do about the agent's credential. */
-export interface CredentialHandover {
+interface CredentialHandover {
   /** The answers that must agree -- the hint beside the button, whether the
    *  bundle can be applied at all, and the credential request the download
    *  sends. From token.ts, and `request` is sent rather than read: this panel
@@ -110,7 +110,7 @@ export interface CredentialHandover {
 }
 
 /** Watching the agent this bundle deploys, and the virtual services under it. */
-export interface WatchHandover {
+interface WatchHandover {
   /** Whether it can be watched at all: polling is an API call, and manual entry
    *  is the mode that exists to do without a key. */
   available: boolean;
@@ -126,7 +126,7 @@ export interface WatchHandover {
   check: (host: string) => void;
 }
 
-export interface DownloadPanelProps {
+interface DownloadPanelProps {
   /** The route caller, from App. Every request this panel makes goes through
    *  it -- the two that produce a bundle -- rather than importing the real
    *  client at module level, so what they carry is drivable from a test. */
@@ -184,7 +184,7 @@ function GapRow({ gap, goToAgent, goToConfigure }: {
           <span className="text-slate-400"> · {gap.key}</span>
         </p>
         {gap.source && (
-          <p className="text-[11px] text-slate-500 mt-0.5">{gap.source}</p>
+          <p className="text-2xs text-slate-500 mt-0.5">{gap.source}</p>
         )}
       </div>
       <Button kind="ghost"
@@ -334,11 +334,11 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   <div className="min-w-0 grow">
                     <p className="text-sm font-medium text-slate-700">
                       Watch agent status
-                      <span className="ml-2 font-mono text-[11px] text-slate-500">
+                      <span className="ml-2 font-mono text-2xs text-slate-500">
                         {watch.agent}
                       </span>
                     </p>
-                    <p className="text-[11px] text-slate-400">
+                    <p className="text-2xs text-slate-400">
                       {watch.on
                         ? watch.status
                           ? `${watch.status.state}`
@@ -349,7 +349,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     </p>
                   </div>
                   {watch.on && (
-                    <span className={"flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 shrink-0 "
+                    <span className={"flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 shrink-0 "
                       + (watch.status?.online
                         ? "bg-emerald-100 text-emerald-700"
                         : "bg-slate-100 text-slate-500")}>
@@ -373,7 +373,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                         {watch.mocks.read.mocks.map((m) => {
                           const chk = m.host ? watch.checks[m.host] : undefined;
                           return (
-                            <li key={`${m.name}-${m.port}`} className="text-[11px] text-slate-500">
+                            <li key={`${m.name}-${m.port}`} className="text-2xs text-slate-500">
                               <span className="font-medium text-slate-700">{m.name}</span>
                               <span className="text-slate-400">:{m.port}</span>
                               {m.host ? (
@@ -389,7 +389,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                                       never a second copy of that string. */}
                                   <button type="button" disabled={chk?.busy}
                                     onClick={() => watch.check(m.host!)}
-                                    className="ml-2 align-baseline rounded border border-slate-300 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40">
+                                    className="ml-2 align-baseline rounded border border-slate-300 px-1.5 py-0.5 text-3xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40">
                                     {chk?.busy ? "checking…" : "check endpoint"}
                                   </button>
                                 </>
@@ -404,9 +404,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                                   )}
                                 </p>
                               )}
-                              {chk?.err && (
-                                <p className="mt-0.5 text-red-600">{chk.err}</p>
-                              )}
+                              <ErrorMsg msg={chk?.err ?? null} className="mt-0.5" />
                             </li>
                           );
                         })}
@@ -414,7 +412,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     ) : (
                       // "Nothing deployed" and "cannot look" are different
                       // answers, and the second must not read as the first.
-                      <p className="text-[11px] text-slate-400">{watch.mocks.read.message}</p>
+                      <p className="text-2xs text-slate-400">{watch.mocks.read.message}</p>
                     )}
                   </div>
                 )}

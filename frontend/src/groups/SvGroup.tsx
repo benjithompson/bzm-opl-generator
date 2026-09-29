@@ -1,5 +1,5 @@
 import { Field, inputCls, TextInput } from "../components";
-import { SvPrereqs, svProse } from "../SvPrereqs";
+import { SvPrereqs, svProse } from "./SvPrereqs";
 import { Sv } from "../sv";
 
 // Display names only. The set of values is served from generate.SV_INGRESS_TYPES
@@ -72,7 +72,7 @@ export function SvGroup(props: {
         </Field>
       )}
       {!sv.ok && (
-        <p className="text-[11px] text-amber-700">
+        <p className="text-2xs text-amber-700">
           {sv.nodePortConflict
             ? `Service type must be CLUSTERIP for this backend — crane writes the
                Service's nodePort into the ${sv.rbac?.creates ?? "published object"},

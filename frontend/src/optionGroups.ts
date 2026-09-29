@@ -310,7 +310,7 @@ export function svIncomplete(
  *  that runs mockServices, which is an unanswered question rather than an empty
  *  box, and a service type the chosen backend cannot publish over, which is a
  *  conflict between two answers that were both given. */
-export function svBlocking(
+function svBlocking(
     o: Options, required: boolean,
     backends?: Record<string, { nodeport_ok: boolean }>): boolean {
   if (o.sv_ingress === SV_NONE) return false;
@@ -584,7 +584,7 @@ export function groupsOf(functionalityId: string): OptionGroup[] {
 // the one nobody would remember to update.
 
 /** A reserved variable, and where the thing that writes it is set. */
-export interface ReservedWhere {
+interface ReservedWhere {
   name: string;
   /** The option that writes it, or null where no single option does — the
    *  identity, the fixed posture. Straight off the served table, including its

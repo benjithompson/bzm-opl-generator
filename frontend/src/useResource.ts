@@ -2,9 +2,9 @@ import { DependencyList, useEffect, useState } from "react";
 
 /** `unread` is nothing asked (the fetcher returned null); `error` is asked and
  *  refused. The two are kept apart so a failed read never looks like an empty one. */
-export type ResourceState = "unread" | "loading" | "ok" | "error";
+type ResourceState = "unread" | "loading" | "ok" | "error";
 
-export interface Resource<T> {
+interface Resource<T> {
   state: ResourceState;
   /** The last answer that arrived. Kept through a reload and through a failed
    *  one: a read that could not be made says nothing about what was there. */

@@ -1,6 +1,6 @@
 // Thin typed client for the local bzm-opl-gen API.
 
-export interface KeyCandidate { path: string; key_id: string }
+interface KeyCandidate { path: string; key_id: string }
 export interface Account { id: number; name: string }
 export interface Workspace { id: number; name: string }
 export interface Ship {
@@ -141,7 +141,7 @@ export interface PlaceholderSource {
  *  figure -- the same absence `SizingModel.measured` reports, arriving as the
  *  value rather than as a rule the page has to know. It is why no field here
  *  has to ask which model is the performance one. */
-export interface EngineRating {
+interface EngineRating {
   cpu: string;
   memory: string;
   /** The performance model under the name doctor and `threadsPerEngine` call
@@ -153,7 +153,7 @@ export interface EngineRating {
 
 /** One model's answer inside a plan: its target, what a pod carries, and how
  *  many pods that is. */
-export interface PlanSizing {
+interface PlanSizing {
   functionality: string;
   unit: string;
   target: number;
@@ -681,7 +681,7 @@ export type FuncIdVocabulary = {
  *  optional, so an unreadable one is an "ok" HTTP response carrying which of
  *  the four reasons it was, and the caller never has to guess from an error
  *  string. */
-export type SvReadStatus = "ok" | "no_cli" | "no_context" | "denied" | "no_mocks";
+type SvReadStatus = "ok" | "no_cli" | "no_context" | "denied" | "no_mocks";
 
 /** One functionality the configure step can be pointed at, from
  *  /api/functionalities. The list is served for the same reason as the two
@@ -749,7 +749,7 @@ export interface AgentEnvVar {
 /** A deployed virtual service and the host it answers at. `host` is null until
  *  a wildcard domain is configured. Built by the generator and carried here, so
  *  no caller rebuilds the string the endpoint is published at. */
-export interface SvEndpoint { name: string; port: number; host: string | null }
+interface SvEndpoint { name: string; port: number; host: string | null }
 
 /** What is deployed right now, for the watch panel. */
 export interface SvMocksOut {
@@ -762,7 +762,7 @@ export interface SvMocksOut {
  *  the mock feels: "ok" means something replied with a status line — a 503
  *  included, and that one is the finding, not a failed check. Its `message`
  *  carries the sv-expose wording, so no caller has to recognise the code. */
-export type SvCheckStatus = "ok" | "dns" | "refused" | "tls" | "timeout" | "error";
+type SvCheckStatus = "ok" | "dns" | "refused" | "tls" | "timeout" | "error";
 export type SvScheme = "http" | "https";
 export interface SvCheckOut {
   status: SvCheckStatus;
@@ -776,7 +776,7 @@ export interface SvCheckOut {
 /** Save a Blob to disk under `filename`. Named rather than inlined into
  *  downloadZip because the object-URL and anchor dance is where the browser
  *  quirks live, and it is worth having one place to fix them. */
-export function saveBlob(blob: Blob, filename: string) {
+function saveBlob(blob: Blob, filename: string) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = filename;
@@ -795,7 +795,7 @@ const TOKEN_MESSAGE_HEADER = "X-Bzm-Token-Message";
 /** The name the server gave the archive, which is also the directory it
  *  extracts to. Null where the header is missing or carries no filename -- the
  *  caller has a fallback, and a name guessed here is better than none. */
-export function zipNameFromHeaders(r: Response): string | null {
+function zipNameFromHeaders(r: Response): string | null {
   const m = /filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") ?? "");
   return m ? m[1] : null;
 }

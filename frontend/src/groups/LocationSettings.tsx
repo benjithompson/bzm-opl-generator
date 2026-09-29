@@ -227,7 +227,7 @@ export function LocationSettings(props: {
         <p className="text-xs font-semibold text-slate-700">
           Location settings
         </p>
-        <p className="text-[11px] text-slate-500">
+        <p className="text-2xs text-slate-500">
           What this location may run, in BlazeMeter. None of it is in the
           manifests, so a change here needs no regenerate and no redeploy — it
           applies to the next test that starts.
@@ -250,7 +250,7 @@ export function LocationSettings(props: {
               <span className="text-xs font-medium text-slate-600">
                 {LABELS[k]}
               </span>
-              <span className="block text-[11px] text-slate-400">{HINTS[k]}</span>
+              <span className="block text-2xs text-slate-400">{HINTS[k]}</span>
             </span>
             <span className="text-xs tabular-nums text-slate-400 w-20 text-right
                              shrink-0">
@@ -269,7 +269,7 @@ export function LocationSettings(props: {
         ))}
       </div>
 
-      <p className="text-[11px] text-slate-500">
+      <p className="text-2xs text-slate-500">
         <b>Engines per agent</b> multiplies: this location&apos;s concurrency is
         agents × that figure, so {plural(agents, "agent")}
         {" "}at {draft.slots || "?"} each is{" "}
@@ -279,7 +279,7 @@ export function LocationSettings(props: {
         cluster.
       </p>
 
-      <p className="text-[11px] text-slate-500">
+      <p className="text-2xs text-slate-500">
         The two requests are what the Kubernetes scheduler and the autoscaler
         place engines on; the limits they run at come from the manifests. Left
         blank they default to <b>250m / 256Mi</b>, so every engine asks for a
@@ -303,7 +303,7 @@ export function LocationSettings(props: {
           save leaves nothing edited, the label falls back to Confirm, and the
           way on is the same button it always was. */}
       <div className="flex items-center gap-2">
-        <span className={"text-[11px] "
+        <span className={"text-2xs "
           + (edited.length ? "text-amber-700" : "text-slate-500")}>
           {edited.length === 0
             ? "nothing to save — Confirm moves on to the agent"
@@ -344,7 +344,7 @@ function ProfileLine({ plan, agents, busy, touched }: {
 }) {
   if (!plan) {
     return (
-      <p className="text-[11px] text-amber-700">
+      <p className="text-2xs text-amber-700">
         No sizing yet — make one above and these fields open on what
         it would change here. They can be typed in either way.
       </p>
@@ -352,7 +352,7 @@ function ProfileLine({ plan, agents, busy, touched }: {
   }
   return (
     <div className={"space-y-1 " + (busy ? "opacity-50" : "")}>
-      <p className="text-[11px] text-slate-500">
+      <p className="text-2xs text-slate-500">
         {/* Every sizing in its own unit, because two of the three are not
             virtual users -- and `plan.users` is null where no load test was
             sized at all, which this sentence used to read straight through. */}
@@ -382,14 +382,14 @@ function Outcome({ result }: { result: LocationUpdate }) {
   return (
     <div className="space-y-1">
       {changed.length > 0 && (
-        <p className="text-[11px] text-emerald-700">
+        <p className="text-2xs text-emerald-700">
           saved: {changed.map((k) => (
             `${LABELS[k as keyof Draft].toLowerCase()} ${result.before[k] ?? "not set"} → ${result.after[k]}`
           )).join(", ")}
         </p>
       )}
       {result.ignored.length > 0 && (
-        <p className="text-[11px] text-amber-700">
+        <p className="text-2xs text-amber-700">
           BlazeMeter did not store{" "}
           {result.ignored.map((k) => LABELS[k as keyof Draft].toLowerCase()).join(", ")}
           {" "}— the location still reads the old value, so this account may not
@@ -397,7 +397,7 @@ function Outcome({ result }: { result: LocationUpdate }) {
         </p>
       )}
       {changed.length === 0 && result.ignored.length === 0 && (
-        <p className="text-[11px] text-slate-500">
+        <p className="text-2xs text-slate-500">
           nothing to change — the location already held those values
         </p>
       )}

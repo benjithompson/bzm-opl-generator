@@ -26,7 +26,7 @@ export type ViewId = "flow" | "capacity";
 // what the view says at the top of itself, one line above a total the same
 // sentence describes. A label a whole view is named after does not need a
 // second sentence in the furniture beside it.
-export interface NavItem {
+interface NavItem {
   id: ViewId;
   label: string;
   icon: ReactNode;
@@ -45,7 +45,7 @@ const Icon = ({ d }: { d: string }) => (
 
 /** Deliberately plain shapes: a document for the bundle, bars for the account
  *  rollup. No icon set is worth a dependency for two glyphs. */
-export const NAV: NavItem[] = [
+const NAV: NavItem[] = [
   { id: "flow", label: "Generate",
     icon: <Icon d="M5 2.5h6l4 4v11h-10zM11 2.5v4h4M7.5 11h5M7.5 14h5" /> },
   { id: "capacity", label: "Account capacity",
@@ -75,12 +75,12 @@ export function NavDrawer(props: {
       <div className={"flex items-center h-12 border-b border-slate-200 "
         + (open ? "px-3 gap-2" : "justify-center")}>
         {open && (
-          <span className="text-[11px] font-semibold uppercase tracking-wide
+          <span className="text-2xs font-semibold uppercase tracking-wide
                            text-slate-400 grow">
             Views
           </span>
         )}
-        <button
+        <button type="button"
           onClick={() => props.setOpen(!open)}
           aria-expanded={open}
           aria-label={open ? "Collapse the menu" : "Open the menu"}
@@ -106,7 +106,7 @@ export function NavDrawer(props: {
           const on = props.view === item.id;
           const off = item.id === "capacity" && !props.connected;
           return (
-            <button key={item.id} onClick={() => !off && props.setView(item.id)}
+            <button type="button" key={item.id} onClick={() => !off && props.setView(item.id)}
               aria-current={on ? "page" : undefined}
               disabled={off}
               // The label is the tooltip while collapsed, so the rail is

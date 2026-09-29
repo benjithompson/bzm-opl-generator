@@ -1,12 +1,12 @@
 import { ReactNode } from "react";
-import { SvBackend } from "./api";
+import { SvBackend } from "../api";
+import { SvCtx } from "../sv";
 
 // Who owns each thing a virtual service needs. "you" is the one that bites: the
 // bundle *names* these objects and never creates them, and a missing one fails
 // silently -- the manifests apply, the agent goes idle, the mock pod runs 1/1,
 // and the endpoint simply never answers.
 type SvOwner = "you" | "bundle" | "none";
-export type SvCtx = { ns: string; dom: string; secret: string; gateway: string };
 type SvPrereq = { own: SvOwner; text: (c: SvCtx) => ReactNode };
 
 /** Everything said about one backend, in one place. The hints are here rather
@@ -136,10 +136,10 @@ function PrereqItem({ own, children }: { own: SvOwner; children: ReactNode }) {
   const badge = OWNER_BADGE[own];
   return (
     <li className="flex gap-2 items-baseline">
-      <span className={`shrink-0 w-[74px] text-center rounded border px-1 py-px text-[10px] font-medium ${badge[1]}`}>
+      <span className={`shrink-0 w-[74px] text-center rounded border px-1 py-px text-3xs font-medium ${badge[1]}`}>
         {badge[0]}
       </span>
-      <span className="text-[11px] text-slate-500">{children}</span>
+      <span className="text-2xs text-slate-500">{children}</span>
     </li>
   );
 }
@@ -197,7 +197,7 @@ export function SvPrereqs(
           agent ConfigMap — how crane learns what to publish, and where.
         </PrereqItem>
       </ul>
-      <p className="text-[11px] text-slate-500">
+      <p className="text-2xs text-slate-500">
         Once deployed, each virtual service is served at{" "}
         <code className="text-slate-700">
           &lt;service&gt;-&lt;port&gt;-{ctx.ns}.{ctx.dom}
@@ -210,7 +210,7 @@ export function SvPrereqs(
           that chose it -- that is where someone is deciding whether the host
           they were just given will actually answer. */}
       {backend?.caveat && (
-        <p className="text-[11px] text-amber-700">{backend.caveat}</p>
+        <p className="text-2xs text-amber-700">{backend.caveat}</p>
       )}
     </div>
   );

@@ -44,22 +44,22 @@ export function GroupRow(props: {
           <p className={`text-sm font-medium ${on ? "text-slate-900" : "text-slate-500"}`}>
             {group.title}
             {required && (
-              <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-bzm">
+              <span className="ml-2 text-3xs font-semibold uppercase tracking-wide text-bzm">
                 required
               </span>
             )}
             {declined && (
-              <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-amber-600">
+              <span className="ml-2 text-3xs font-semibold uppercase tracking-wide text-amber-600">
                 declined
               </span>
             )}
             {applies && (
-              <span className="ml-2 text-[10px] font-medium tracking-wide rounded bg-slate-100 text-slate-500 px-1.5 py-0.5 align-middle">
+              <span className="ml-2 text-3xs font-medium tracking-wide rounded bg-slate-100 text-slate-500 px-1.5 py-0.5 align-middle">
                 {applies}
               </span>
             )}
           </p>
-          <p className={`text-[11px] truncate ${declined ? "text-amber-700" : "text-slate-400"}`}>
+          <p className={`text-2xs truncate ${declined ? "text-amber-700" : "text-slate-400"}`}>
             {hint}
           </p>
         </div>

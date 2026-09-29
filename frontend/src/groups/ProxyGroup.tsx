@@ -35,7 +35,7 @@ export function ProxyGroup(props: {
           value={String(proxy.no_proxy ?? "")}
           onChange={(v) => onField("no_proxy", v)} />
       </Field>
-      <p className="text-[11px] text-slate-400">
+      <p className="text-2xs text-slate-400">
         BlazeMeter has no separate proxy-auth env vars — credentials are
         URL-encoded into the proxy URL (user:pass@host). With
         "AUTH_TOKEN in a Secret" on, the credentialed proxy URLs move

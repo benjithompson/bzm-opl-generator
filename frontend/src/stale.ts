@@ -35,7 +35,7 @@ import { ApiError } from "./api";
  *  outlives its location nowhere. A call naming only a location (facts, create
  *  an agent in it) has no such doubt. So: name the *narrowest* thing the call
  *  was about, and the sentence is true whichever of them went. */
-export type Subject = "location" | "agent";
+type Subject = "location" | "agent";
 
 /** Whether this failure is the thing being gone.
  *

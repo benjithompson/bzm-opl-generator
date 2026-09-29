@@ -33,19 +33,19 @@ export function SvDockerGroup(props: {
       </Field>
       <Field label="Certificate (PEM)"
         hint="optional — without a pair the endpoints are plain HTTP. Checked against the hostname above when the bundle is generated">
-        <textarea className={inputCls + " h-24 font-mono text-[11px]"}
+        <textarea className={inputCls + " h-24 font-mono text-2xs"}
           value={props.cert} spellCheck={false}
           placeholder="-----BEGIN CERTIFICATE-----"
           onChange={(e) => props.onCert(e.target.value || null)} />
       </Field>
       <Field label="Private key (PEM, PKCS#8)"
         hint="must carry -----BEGIN PRIVATE KEY----- — convert an RSA key with openssl pkcs8 -topk8 -nocrypt">
-        <textarea className={inputCls + " h-24 font-mono text-[11px]"}
+        <textarea className={inputCls + " h-24 font-mono text-2xs"}
           value={props.key_} spellCheck={false}
           placeholder="-----BEGIN PRIVATE KEY-----"
           onChange={(e) => props.onKey(e.target.value || null)} />
       </Field>
-      <p className="text-[11px] text-slate-500">
+      <p className="text-2xs text-slate-500">
         Both are written into the bundle and mounted into the container, like
         the CA bundle — nothing here reads a path on the machine you will run
         this on. The key is a credential and is deliberately kept out of{" "}

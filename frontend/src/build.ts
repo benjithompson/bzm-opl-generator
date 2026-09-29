@@ -19,13 +19,13 @@ import type { Staleness } from "./api";
 /** How loudly to say it. Two words rather than a boolean, because what a caller
  *  does with it is a colour, an icon and an ARIA role, and "not a warning" is
  *  not the same instruction as "the opposite of a warning". */
-export type Tone = "warning" | "note";
+type Tone = "warning" | "note";
 
 /** A sentence about the built page, in three parts: the caller renders the
  *  heading strongly, the detail beside it and the command as code. Split rather
  *  than one string because the command is markup on screen and a bare string
  *  would have every caller find it again with a regex. */
-export interface BuildNotice {
+interface BuildNotice {
   tone: Tone;
   heading: string;
   detail: string;

@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentStatus, Api, SvCheckOut, SvMocksOut, SvScheme } from "./api";
 import { goneNotice } from "./stale";
 
-export type SvChecks =
+type SvChecks =
   Record<string, { busy: boolean; res?: SvCheckOut; err?: string }>;
 
 /** What the agent-watch poll reads virtual services with. */
-export interface SvWatch { on: boolean; namespace: string; subdomain: string; scheme: SvScheme }
+interface SvWatch { on: boolean; namespace: string; subdomain: string; scheme: SvScheme }
 
 /** Poll an agent's heartbeat every 10s while `polling` is on, and read the
  *  namespace's virtual services on the same tick when SV is configured.

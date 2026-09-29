@@ -50,7 +50,7 @@ export function RegistryGroup(props: {
         </div>
       )}
       {props.whyIgnored("pull_secret") && (
-        <p className="text-[11px] text-slate-400">
+        <p className="text-2xs text-slate-400">
           No image pull secret — {props.whyIgnored("pull_secret")}.
         </p>
       )}

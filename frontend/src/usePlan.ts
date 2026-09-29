@@ -63,7 +63,7 @@ export const EMPTY_PLAN_INPUTS: PlanInputs = {
 
 
 /** One functionality being sized, as the route takes it. */
-export interface SizingAsk {
+interface SizingAsk {
   functionality: string;
   target: string;
   /** Absent where the model has no measured figure to override. */
@@ -81,7 +81,7 @@ export interface PlanAsk {
   agents?: string;
 }
 
-export interface PlanState {
+interface PlanState {
   plan: CapacityPlan | null;
   err: string | null;
   busy: boolean;

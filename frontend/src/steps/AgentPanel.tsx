@@ -25,8 +25,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Api, Facts, FuncIdChoice, Location, Ship, SlotMinimum } from "../api";
 import {
-  Button, Check, ErrorMsg, Field, NoticeMsg, NumberInput,
-  SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
+  Button, Callout, Check, Chevron, Collapse, ErrorMsg, Field, NoticeMsg,
+  NumberInput, SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
 } from "../components";
 import { LocationSettings } from "../groups/LocationSettings";
 // The funcId list of a location being created is a declaration like manual
@@ -54,10 +54,10 @@ import { PlanAsk } from "../usePlan";
 import { plural } from "../text";
 
 /** The two ids typed by hand, for an account nobody here can reach. */
-export interface ManualIds { harbor_id: string; ship_id: string }
+interface ManualIds { harbor_id: string; ship_id: string }
 
 /** Where the three values come from: read off the account, or typed. */
-export interface SourceHandover {
+interface SourceHandover {
   mode: "connect" | "manual";
   switchTo: (m: "connect" | "manual") => void;
   manual: ManualIds;
@@ -73,7 +73,7 @@ export interface SourceHandover {
  *  `workspace_id` is not here: the workspace is chosen at the foot of the nav
  *  drawer and the write picks it up there, which is why the name field says
  *  which one it is about to write into. */
-export interface LocationDraft {
+interface LocationDraft {
   name: string;
   func_ids: string[];
   slots: number;
@@ -89,7 +89,7 @@ export interface LocationDraft {
  *  button does stays a named function in App, exactly as the agent form beside
  *  it already worked. Nothing here can reach the client, so no click can grow
  *  into a second write by accident. */
-export interface NewLocationHandover {
+interface NewLocationHandover {
   open: boolean;
   /** Also drops whatever the last attempt was refused for: an error about a
    *  form that is no longer on screen describes nothing. */
@@ -119,7 +119,7 @@ export interface NewLocationHandover {
 }
 
 /** The locations to choose from, the one chosen, and making a new one. */
-export interface LocationHandover {
+interface LocationHandover {
   // Both are chosen at the foot of the nav drawer (AccountMenu), because every
   // view reads the account and the location list is the only thing here the
   // workspace narrows -- so this step names them rather than asking again.
@@ -157,7 +157,7 @@ export interface LocationHandover {
  *  No list of its own: the agents are the selected location's, and a second
  *  copy passed in beside it is a copy that can be about a different location
  *  than the row the user is looking at. */
-export interface AgentHandover {
+interface AgentHandover {
   id: string | null;
   pick: (id: string) => void;
   /** Reading this location's agents and images. */
@@ -185,7 +185,7 @@ export interface AgentHandover {
 }
 
 /** The credential the chosen agent runs on. */
-export interface CredentialHandover {
+interface CredentialHandover {
   token: string;
   setToken: (v: string) => void;
   /** Issue a new one for an agent that already exists. Resolves once the token
@@ -202,7 +202,7 @@ export interface CredentialHandover {
   note: string | null;
 }
 
-export interface AgentPanelProps {
+interface AgentPanelProps {
   /** Passed straight through to the open location's settings, which is where
    *  the one write on this step is made (DownloadPanel takes the client for the
    *  same reason). Nothing in this file calls a route itself. */
@@ -440,7 +440,7 @@ export function AgentPanel({
                   What is left is the sentence saying which of them this list
                   is -- a list of locations with no idea which account they are
                   from is the thing the pickers were really for. */}
-              <p className="text-[11px] text-slate-500">
+              <p className="text-2xs text-slate-500">
                 {locations.accountName ? (
                   <>Locations in <b>{locations.workspaceName ?? "every workspace"}</b>
                   {" · "}{locations.accountName}. Change either at the foot of the menu.</>
@@ -515,7 +515,7 @@ export function AgentPanel({
                           up. Before, the only way to put that much text away was
                           to click a different location -- which changes what is
                           being generated in order to hide something. */}
-                      <button onClick={() => toggleLocation(l)}
+                      <button type="button" onClick={() => toggleLocation(l)}
                         aria-expanded={isOpen}
                         className="w-full text-left px-3 py-2.5 text-sm hover:bg-slate-100/60 flex items-center gap-2">
                         <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
@@ -527,29 +527,25 @@ export function AgentPanel({
                             ? ` × ${l.threadsPerEngine.toLocaleString()} VUs` : ""}
                         </span>
                         <span className="grow" />
-                        <span className={"text-[11px] " + (n ? "text-slate-500" : "text-amber-700")}>
+                        <span className={"text-2xs " + (n ? "text-slate-500" : "text-amber-700")}>
                           {n ? `${plural(n, "agent")}${up ? ` · ${up} online` : ""}`
                              : "no agents yet"}
                         </span>
                         {/* The chevron follows the body, not the selection:
                             it is the control's own state, and a chosen row
                             folded shut points down at nothing. */}
-                        <span className={"text-slate-400 text-xs transition-transform duration-150 "
-                          + (isOpen ? "rotate-90" : "")}>›</span>
+                        <Chevron open={isOpen} />
                       </button>
-                      <div className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
-                        + (isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
-                        <div className="overflow-hidden">
-                          {locRow.shown(l.id) && (
-                            <div className="px-3 pb-3">
-                              <LocationSettings api={api} location={l}
-                                profile={profile}
-                                onUpdated={locations.updated}
-                                onConfirm={confirmLocation} />
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                      <Collapse open={isOpen}>
+                        {locRow.shown(l.id) && (
+                          <div className="px-3 pb-3">
+                            <LocationSettings api={api} location={l}
+                              profile={profile}
+                              onUpdated={locations.updated}
+                              onConfirm={confirmLocation} />
+                          </div>
+                        )}
+                      </Collapse>
                     </div>
                   );
                 })}
@@ -575,15 +571,15 @@ export function AgentPanel({
                 <p className="text-xs text-slate-400">Pick a location above first.</p>
               )}
               {!agents.busy && empty && (
-                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
+                <Callout tone="amber">
                   <p className="text-xs text-amber-900">
                     <b>{location!.name}</b> has no agents yet — nothing is
                     deployed to it.
                   </p>
-                  <p className="text-[11px] text-amber-700 mt-0.5">
+                  <p className="text-2xs text-amber-700 mt-0.5">
                     Create the first one below; its AUTH_TOKEN is issued then, once.
                   </p>
-                </div>
+                </Callout>
               )}
               {!agents.busy && location && (
                 <>
@@ -639,9 +635,7 @@ export function AgentPanel({
                             <div onClick={() => toggle(s.id)}
                               className={"w-full text-left px-3 py-2.5 text-sm hover:bg-slate-100 flex items-center gap-2 cursor-pointer "
                                 + (on ? "border-l-4 border-bzm" : "")}>
-                              <span className="text-slate-400 text-xs w-3 shrink-0">
-                                {isOpen ? "▾" : "▸"}
-                              </span>
+                              <Chevron open={isOpen} className="text-xs w-3 text-center" />
                               <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
                                 + (up ? "bg-emerald-500" : "bg-slate-300")} />
                               <span className="font-medium">{s.name || s.id}</span>
@@ -650,19 +644,14 @@ export function AgentPanel({
                               </span>
                               <span className="grow" />
                               {on && (credential.token || arm === "done") && (
-                                <span className="text-[11px] text-emerald-700">
+                                <span className="text-2xs text-emerald-700">
                                   {arm === "done" ? "token regenerated" : "token in hand"}
                                 </span>
                               )}
-                              {!on && <span className="text-[11px] text-slate-400">reuse</span>}
+                              {!on && <span className="text-2xs text-slate-400">reuse</span>}
                             </div>
 
-                            {/* Animated open/close. grid-rows 0fr -> 1fr because
-                                the panel's height is not knowable in advance and
-                                `height: auto` does not transition. */}
-                            <div className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
-                              + (isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
-                              <div className="overflow-hidden">
+                            <Collapse open={isOpen}>
                                 {agentRow.shown(s.id) && (
                                   <div className="px-3 pb-3 pl-10 space-y-2">
                                     <label className="block">
@@ -679,10 +668,10 @@ export function AgentPanel({
                                           nothing changes until this is pressed
                                           twice. */}
                                       {(reusing || arm === "done") && (
-                                        <button
+                                        <button type="button"
                                           disabled={issuing || arm === "done"}
                                           onClick={(e) => { e.stopPropagation(); regenerate(); }}
-                                          className={"text-[11px] font-semibold rounded px-2 py-1 flex items-center gap-1.5 " + ({
+                                          className={"text-2xs font-semibold rounded px-2 py-1 flex items-center gap-1.5 " + ({
                                             idle: "bg-red-600 text-white hover:bg-red-700",
                                             armed: "bg-red-800 text-white hover:bg-red-900 ring-2 ring-red-300",
                                             done: "bg-slate-200 text-slate-500 cursor-default",
@@ -698,9 +687,9 @@ export function AgentPanel({
                                           only exits are the destructive button
                                           and closing the row. */}
                                       {arm === "armed" && !issuing && (
-                                        <button
+                                        <button type="button"
                                           onClick={(e) => { e.stopPropagation(); setArm("idle"); }}
-                                          className="text-[11px] font-medium rounded px-2 py-1 border border-slate-300 text-slate-600 hover:bg-slate-100">
+                                          className="text-2xs font-medium rounded px-2 py-1 border border-slate-300 text-slate-600 hover:bg-slate-100">
                                           Cancel
                                         </button>
                                       )}
@@ -716,43 +705,42 @@ export function AgentPanel({
                                           without asking. */}
                                       {reusing && arm === "idle" && !issuing
                                         && credential.note && (
-                                        <span className="text-[11px] text-slate-500">
+                                        <span className="text-2xs text-slate-500">
                                           {credential.note}
                                         </span>
                                       )}
                                     </div>
 
                                     {arm === "armed" && (
-                                      <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2">
+                                      <Callout tone="red">
                                         <p className="text-xs font-semibold text-red-900">
                                           This kills the token {s.name || s.id} is running on.
                                         </p>
-                                        <p className="text-[11px] text-red-800 mt-0.5">
+                                        <p className="text-2xs text-red-800 mt-0.5">
                                           {rotateHazard(s.id)} A new agent instead
                                           costs nothing and leaves that install alone.
                                         </p>
-                                      </div>
+                                      </Callout>
                                     )}
                                     {arm === "done" && (
-                                      <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2">
+                                      <Callout tone="emerald" className="text-xs">
                                         New AUTH_TOKEN for <b>{s.name || s.id}</b>, in
                                         the field above — this bundle is the only
                                         copy. Re-apply it wherever that agent was
                                         running.
-                                      </p>
+                                      </Callout>
                                     )}
                                     <ErrorMsg msg={issueErr} />
                                     {up && (
-                                      <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                                      <Callout tone="amber" className="text-xs">
                                         <b>{s.name || s.id}</b> is online — already
                                         running somewhere. A second deployment on
                                         it will conflict.
-                                      </p>
+                                      </Callout>
                                     )}
                                   </div>
                                 )}
-                              </div>
-                            </div>
+                            </Collapse>
                           </div>
                         );
                       })}
@@ -777,7 +765,7 @@ export function AgentPanel({
                   step could complete itself. */}
               {!agents.busy && location && !empty && (
                 <div className="flex items-center gap-2 border-t border-slate-100 pt-3">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-2xs text-slate-500">
                     {!agents.id
                       ? "pick the agent this bundle is for"
                       : agents.confirmed
@@ -848,7 +836,7 @@ function NewLocation({ create }: { create: NewLocationHandover }) {
           ))}
           {/* Said whether or not it has happened yet: a rule that only speaks
               up after it has taken a tick away reads as the form losing one. */}
-          <p className="basis-full text-[11px] text-slate-500">{SV_ALONE}</p>
+          <p className="basis-full text-2xs text-slate-500">{SV_ALONE}</p>
         </div>
         {/* The minimum is on the field, and it is there from the moment the
             box is ticked rather than from the moment Create is refused: what
@@ -879,7 +867,7 @@ function NewLocation({ create }: { create: NewLocationHandover }) {
           Cancel
         </Button>
         {create.blockedBy && (
-          <span className="text-[11px] text-amber-700">{create.blockedBy}</span>
+          <span className="text-2xs text-amber-700">{create.blockedBy}</span>
         )}
       </div>
     </div>

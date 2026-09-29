@@ -26,7 +26,7 @@
 import { ReactNode, useState } from "react";
 import { Functionality, Options } from "../api";
 import {
-  Button, Check, Field, inputCls, SegmentedControl,
+  Button, Callout, Check, Chevron, Field, inputCls, SegmentedControl,
 } from "../components";
 import { envToRows } from "../env";
 import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
@@ -43,7 +43,7 @@ import { marker, placeholderWarning } from "../placeholder";
 import { SV_ALONE, SV_MIXED, svMixedWithEngines } from "../sv";
 import { plural } from "../text";
 
-export interface ConfigurePanelProps {
+interface ConfigurePanelProps {
   functionalities: Functionality[];
   /** Manual entry's declaration, one box at a time: which functionality, and
    *  whether it is now ticked. Only manual entry calls it -- connected, what a
@@ -165,7 +165,7 @@ function CoreFields(p: ConfigurePanelProps) {
         <input className={blankCls(p.namespaceOk)}
           value={String(p.options.namespace ?? "")} placeholder="e.g. blazemeter"
           onChange={(e) => p.set("namespace", e.target.value)} />
-        <span className="text-[11px] text-slate-400">
+        <span className="text-2xs text-slate-400">
           every object in the bundle is created in it — left empty, the bundle
           carries {marker("namespace")} and cannot be applied
         </span>
@@ -179,7 +179,7 @@ function CoreFields(p: ConfigurePanelProps) {
             value={String(p.options.service_account_name ?? "")}
             placeholder="e.g. crane"
             onChange={(e) => p.set("service_account_name", e.target.value)} />
-          <span className="text-[11px] text-slate-400">
+          <span className="text-2xs text-slate-400">
             what the agent runs as, and what the RoleBinding grants to — left
             empty, the bundle carries {marker("service_account_name")} rather
             than falling back to the namespace’s <code>default</code>
@@ -215,19 +215,19 @@ function FoldRow(props: {
   const [open, setOpen] = useState(false);
   return (
     <div className="px-3 py-2.5">
-      <button className="w-full flex items-center gap-3 text-left"
+      <button type="button" className="w-full flex items-center gap-3 text-left"
         aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span className="text-slate-400 text-xs w-3">{open ? "▾" : "▸"}</span>
+        <Chevron open={open} className="text-xs w-3 text-center" />
         <span className="min-w-0 grow">
           <span className="block text-sm font-medium text-slate-500">
             {props.title}
             {props.summary && (
-              <span className="ml-2 text-[11px] font-normal text-bzm">
+              <span className="ml-2 text-2xs font-normal text-bzm">
                 {props.summary}
               </span>
             )}
           </span>
-          <span className="block text-[11px] text-slate-400">{props.hint}</span>
+          <span className="block text-2xs text-slate-400">{props.hint}</span>
         </span>
       </button>
       {open && <div className="mt-3 pl-6">{props.children}</div>}
@@ -344,7 +344,7 @@ function FunctionalityCard(
             Manual mode has no account to read the answer off, so there it is
             the control rather than a chip. */}
         {manual ? (
-          <label className="flex items-center gap-2 text-[11px] font-medium text-slate-600 mb-1">
+          <label className="flex items-center gap-2 text-2xs font-medium text-slate-600 mb-1">
             {/* A checkbox, not a radio (#151): a location runs as many
                 functionalities as it is enabled for, and 71 of 168 in one real
                 account run performance and GUI functional together -- so a
@@ -366,7 +366,7 @@ function FunctionalityCard(
             Enabled
           </label>
         ) : known && (
-          <span className={"inline-block mb-1 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 "
+          <span className={"inline-block mb-1 text-3xs font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 "
             + (on ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500")}>
             {on ? "Enabled" : "Not enabled"}
           </span>
@@ -374,7 +374,7 @@ function FunctionalityCard(
         <p className={"text-sm font-medium " + (on ? "text-slate-900" : "text-slate-500")}>
           {feat.label}
         </p>
-        <p className="text-[11px] text-slate-400">{feat.hint}</p>
+        <p className="text-2xs text-slate-400">{feat.hint}</p>
       </div>
 
       {/* Three answers, and they were four. Not declared (manual entry only --
@@ -391,7 +391,7 @@ function FunctionalityCard(
           does not run ever reached this again, a sentence is the safe thing to
           land on and live switches are not. */}
       {!on ? (
-        <p className="px-3 py-3 text-[11px] text-slate-500">
+        <p className="px-3 py-3 text-2xs text-slate-500">
           Not what this identity was declared to run — tick <b>Enabled</b> above
           to configure it.
         </p>
@@ -399,14 +399,14 @@ function FunctionalityCard(
         <div className="divide-y divide-slate-100">
           {rows(p, own)}
           {note && (
-            <p className="px-3 py-3 text-[11px] text-slate-500">
+            <p className="px-3 py-3 text-2xs text-slate-500">
               <span className="font-medium text-slate-700">Engine size.</span>{" "}
               {note}
             </p>
           )}
         </div>
       ) : (
-        <p className="px-3 py-3 text-[11px] text-slate-400">
+        <p className="px-3 py-3 text-2xs text-slate-400">
           nothing extra to configure — it uses the settings above
         </p>
       )}
@@ -520,9 +520,9 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
           and the manifests use, so the sentence here and the one in the file
           are searchable as the same thing. */}
       {p.blanks.length > 0 && (
-        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+        <Callout tone="amber" className="text-2xs">
           {placeholderWarning(p.blanks)}
-        </p>
+        </Callout>
       )}
 
       <div className="flex gap-2 items-center flex-wrap">
@@ -537,7 +537,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
 
       <div className="grid grid-cols-[13rem_1fr] gap-6 items-start">
         <nav className="sticky top-4 space-y-1">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 px-2">
+          <p className="text-3xs font-semibold uppercase tracking-wide text-slate-400 px-2">
             In this bundle
           </p>
           {secs.map((s) => {
@@ -586,7 +586,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                   <span className="block text-xs font-medium text-slate-700">
                     {s.label}
                   </span>
-                  <span className={"block text-[10px] "
+                  <span className={"block text-3xs "
                     + (todo ? "text-red-600"
                       : gap ? "text-amber-600" : "text-slate-400")}>
                     {detail}
@@ -632,7 +632,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                 after one. Manual entry only -- connected there is nothing to
                 decide. */}
             {p.sourceMode === "manual" && (
-              <p className="text-[11px] text-slate-500 mt-1.5">{SV_ALONE}</p>
+              <p className="text-2xs text-slate-500 mt-1.5">{SV_ALONE}</p>
             )}
             {/* ...and the same fact about a location that already runs both.
                 Warned, never blocked: what a location *is* is BlazeMeter's own
@@ -642,9 +642,9 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
             {p.sourceMode === "connect"
               && svMixedWithEngines(p.enabled ?? [],
                                     engineFunctionalities(p.functionalities)) && (
-              <p className="mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+              <Callout tone="amber" className="mt-1.5 text-2xs">
                 {SV_MIXED}
-              </p>
+              </Callout>
             )}
             {/* Ticking nothing is a real state -- a checkbox that will not
                 untick is an off-screen blocker in one control -- so it is said
@@ -653,17 +653,17 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                 what nobody has answered. Manual entry only; connected, an empty
                 answer comes from the account and this page cannot change it. */}
             {p.sourceMode === "manual" && p.enabled?.length === 0 && (
-              <p className="mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+              <Callout tone="amber" className="mt-1.5 text-2xs">
                 Nothing is declared, so nothing says which funcIds this identity
                 runs — and the images its bundle carries are chosen from those.
                 Tick what it runs above.
-              </p>
+              </Callout>
             )}
             {/* Names, not ids: BlazeMeter's own display names, so this sentence
                 reads as BlazeMeter's UI reads. Not mono for that reason; "Data
                 Orchestration" set in a code face reads as something to type. */}
             {p.locUnclaimed.uncovered.length > 0 && (
-              <p className="text-[11px] text-slate-500 mt-1.5">
+              <p className="text-2xs text-slate-500 mt-1.5">
                 Also runs{" "}
                 <span className="text-slate-600">
                   {p.locUnclaimed.uncovered.join(", ")}</span> —
@@ -678,7 +678,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                 off. Same closing promise as above; a location is not changed by
                 being read. */}
             {p.locUnclaimed.retired.length > 0 && (
-              <p className="text-[11px] text-slate-500 mt-1.5">
+              <p className="text-2xs text-slate-500 mt-1.5">
                 Also carries{" "}
                 <span className="font-mono text-slate-600">
                   {p.locUnclaimed.retired.join(", ")}</span> —

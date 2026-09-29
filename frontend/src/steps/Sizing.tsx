@@ -27,9 +27,9 @@
 import { useState } from "react";
 
 import { Api, SizingModel } from "../api";
-import { Button, cardCls, Check, ErrorMsg, Field, Figure, inputCls, NumberInput,
+import { Button, cardCls, Check, Collapse, ErrorMsg, Field, Figure, inputCls, NumberInput,
          PlanCaveats, TextInput } from "../components";
-import { EngineSizeSelect } from "../groups/SizingGroup";
+import { EngineSizeSelect } from "../groups/EngineSizeSelect";
 import { ENGINE_SIZES } from "../optionGroups";
 import { remove, save, SavedSizing, sizingNamed } from "../sizings";
 import { PlanAsk, PlanInputs, useCapacityPlan, useEngineRating } from "../usePlan";
@@ -151,7 +151,7 @@ export function Sizing(props: {
       <div className="flex items-center gap-3 px-3 py-2.5 bg-slate-50
                       border-b border-slate-200">
         <div className="grow min-w-0">
-          <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">
+          <p className="text-2xs uppercase tracking-wide text-slate-400 font-semibold">
             Sizing
           </p>
           <p className={"text-sm mt-0.5 " + (busy ? "opacity-50" : "")}>
@@ -190,188 +190,184 @@ export function Sizing(props: {
 
       {/* Downward, inside the card, on the same 0fr -> 1fr grid as every other
           disclosure here. */}
-      <div aria-hidden={!open}
-        className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
-          + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr] invisible")}>
-        <div className="overflow-hidden">
-          <div className="p-3 space-y-3">
-            <p className="text-xs text-slate-500">
-              How much infrastructure this run needs, for the request you have to
-              raise before any of it is deployed. Nothing here reaches BlazeMeter
-              or a cluster, and nothing here writes anything — the locations
-              below open on what these numbers would change about them.
-            </p>
+      <Collapse open={open}>
+        <div className="p-3 space-y-3">
+          <p className="text-xs text-slate-500">
+            How much infrastructure this run needs, for the request you have to
+            raise before any of it is deployed. Nothing here reaches BlazeMeter
+            or a cluster, and nothing here writes anything — the locations
+            below open on what these numbers would change about them.
+          </p>
 
-            <SavedSizings name={name} setName={setName} saved={props.saved}
-              setSaved={props.setSaved} inputs={inputs}
-              setInputs={props.setInputs} />
+          <SavedSizings name={name} setName={setName} saved={props.saved}
+            setSaved={props.setSaved} inputs={inputs}
+            setInputs={props.setInputs} />
 
-            {/* One block per model, each asked for in its own unit. A location
-                that runs several is sized for the largest of them, which is the
-                server's rule and is stated below rather than worked out here.
-                Rendered from the served table: a fourth model arrives by being
-                added to plan.py, and until the table lands there is nothing to
-                render, because a unit invented here to fill the gap would put a
-                figure on screen this tool never measured. */}
-            {models.map((m) => (
-              <div key={m.functionality}
-                className="border border-slate-200 rounded-md p-3 space-y-2">
-                <Check label={m.label} checked={sized(m)}
-                  hint={`sized in ${m.unit}`}
-                  onChange={(on) => toggle(m.functionality, on)} />
-                {sized(m) && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field label={_cap(m.unit)} required
-                      hint={`what this run has to reach, in ${m.unit}`}>
+          {/* One block per model, each asked for in its own unit. A location
+              that runs several is sized for the largest of them, which is the
+              server's rule and is stated below rather than worked out here.
+              Rendered from the served table: a fourth model arrives by being
+              added to plan.py, and until the table lands there is nothing to
+              render, because a unit invented here to fill the gap would put a
+              figure on screen this tool never measured. */}
+          {models.map((m) => (
+            <div key={m.functionality}
+              className="border border-slate-200 rounded-md p-3 space-y-2">
+              <Check label={m.label} checked={sized(m)}
+                hint={`sized in ${m.unit}`}
+                onChange={(on) => toggle(m.functionality, on)} />
+              {sized(m) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Field label={_cap(m.unit)} required
+                    hint={`what this run has to reach, in ${m.unit}`}>
+                    <NumberInput
+                      value={inputs.targets[m.functionality] ?? ""}
+                      onChange={(v) => setTarget(m.functionality, v)} />
+                  </Field>
+                  {/* A model with no measured figure gets no box. Blank there
+                      would be a figure nobody supplied, which is the state
+                      this whole card has to keep apart from a figure this
+                      tool chose -- and the explanation is the server's
+                      sentence, which arrives as a warning below or as the
+                      refusal in its place. */}
+                  {m.measured ? (
+                    <Field label={_cap(m.figure_unit)}
+                      hint={_figureHint(ratedFor(m.functionality))}>
                       <NumberInput
-                        value={inputs.targets[m.functionality] ?? ""}
-                        onChange={(v) => setTarget(m.functionality, v)} />
+                        placeholder={String(answer(m.functionality)?.per_pod
+                          ?? ratedFor(m.functionality) ?? "")}
+                        value={inputs.figures[m.functionality] ?? ""}
+                        onChange={(v) => setFigure(m.functionality, v)} />
                     </Field>
-                    {/* A model with no measured figure gets no box. Blank there
-                        would be a figure nobody supplied, which is the state
-                        this whole card has to keep apart from a figure this
-                        tool chose -- and the explanation is the server's
-                        sentence, which arrives as a warning below or as the
-                        refusal in its place. */}
-                    {m.measured ? (
-                      <Field label={_cap(m.figure_unit)}
-                        hint={_figureHint(ratedFor(m.functionality))}>
-                        <NumberInput
-                          placeholder={String(answer(m.functionality)?.per_pod
-                            ?? ratedFor(m.functionality) ?? "")}
-                          value={inputs.figures[m.functionality] ?? ""}
-                          onChange={(v) => setFigure(m.functionality, v)} />
-                      </Field>
-                    ) : (
-                      <p className="text-[11px] text-amber-700 self-center">
-                        No measured figure for {m.figure_unit}, so this is
-                        stated in the request rather than sized from. Why, and
-                        what to do about it, is below.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {/* The bundle's own engine size, edited here as well as in the
-                  Configure step's Sizing group: one option, two views of it. */}
-              <EngineSizeSelect preset={preset} custom
-                hint="the pod limits every engine runs at — the bundle asks for these"
-                onPreset={(cpu, mem) => {
-                  setCustom(cpu === null && mem === null);
-                  props.setEngine(cpu, mem);
-                }} />
-              <Field label="Engines per node"
-                hint="blank means one — they contend when they share">
-                <NumberInput placeholder="1" value={ask.enginesPerNode ?? ""}
-                  onChange={props.setPerNode} />
-              </Field>
-              {preset === "custom" && (
-                <>
-                  <Field label="Engine CPU limit">
-                    <TextInput mono placeholder="2" value={ask.engineCpu ?? ""}
-                      onChange={(v) => props.setEngine(v, ask.engineMem ?? "")} />
-                  </Field>
-                  <Field label="Engine memory limit">
-                    <TextInput mono placeholder="8Gi" value={ask.engineMem ?? ""}
-                      onChange={(v) => props.setEngine(ask.engineCpu ?? "", v)} />
-                  </Field>
-                </>
+                  ) : (
+                    <p className="text-2xs text-amber-700 self-center">
+                      No measured figure for {m.figure_unit}, so this is
+                      stated in the request rather than sized from. Why, and
+                      what to do about it, is below.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
-            <ErrorMsg msg={err ?? copyErr} />
+          ))}
 
-            <div className={"space-y-3 transition-opacity " + (busy ? "opacity-50" : "")}>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                {/* Em-dashes rather than zeroes: nothing has been worked out
-                    yet, and "0 engines" is an answer. */}
-                <Figure big n={plan ? plan.engines : "—"}
-                  unit={plan && plan.engines === 1 ? "engine" : "engines"}
-                  sub={plan ? `${plan.engine.cpu} CPU / ${plan.engine.memory} each` : " "} />
-                <Figure big n={plan ? plan.nodes : "—"}
-                  unit={plan && plan.nodes === 1 ? "node" : "nodes"}
-                  sub={plan ? `${plan.node.cpu} vCPU / ${plan.node.memory} each` : " "} />
-                <Figure big n={plan ? plan.peak.cpu : "—"} unit="vCPU at peak"
-                  sub={plan ? `${plan.peak.memory} RAM` : " "} />
-                <Figure big n={plan ? 0 : "—"} unit="when idle"
-                  sub="the pool exists only during a run" />
-              </div>
-              {/* Which sizing the pod count came from. Only where there is more
-                  than one, because with one it is the only answer there could
-                  be -- and it is the server's `driven_by` rather than the
-                  largest of what is on screen, which would be this page
-                  deciding it a second time. */}
-              {plan && plan.sizings.length > 1 && (
-                <p className="text-xs text-slate-500">
-                  Sized for the{" "}
-                  <b>{models.find((m) => m.functionality === plan.driven_by)
-                    ?.label ?? plan.driven_by}</b> sizing, the largest of
-                  these.
-                </p>
-              )}
-              {plan ? (
-                <p className="text-xs text-slate-500">
-                  Plus one small always-on node for the agent
-                  ({plan.crane.cpu_limit} CPU / {plan.crane.memory_limit}), and
-                  outbound HTTPS to {plan.egress.map((h, i) => (
-                    <span key={h}>{i > 0 && ", "}<code>{h}</code></span>
-                  ))}. Each engine also needs {plan.engine.disk_gb}GB of disk,
-                  {" "}{plan.engine.tmp_gb}GB of it under <code>/tmp</code>.
-                </p>
-              ) : !err && (
-                // Only where nothing has been asked. With a refusal on screen
-                // the reason is the refusal, and telling somebody to give a
-                // target they have just given reads as the page not listening.
-                <p className="text-xs text-amber-700">
-                  tick a functionality and give it a target to size this run
-                </p>
-              )}
-              <PlanCaveats sizings={plan?.sizings ?? []}
-                warnings={plan?.warnings ?? []} />
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* The bundle's own engine size, edited here as well as in the
+                Configure step's Sizing group: one option, two views of it. */}
+            <EngineSizeSelect preset={preset} custom
+              hint="the pod limits every engine runs at — the bundle asks for these"
+              onPreset={(cpu, mem) => {
+                setCustom(cpu === null && mem === null);
+                props.setEngine(cpu, mem);
+              }} />
+            <Field label="Engines per node"
+              hint="blank means one — they contend when they share">
+              <NumberInput placeholder="1" value={ask.enginesPerNode ?? ""}
+                onChange={props.setPerNode} />
+            </Field>
+            {preset === "custom" && (
+              <>
+                <Field label="Engine CPU limit">
+                  <TextInput mono placeholder="2" value={ask.engineCpu ?? ""}
+                    onChange={(v) => props.setEngine(v, ask.engineMem ?? "")} />
+                </Field>
+                <Field label="Engine memory limit">
+                  <TextInput mono placeholder="8Gi" value={ask.engineMem ?? ""}
+                    onChange={(v) => props.setEngine(ask.engineCpu ?? "", v)} />
+                </Field>
+              </>
+            )}
+          </div>
+          <ErrorMsg msg={err ?? copyErr} />
 
-            {/* The request document, inside the editor: it is the same numbers
-                written for a platform team, so it belongs beside the fields
-                that decide them rather than in a card of its own. */}
-            <div className={cardCls}>
-              <div>
-                <h3 className="text-sm font-semibold text-slate-800">
-                  The request to send
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  The same numbers written for a platform team that has never
-                  heard of BlazeMeter — what to provision, what each figure came
-                  from, and the four location settings that decide whether the
-                  cluster gets used.
-                </p>
-              </div>
-              <div className="flex gap-2 flex-wrap items-center">
-                <Button onClick={download} disabled={!plan}>Download</Button>
-                <Button kind="ghost" onClick={copy} disabled={!plan}>
-                  {copied ? "Copied" : "Copy"}
-                </Button>
-                <Button kind="ghost" onClick={() => setShowDoc(!showDoc)}
-                  disabled={!plan}>
-                  {showDoc ? "Hide" : "Preview"}
-                </Button>
-                {!plan && !err && (
-                  <span className="text-[11px] text-amber-700">
-                    give a sizing above a target
-                  </span>
-                )}
-              </div>
-              {showDoc && plan && (
-                <pre className="text-[11px] font-mono bg-slate-50 border border-slate-200
-                                rounded-md p-3 overflow-auto max-h-96 whitespace-pre-wrap">
-                  {plan.document}
-                </pre>
+          <div className={"space-y-3 transition-opacity " + (busy ? "opacity-50" : "")}>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Em-dashes rather than zeroes: nothing has been worked out
+                  yet, and "0 engines" is an answer. */}
+              <Figure big n={plan ? plan.engines : "—"}
+                unit={plan && plan.engines === 1 ? "engine" : "engines"}
+                sub={plan ? `${plan.engine.cpu} CPU / ${plan.engine.memory} each` : " "} />
+              <Figure big n={plan ? plan.nodes : "—"}
+                unit={plan && plan.nodes === 1 ? "node" : "nodes"}
+                sub={plan ? `${plan.node.cpu} vCPU / ${plan.node.memory} each` : " "} />
+              <Figure big n={plan ? plan.peak.cpu : "—"} unit="vCPU at peak"
+                sub={plan ? `${plan.peak.memory} RAM` : " "} />
+              <Figure big n={plan ? 0 : "—"} unit="when idle"
+                sub="the pool exists only during a run" />
+            </div>
+            {/* Which sizing the pod count came from. Only where there is more
+                than one, because with one it is the only answer there could
+                be -- and it is the server's `driven_by` rather than the
+                largest of what is on screen, which would be this page
+                deciding it a second time. */}
+            {plan && plan.sizings.length > 1 && (
+              <p className="text-xs text-slate-500">
+                Sized for the{" "}
+                <b>{models.find((m) => m.functionality === plan.driven_by)
+                  ?.label ?? plan.driven_by}</b> sizing, the largest of
+                these.
+              </p>
+            )}
+            {plan ? (
+              <p className="text-xs text-slate-500">
+                Plus one small always-on node for the agent
+                ({plan.crane.cpu_limit} CPU / {plan.crane.memory_limit}), and
+                outbound HTTPS to {plan.egress.map((h, i) => (
+                  <span key={h}>{i > 0 && ", "}<code>{h}</code></span>
+                ))}. Each engine also needs {plan.engine.disk_gb}GB of disk,
+                {" "}{plan.engine.tmp_gb}GB of it under <code>/tmp</code>.
+              </p>
+            ) : !err && (
+              // Only where nothing has been asked. With a refusal on screen
+              // the reason is the refusal, and telling somebody to give a
+              // target they have just given reads as the page not listening.
+              <p className="text-xs text-amber-700">
+                tick a functionality and give it a target to size this run
+              </p>
+            )}
+            <PlanCaveats sizings={plan?.sizings ?? []}
+              warnings={plan?.warnings ?? []} />
+          </div>
+
+          {/* The request document, inside the editor: it is the same numbers
+              written for a platform team, so it belongs beside the fields
+              that decide them rather than in a card of its own. */}
+          <div className={cardCls}>
+            <div>
+              <h3 className="text-sm font-semibold text-slate-800">
+                The request to send
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                The same numbers written for a platform team that has never
+                heard of BlazeMeter — what to provision, what each figure came
+                from, and the four location settings that decide whether the
+                cluster gets used.
+              </p>
+            </div>
+            <div className="flex gap-2 flex-wrap items-center">
+              <Button onClick={download} disabled={!plan}>Download</Button>
+              <Button kind="ghost" onClick={copy} disabled={!plan}>
+                {copied ? "Copied" : "Copy"}
+              </Button>
+              <Button kind="ghost" onClick={() => setShowDoc(!showDoc)}
+                disabled={!plan}>
+                {showDoc ? "Hide" : "Preview"}
+              </Button>
+              {!plan && !err && (
+                <span className="text-2xs text-amber-700">
+                  give a sizing above a target
+                </span>
               )}
             </div>
+            {showDoc && plan && (
+              <pre className="text-2xs font-mono bg-slate-50 border border-slate-200
+                              rounded-md p-3 overflow-auto max-h-96 whitespace-pre-wrap">
+                {plan.document}
+              </pre>
+            )}
           </div>
         </div>
-      </div>
+      </Collapse>
     </section>
   );
 }
@@ -448,7 +444,7 @@ function SavedSizings(props: {
           </Button>
         </div>
       </div>
-      <p className="text-[11px] text-slate-400">
+      <p className="text-2xs text-slate-400">
         Starting points, not recommendations — picking one fills the fields below.
       </p>
     </div>

@@ -1,4 +1,4 @@
-import { Field, TextInput } from "../components";
+import { Callout, Field, TextInput } from "../components";
 import { Applies } from "../formats";
 import { CaMode } from "../optionGroups";
 
@@ -67,8 +67,7 @@ export function CaGroup(props: {
   return (
     <>
       {elsewhere && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2
-                        text-[11px] text-amber-900 space-y-1.5">
+        <Callout tone="amber" className="text-2xs space-y-1.5">
           <p>
             This bundle takes its CA trust from {elsewhere}, which was set
             outside this page. It is kept and it will be generated.
@@ -79,7 +78,7 @@ export function CaGroup(props: {
             onClick={() => props.onMode("file")}>
             Use a certificate file instead
           </button>
-        </div>
+        </Callout>
       )}
       {!elsewhere && !injecting && (
         <Field label="Certificate file name"
@@ -95,7 +94,7 @@ export function CaGroup(props: {
             checked={injecting}
             onChange={(e) => props.onMode(e.target.checked ? "inject" : "file")} />
           <span>Use the OpenShift cluster trust bundle instead
-            <span className="block text-[11px] text-slate-400">
+            <span className="block text-2xs text-slate-400">
               an empty ConfigMap labeled inject-trusted-cabundle; the cluster
               injects and rotates ca-bundle.crt, so there is no file to name
             </span>
@@ -106,7 +105,7 @@ export function CaGroup(props: {
           platforms: a ConfigMap the pods mount, or a file beside the script the
           container mounts. Both end with the same two variables pointed at it,
           because crane's HTTP client reads one and boto the other. */}
-      <p className="text-[11px] text-slate-400">
+      <p className="text-2xs text-slate-400">
         {props.applies("ca_existing_configmap")
           ? <>Mounted read-only at /var/cm in crane; engines get the same
               ConfigMap via KUBERNETES_CA_BUNDLE_MOUNT, and

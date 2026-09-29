@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { AgentEnvVar } from "../api";
+import { Disclosure, ErrorMsg, rowFieldCls as fieldCls, rowInputCls, RowEditor } from "../components";
 import {
   boolChoice, BoolChoice, boolWrite, EnvRow, envRowError, envToRows, jsonToKv,
   kvToJson, KvRow, offeredVars, otherRows, Reserved, rowsToEnv, setVar,
@@ -61,7 +62,7 @@ export function EnvVars(props: {
 
   return (
     <div className="space-y-3">
-      <p className="text-[11px] text-slate-400">
+      <p className="text-2xs text-slate-400">
         {props.cluster
           ? "Added to the agent's ConfigMap. They reach the crane pod; the "
             + "engines crane spawns get their environment from crane, not from "
@@ -112,16 +113,12 @@ function SetByTheBundle(props: { reserved: Reserved }) {
   if (!rows.length) return null;
   return (
     <div>
-      <button type="button" onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        className="flex items-center gap-1.5 text-[11px] text-slate-500 hover:text-slate-700">
-        <span className="text-slate-400">{open ? "▾" : "▸"}</span>
+      <Disclosure open={open} onToggle={() => setOpen(!open)} header={<>
         Set by this bundle, elsewhere on this step
         <span className="text-slate-400">({rows.length})</span>
-      </button>
-      {open && (
+      </>}>
         <div className="mt-2">
-          <p className="text-[11px] text-slate-400">
+          <p className="text-2xs text-slate-400">
             These are written from the settings above, so they are not offered
             here and are refused if typed in. This is where each one is set.
           </p>
@@ -129,8 +126,8 @@ function SetByTheBundle(props: { reserved: Reserved }) {
             {rows.map((r) => (
               <li key={r.name}
                 className="py-1.5 flex gap-3 items-baseline justify-between">
-                <span className="text-[11px] font-mono text-slate-700">{r.name}</span>
-                <span className="text-[11px] text-slate-500 text-right">
+                <span className="text-2xs font-mono text-slate-700">{r.name}</span>
+                <span className="text-2xs text-slate-500 text-right">
                   {r.owner ? (
                     <>
                       <span className="font-mono text-slate-600">{r.owner}</span>
@@ -150,7 +147,7 @@ function SetByTheBundle(props: { reserved: Reserved }) {
             ))}
           </ul>
         </div>
-      )}
+      </Disclosure>
     </div>
   );
 }
@@ -177,20 +174,20 @@ function VarRow(props: {
         <p className="text-xs font-mono text-slate-700">
           {v.name}
           {set && (
-            <span className={"ml-2 text-[10px] font-sans font-semibold uppercase "
+            <span className={"ml-2 text-3xs font-sans font-semibold uppercase "
               + "tracking-wide text-bzm"}>set</span>
           )}
         </p>
-        <p className="text-[11px] text-slate-400">
+        <p className="text-2xs text-slate-400">
           {v.summary}
           {v.default && <> — agent default: <span className="font-mono">{v.default}</span></>}
         </p>
         {unreadableJson && (
-          <p className="text-[11px] text-amber-700">
+          <p className="text-2xs text-amber-700">
             not an object of plain values — edited as text so nothing is lost
           </p>
         )}
-        {err && <p className="text-[11px] text-red-600">{err}</p>}
+        <ErrorMsg msg={err} className="text-2xs" />
       </div>
       <div className="shrink-0 w-64">
         {v.type === "bool" ? (
@@ -243,7 +240,7 @@ function TriState(props: {
         <button key={o.id} type="button" role="radio"
           aria-checked={props.choice === o.id}
           onClick={() => props.onChange(o.id)}
-          className={"flex-1 px-2 py-1.5 text-[11px] border-r last:border-r-0 "
+          className={"flex-1 px-2 py-1.5 text-2xs border-r last:border-r-0 "
             + "border-slate-200 transition-colors "
             + (props.choice === o.id
               ? "bg-bzm text-white font-medium"
@@ -283,27 +280,16 @@ function KvTable(props: {
     props.onChange(json);
   };
   return (
-    <div className="space-y-1.5">
-      {rows.map((r, i) => (
-        <div key={i} className="flex items-center gap-1.5">
-          <input className={fieldCls + " flex-1 min-w-0"} placeholder="key"
-            aria-label={`${props.name} key ${i + 1}`} value={r.key}
-            onChange={(e) => update(rows.map((x, j) =>
-              j === i ? { ...x, key: e.target.value } : x))} />
-          <input className={fieldCls + " flex-1 min-w-0"} placeholder="value"
-            aria-label={`${props.name} value ${i + 1}`} value={r.value}
-            onChange={(e) => update(rows.map((x, j) =>
-              j === i ? { ...x, value: e.target.value } : x))} />
-          <button type="button" className={removeBtnCls} title="Remove"
-            aria-label={`Remove ${props.name} ${i + 1}`}
-            onClick={() => update(rows.filter((_, j) => j !== i))}>×</button>
-        </div>
-      ))}
-      <button type="button" className={addBtnCls}
-        onClick={() => update([...rows, { key: "", value: "" }])}>
-        + Add entry
-      </button>
-    </div>
+    <RowEditor rows={rows} onChange={update} blank={() => ({ key: "", value: "" })}
+      addLabel="+ Add entry" removeLabel={(i) => `Remove ${props.name} ${i + 1}`}
+      renderRow={(r, i, edit) => (<>
+        <input className={rowInputCls} placeholder="key"
+          aria-label={`${props.name} key ${i + 1}`} value={r.key}
+          onChange={(e) => edit({ ...r, key: e.target.value })} />
+        <input className={rowInputCls} placeholder="value"
+          aria-label={`${props.name} value ${i + 1}`} value={r.value}
+          onChange={(e) => edit({ ...r, value: e.target.value })} />
+      </>)} />
   );
 }
 
@@ -353,58 +339,36 @@ function OtherRows(props: {
   };
   return (
     <div>
-      <button type="button" onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        className="flex items-center gap-1.5 text-[11px] text-slate-500 hover:text-slate-700">
-        <span className="text-slate-400">{open ? "▾" : "▸"}</span>
+      <Disclosure open={open} onToggle={() => setOpen(!open)} header={<>
         Another variable by name
         {rows.length > 0 && (
           <span className="text-slate-400">({rows.length} set)</span>
         )}
-      </button>
-      {open && (
+      </>}>
         <div className="mt-2 space-y-1.5">
-          <p className="text-[11px] text-slate-400">
+          <p className="text-2xs text-slate-400">
             For anything the list above does not carry — a variable documented
             for the other platform, one belonging to a functionality this
             location does not run, or one newer than this tool.
           </p>
-          {rows.map((r, i) => {
-            const err = envRowError(rows, i, props.reserved);
-            return (
-              <div key={i}>
-                <div className="flex items-center gap-1.5">
-                  <input className={fieldCls + " flex-1 min-w-0" + (err ? " border-red-300" : "")}
-                    placeholder="NAME" value={r.name}
-                    aria-label={`Variable name ${i + 1}`}
-                    onChange={(e) => update(rows.map((x, j) =>
-                      j === i ? { ...x, name: e.target.value } : x))} />
-                  <input className={fieldCls + " flex-1 min-w-0"} placeholder="value"
-                    value={r.value} aria-label={`Variable value ${i + 1}`}
-                    onChange={(e) => update(rows.map((x, j) =>
-                      j === i ? { ...x, value: e.target.value } : x))} />
-                  <button type="button" className={removeBtnCls} title="Remove"
-                    aria-label={`Remove variable ${i + 1}`}
-                    onClick={() => update(rows.filter((_, j) => j !== i))}>×</button>
-                </div>
-                {err && <p className="mt-0.5 text-[11px] text-red-600">{err}</p>}
-              </div>
-            );
-          })}
-          <button type="button" className={addBtnCls}
-            onClick={() => update([...rows, { name: "", value: "" }])}>
-            + Add variable
-          </button>
+          <RowEditor rows={rows} onChange={update} blank={() => ({ name: "", value: "" })}
+            addLabel="+ Add variable" removeLabel={(i) => `Remove variable ${i + 1}`}
+            renderRow={(r, i, edit) => (<>
+              <input className={rowInputCls
+                + (envRowError(rows, i, props.reserved) ? " border-red-300" : "")}
+                placeholder="NAME" value={r.name}
+                aria-label={`Variable name ${i + 1}`}
+                onChange={(e) => edit({ ...r, name: e.target.value })} />
+              <input className={rowInputCls} placeholder="value"
+                value={r.value} aria-label={`Variable value ${i + 1}`}
+                onChange={(e) => edit({ ...r, value: e.target.value })} />
+            </>)}
+            below={(_, i) => (
+              <ErrorMsg msg={envRowError(rows, i, props.reserved)}
+                className="mt-0.5 text-2xs" />
+            )} />
         </div>
-      )}
+      </Disclosure>
     </div>
   );
 }
-
-// The row styles SchedGroup argues for: not inputCls, whose w-full refuses to
-// shrink inside a flex row and walks the rest of the row off the panel.
-const fieldCls =
-  "rounded-md border border-slate-300 px-2 py-1.5 text-xs bg-white " +
-  "focus:outline-none focus:ring-2 focus:ring-bzm/40 focus:border-bzm";
-const addBtnCls = "text-xs text-bzm hover:underline";
-const removeBtnCls = "text-slate-400 hover:text-red-600 text-sm px-1 shrink-0";

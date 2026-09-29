@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from "react";
  *  timed against it, the row is simply gone by the time it fires. */
 const EXIT_MS = 200;
 
-export interface OpenRow {
+interface OpenRow {
   /** The row that is open, or null. */
   open: string | null;
   /** Open one, or none. Used where something other than a click decides --

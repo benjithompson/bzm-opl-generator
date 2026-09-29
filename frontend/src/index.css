@@ -3,6 +3,9 @@
 @theme {
   --color-bzm: #0696d7;
   --color-bzm-dark: #056a99;
+  /* Below Tailwind's text-xs (12px): hints and labels, and the smallest tags. */
+  --text-2xs: 11px;
+  --text-3xs: 10px;
 }
 
 body {

@@ -17,7 +17,7 @@ import {
 } from "./api";
 import { IgnoredByFormat } from "./formats";
 
-export interface ServedTables {
+interface ServedTables {
   svConst: SvConstants;
   /** What each format drops, from the generator (see formats.ts). No entry
    *  for a format is nothing having been read for it -- which is every format

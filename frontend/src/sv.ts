@@ -23,7 +23,9 @@ import {
   GroupFlags, isOpenshift, OptionPatch, SV_NONE,
   svConfigured, svIncomplete, svNodePortConflict,
 } from "./optionGroups";
-import { SvCtx } from "./SvPrereqs";
+
+/** What the SV prerequisite prose is rendered against. */
+export type SvCtx = { ns: string; dom: string; secret: string; gateway: string };
 
 /** The served functionality these options belong to, as the card and the rail
  *  key it. A literal for the same reason `groupRequired: { sv: ... }` is one: this

@@ -23,7 +23,7 @@
 // keep (see placeholder.ts). What each box shows while it is empty is therefore
 // the marker itself and not a sample id: it is the string that ends up in the
 // bundle, so the form and the file say one thing.
-import { Field, SecretInput, TextInput } from "../components";
+import { Callout, Field, SecretInput, TextInput } from "../components";
 import { blankManualIds, checkId, HARBOR, IdRule, SHIP, tidy, TOKEN }
   from "../manualIds";
 import { marker, placeholderWarning } from "../placeholder";
@@ -78,10 +78,9 @@ export function ManualSource(props: {
           this is the deliberate state for a location BlazeMeter has not issued
           ids for yet. */}
       {blanks.length > 0 && (
-        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2
-                      text-xs text-amber-800">
+        <Callout tone="amber" className="text-xs">
           {placeholderWarning(blanks)}
-        </p>
+        </Callout>
       )}
     </div>
   );
@@ -95,5 +94,5 @@ export function ManualSource(props: {
 function Complaint({ rule, value }: { rule: IdRule; value: string }) {
   const msg = checkId(rule, value);
   if (!msg) return null;
-  return <span className="text-[11px] text-red-600 block">{msg}</span>;
+  return <span className="text-2xs text-red-600 block">{msg}</span>;
 }
