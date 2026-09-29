@@ -40,6 +40,7 @@ import sys
 from typing import Any, Literal
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from . import (__version__, core, doctor, generate as gen_mod,
@@ -1083,9 +1084,12 @@ def _answer(fn, action, args):
     the question, and the SDK's structured output wants one declared type per
     tool. JSON in a text block is what the model reads either way.
 
-    CoreError becomes a plain exception so the SDK reports it as a tool error
-    with the message intact -- every one of them is a sentence written for
-    whoever has to fix it.
+    CoreError becomes the SDK's `ToolError`, which is its one anticipated
+    failure: the message reaches the model intact -- every one of them is a
+    sentence written for whoever has to fix it. Anything else is a crash to
+    the SDK, and since mcp 2.2 a crash reaches the client as `Error executing
+    tool <name>` with the sentence withheld, which is how a plain ValueError
+    here stopped naming the variable to set.
 
     **stdout is redirected to stderr for the duration.** On stdio transport
     stdout *is* the JSON-RPC channel, and one stray line desynchronises the
@@ -1101,7 +1105,7 @@ def _answer(fn, action, args):
         try:
             return json.dumps(fn(action, _args(args)), indent=2, default=str)
         except core.CoreError as e:
-            raise ValueError(str(e)) from None
+            raise ToolError(str(e)) from None
 
 
 def build():
