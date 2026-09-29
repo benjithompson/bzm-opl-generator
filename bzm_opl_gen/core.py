@@ -937,7 +937,12 @@ def image_catalog(facts=None, lookup=True, all_images=False):
                                             "detail": None},
                 "images": [{**r, **_NOT_LOOKED_UP} for r in rows]}
     with concurrent.futures.ThreadPoolExecutor(REGISTRY_WORKERS) as pool:
-        found = list(pool.map(registry_client.lookup, [r["ref"] for r in rows]))
+        # A repository with a release series is judged by that rule, the
+        # same one the no-account pins use.
+        found = list(pool.map(
+            lambda r: registry_client.lookup(
+                r["ref"], release_rule=image_catalog_mod.release_rule(r["repo"])),
+            rows))
     images = [{**r, **f} for r, f in zip(rows, found)]
     unread = [i for i in images
               if i["registry_state"] != registry_client.READ]

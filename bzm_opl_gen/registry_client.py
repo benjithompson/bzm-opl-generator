@@ -326,6 +326,24 @@ def series(tag):
     return tuple(int(p) for p in m.group(1).split(".")), m.group(2)
 
 
+def is_release(tag, rule):
+    """Does `tag` have the shape `rule` (image_catalog.RELEASE_SERIES) calls a
+    release: its version parts, its exact suffix, a last part below a bound?"""
+    s = series(tag)
+    if not s or s[1] != rule["suffix"] or len(s[0]) != rule["parts"]:
+        return False
+    return "last_below" not in rule or s[0][-1] < rule["last_below"]
+
+
+def newest_release(tags, rule):
+    """The highest tag that is a release under `rule`; None without a rule or
+    a release."""
+    if rule is None:
+        return None
+    releases = [(series(t)[0], t) for t in tags or [] if is_release(t, rule)]
+    return max(releases)[1] if releases else None
+
+
 def newest_in_series(tag, tags):
     """The highest tag with `tag`'s suffix and as many version parts, or None
     when `tag` has no version. `2.4.537-MOB-...-reduced` is another series
@@ -387,7 +405,16 @@ def resolve(reg, path, digest, tags, budget_s=None):
                   f"({candidates[0]} down to {candidates[-1]})")
 
 
-def lookup(ref):
+def _newer(newest, current):
+    """Is `newest` a higher version than `current`? None when they do not
+    compare (no version, or a different number of parts)."""
+    a, b = series(newest), series(current)
+    if not a or not b or len(a[0]) != len(b[0]):
+        return None
+    return a[0] > b[0]
+
+
+def lookup(ref, release_rule=None):
     """What the registry says about one public image: {registry_state,
     registry_detail, digest, size_mb, newest_tag, update_available,
     resolves_to}.
@@ -397,6 +424,10 @@ def lookup(ref):
     floating tag (`latest`) is named by the versioned tag sharing its digest
     (`resolves_to`); no match and an unread comparison both leave it None,
     and `registry_detail` says which.
+
+    With `release_rule` (the repository's RELEASE_SERIES entry) the newest
+    tag is the newest release under that rule, the one a bundle made without
+    an account pins, so a CI build is never offered as an update.
     """
     reg, path, tag = registry_for(ref)
     m = reg.manifest(path, tag)
@@ -425,6 +456,11 @@ def lookup(ref):
             note(f"{tag} could not be named: {why}")
             return out
         out["resolves_to"] = current
+    if release_rule is not None:
+        newest = newest_release(t["tags"], release_rule)
+        out["newest_tag"] = newest
+        out["update_available"] = None if newest is None else _newer(newest, current)
+        return out
     newest = newest_in_series(current, t["tags"])
     out["newest_tag"] = newest
     out["update_available"] = None if newest is None else newest != current
