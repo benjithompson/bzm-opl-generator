@@ -15,7 +15,7 @@ from .bundle_names import (APPLY_ORDER, CA_CONFIGMAP, CA_CONFIGMAP_FILE,
                            ROLEBINDING_FILE, SECRET_FILE, SECRET_NAME,
                            SERVICEACCOUNT_FILE, TEMPLATE_DIR)
 from .bundle_options import (auto_update, cli, crane_scheduling,
-                             engine_scheduling, separate_pools)
+                             engine_request, engine_scheduling, separate_pools)
 from .ca_trust import CA_MOUNT_PATH, ca_cfg
 from .footprint import (CRANE_CPU_LIMIT, CRANE_CPU_REQUEST,
                         CRANE_EPHEMERAL_STORAGE, CRANE_MEM_LIMIT,
@@ -149,6 +149,13 @@ def _configmap(facts, o):
                  f"{yq(o['engine_cpu_limit'] or ENGINE_DEFAULT_CPU)}")
     lines.append(f"  KUBERNETES_RESOURCES_LIMITS_MEMORY: "
                  f"{yq(o['engine_mem_limit'] or ENGINE_DEFAULT_MEM)}")
+    req_cpu, req_mem = engine_request(o)
+    lines += [
+        "  # Engine requests, equal to the limits (memory in MiB). A location's",
+        "  # overrideCPU/overrideMemory, if set in BlazeMeter, replace them.",
+        f"  KUBERNETES_RESOURCES_DEFAULT_CPU: {yq(req_cpu)}",
+        f"  KUBERNETES_RESOURCES_DEFAULT_MEM: {yq(req_mem)}",
+    ]
     if o["engine_ephemeral_request_mb"]:
         lines.append(f"  KUBERNETES_REQUESTS_EPHEMERAL_STORAGE: {yq(o['engine_ephemeral_request_mb'])}")
     if o["engine_ephemeral_limit_mb"]:

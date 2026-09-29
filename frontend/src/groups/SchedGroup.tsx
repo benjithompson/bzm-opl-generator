@@ -66,10 +66,10 @@ export function SchedGroup(props: {
           + "choices above. Picking one replaces the customization."} />
       )}
       {placement === "separate" && (
-        <NoticeMsg msg={"A dedicated pool also needs the location's engine CPU "
-          + "and memory override, set in Location settings: autoscalers grow "
-          + "pools by what pods request, and engines requesting the default "
-          + "250m all pack onto the first node added."} />
+        <NoticeMsg msg={"Engines request what they are limited to, so the "
+          + "autoscaler grows this pool by one node per engine. An engine "
+          + "request override on the location, set lower in Location settings, "
+          + "packs them onto fewer nodes."} />
       )}
       <SubSection title="Customize placement" summary={summary}
         open={open} onToggle={() => setOpen(!open)}>

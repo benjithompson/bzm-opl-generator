@@ -16,8 +16,8 @@ import textwrap
 from .bundle_options import engine_size
 from .footprint import (API_BASE, CRANE_CPU_LIMIT, CRANE_MEM_LIMIT,
                         DEFAULT_THREADS_PER_ENGINE, ENGINE_DEFAULT_CPU,
-                        ENGINE_DEFAULT_MEM, ENGINE_DEFAULT_REQUEST_CPU,
-                        ENGINE_DEFAULT_REQUEST_MEM, ENGINE_DISK_GB,
+                        ENGINE_DEFAULT_MEM,
+                        ENGINE_DISK_GB,
                         ENGINE_TMP_GB, ENGINE_UPLOAD_HOSTS,
                         GKE_MIN_MAX_PODS, NODE_OVERHEAD_CPU,
                         NODE_OVERHEAD_MEM, PUBLIC_REGISTRY,
@@ -736,18 +736,15 @@ def _blazemeter_section(p):
         f"| overrideMemory | `{loc['override_memory']}` | the memory "
         f"**request**, in MB |",
         "",
-        "The last two matter more than they look. The engine's *limits* come from "
-        "the",
-        "generated manifests; its *requests* come from these two fields, and the "
-        "Kubernetes",
-        f"scheduler places pods on requests. Left unset they default to "
-        f"`{ENGINE_DEFAULT_REQUEST_CPU}` / "
-        f"`{ENGINE_DEFAULT_REQUEST_MEM}`,",
-        "so every engine asks for a fraction of what it uses, the autoscaler adds "
-        "**one**",
-        f"node instead of {p['nodes']}, and the whole run lands on it — on the "
-        f"cluster this",
-        "document was written to justify.",
+        "The generated manifests set each engine's requests equal to its limits, "
+        "which is",
+        "what the Kubernetes scheduler places on. The last two fields, if set, "
+        "replace those",
+        "requests: leave them unset or set them to the values above. Set lower, "
+        "every engine",
+        f"asks for a fraction of what it uses, the autoscaler adds fewer than "
+        f"{p['nodes']} node(s),",
+        "and the run lands on a cluster smaller than this document justifies.",
         "",
         "**None of that waits for the cluster.** A private location and its agent "
         "are",

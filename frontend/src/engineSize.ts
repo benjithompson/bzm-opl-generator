@@ -85,9 +85,8 @@ export function sizeStatement(
     if (!locSet) {
       return {
         kind: "bundle", cpu, mem,
-        text: base + " This location sets no engine requests, so engines are "
-          + "placed at the 250m/256Mi default and can pack onto one node; set "
-          + "the location's engine requests in Location settings to match.",
+        text: base + " Engines request the same, so each is placed on a node "
+          + "with room for it.",
       };
     }
     const same = cpuCores(cpu) !== null && memMb(mem) !== null
@@ -134,9 +133,7 @@ export function sizeStatement(
     text: `Engines run at ${size} per engine, the documented default. `
       + (disregard
         ? disregard.trim()
-        : "This location sets no engine requests, so engines are placed at "
-          + "the 250m/256Mi default and can pack onto one node. Set the "
-          + "location's engine CPU and memory requests in Location settings; "
-          + "the bundle then carries the location's figure as limits."),
+        : "Engines request the same, so each is placed on a node with room "
+          + "for it."),
   };
 }

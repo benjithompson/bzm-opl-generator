@@ -31,11 +31,11 @@ from .ca_trust import CA_MODES
 from .footprint import (API_BASE, CRANE_CPU_LIMIT, CRANE_CPU_REQUEST,
                         CRANE_MEM_LIMIT, CRANE_MEM_REQUEST, DEFAULT_THREADS_PER_ENGINE,
                         ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM,
-                        ENGINE_DEFAULT_REQUEST_CPU, ENGINE_DEFAULT_REQUEST_MEM,
                         ENGINE_DISK_GB, ENGINE_TMP_GB, ENGINE_UPLOAD_HOSTS,
                         TYPICAL_SYSTEM_PODS, engine_requests)
 from .bundle_options import (DEFAULT_OPTIONS, crane_scheduling,
-                             engines_per_node, engine_scheduling, engine_size,
+                             engine_request_quantities, engines_per_node,
+                             engine_scheduling, engine_size,
                              resolve_engine_limits, separate_pools,
                              service_account)
 from .bundle_names import NODEPOOLS_FILE
@@ -604,15 +604,15 @@ def check_engine_packing(facts, opts, cluster):
     """How many engines the scheduler would put on one node, versus how many
     can actually run there.
 
-    Scheduler and autoscaler place by requests, which come from the location's
-    overrideCPU/overrideMemory (250m/256Mi when unset), not from these
-    manifests. WARN, never FAIL: engines start, but throttle against each other
-    and report the load generator's latency."""
+    Scheduler and autoscaler place by requests: the bundle's
+    KUBERNETES_RESOURCES_DEFAULT_* (equal to the limits), unless the location's
+    overrideCPU/overrideMemory replace them. WARN, never FAIL: engines start,
+    but throttle against each other and report the load generator's latency."""
     nodes = eligible_nodes(cluster["nodes"], opts)
     if not nodes:
         return []
     cpu, mem = engine_size(opts)
-    req_cpu_s, req_mem_s = engine_requests(facts)
+    req_cpu_s, req_mem_s = engine_requests(facts, engine_request_quantities(opts))
     req_cpu, req_mem = parse_cpu(req_cpu_s), parse_memory(req_mem_s)
     overridden = bool(facts.get("override_cpu") or facts.get("override_memory"))
 
@@ -636,10 +636,10 @@ def check_engine_packing(facts, opts, cluster):
         return [Check("engine packing", PASS,
                       f"no eligible node would take more {want} engine(s) than "
                       f"it can run. Engines request {req_cpu_s}/{req_mem_s}"
-                      + (" (the location's overrideCPU/overrideMemory)"
+                      + (" (the location's overrideCPU/overrideMemory, which "
+                         "replace the bundle's requests)"
                          if overridden else
-                         " (crane's default -- the location sets no "
-                         "overrideCPU/overrideMemory)")
+                         " (the bundle's KUBERNETES_RESOURCES_DEFAULT_*)")
                       + f"; assuming ~{TYPICAL_SYSTEM_PODS} system pods a node "
                       f"against its allocatable.pods, which you can count with "
                       f"`kubectl get pods -A --field-selector "
@@ -656,15 +656,13 @@ def check_engine_packing(facts, opts, cluster):
                   f"requests, not limits ({lever}). Engines sharing a node "
                   f"throttle against each other, so the run reports the load "
                   f"generator's latency rather than the system's. "
-                  + ("Raise the location's overrideCPU/overrideMemory to match "
-                     f"the engine limits ({format_cpu(cpu)} / "
-                     f"{mem // (1024 ** 2)}MB) -- they set the pod's requests, "
-                     "and matching them is what makes the scheduler place "
-                     "engines truthfully."
+                  + ("Regenerate the bundle: its KUBERNETES_RESOURCES_DEFAULT_* "
+                     "set the requests equal to the limits."
                      if not overridden else
-                     "The location's overrideCPU/overrideMemory are set but "
-                     f"still below the limits; matching them ({format_cpu(cpu)} "
-                     f"/ {mem // (1024 ** 2)}MB) closes this.")
+                     "The location's overrideCPU/overrideMemory replace the "
+                     "bundle's requests and are below the limits; clear them in "
+                     f"BlazeMeter or match them ({format_cpu(cpu)} / "
+                     f"{mem // (1024 ** 2)}MB).")
                   + f" Failing that, cap the engine pool's maxPods at the pods "
                   f"a node of it actually runs plus one -- counted with "
                   f"`kubectl get pods -A --field-selector spec.nodeName=<node>`, "
@@ -724,16 +722,13 @@ def check_limitrange(facts, opts, cluster):
     cpu, mem = engine_size(opts)
     if not limitranges:
         return [Check("limitrange", WARN,
-                      f"no LimitRange in the namespace, so nothing caps what it "
-                      f"may ask for. Separately, engine pods request "
-                      f"{ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM} "
-                      f"rather than {_engine_str(cpu, mem)} because crane sets "
-                      f"that explicitly -- a LimitRange cannot override it")]
+                      "no LimitRange in the namespace, so nothing caps what it "
+                      "may ask for")]
 
-    # (field, parse, the engine's limit, how to show it, crane's stamped request)
-    dims = (("cpu", parse_cpu, cpu, format_cpu, parse_cpu(ENGINE_DEFAULT_REQUEST_CPU)),
-            ("memory", parse_memory, mem, format_memory,
-             parse_memory(ENGINE_DEFAULT_REQUEST_MEM)))
+    # (field, parse, the engine's limit, how to show it, the request crane sets)
+    req_cpu, req_mem = engine_requests(facts, engine_request_quantities(opts))
+    dims = (("cpu", parse_cpu, cpu, format_cpu, parse_cpu(req_cpu)),
+            ("memory", parse_memory, mem, format_memory, parse_memory(req_mem)))
     checks = []
     for lr in limitranges:
         name = lr.get("metadata", {}).get("name", "?")

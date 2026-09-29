@@ -1,18 +1,15 @@
 """The node pool recipe (nodepools.md) for a bundle whose engines have their
 own pool.
 
-The manifests say which nodes an engine may use, not how many share one: the
-scheduler and autoscaler place on requests, which come from the location's
-overrideCPU/overrideMemory (250m/256Mi when unset). So the recipe leads with
-the overrides and falls back to the pool's maxPods, a node pool property no
-manifest can set.
+The scheduler and autoscaler place on requests. The bundle sets engine requests
+equal to the limits, unless the location's overrideCPU/overrideMemory replace
+them, so the recipe states that and backs it with the pool's maxPods, a node
+pool property no manifest can set.
 """
 
 from .bundle_options import (cli, crane_scheduling, engine_scheduling,
                              engine_size, engines_per_node)
-from .footprint import (CRANE_CPU_LIMIT, CRANE_MEM_LIMIT,
-                        ENGINE_DEFAULT_REQUEST_CPU,
-                        ENGINE_DEFAULT_REQUEST_MEM, GKE_MIN_MAX_PODS,
+from .footprint import (CRANE_CPU_LIMIT, CRANE_MEM_LIMIT, GKE_MIN_MAX_PODS,
                         NODE_OVERHEAD_CPU, NODE_OVERHEAD_MEM,
                         TYPICAL_SYSTEM_PODS)
 from .quantity import format_cpu, format_memory
@@ -80,16 +77,13 @@ def nodepools_md(facts, o):
         "during a run. Separate pools let the engine pool scale to zero between",
         "tests.",
         "",
-        "## 1. Set the location's CPU/memory overrides",
+        "## 1. Engine requests",
         "",
         "The scheduler and cluster autoscaler place pods by their **requests**.",
-        f"An engine's limits come from this bundle ({format_cpu(cpu)} / {format_memory(mem)}); its requests come",
-        "from the location's `overrideCPU` and `overrideMemory` (Settings ->",
-        f"Private Locations), default {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. At the default, many engines",
-        "fit on one node and slow each other down, skewing results.",
-        "",
-        f"Set **overrideCPU: {format_cpu(cpu)}** and **overrideMemory: {mem // (1024 ** 2)}** (MB) so that",
-        "requests match limits and the autoscaler adds the right number of nodes.",
+        f"This bundle sets each engine's requests equal to its limits ({format_cpu(cpu)} / {format_memory(mem)}),",
+        "so the autoscaler adds one node per engine. If the location sets",
+        "`overrideCPU` / `overrideMemory` in BlazeMeter, those replace the",
+        f"requests: leave them unset, or set them to {format_cpu(cpu)} and {mem // (1024 ** 2)} (MB).",
         "",
         "## 2. Cap engines per node with maxPods",
         "",

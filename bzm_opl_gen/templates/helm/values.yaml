@@ -136,15 +136,16 @@ probes:
 
 # -- Engines ------------------------------------------------------------------
 
-# Limits crane sets on each engine pod. Empty: 2 CPU / 8Gi. Each concurrent
-# engine also needs about 60GB of disk (40GB of it /tmp).
-#
-# Engine requests are not set here: they come from the location's
-# overrideCPU/overrideMemory (Settings -> Private Locations), default
-# 250m/256Mi. Set those to match these limits.
+# Resources crane sets on each engine pod. Empty limits: 2 CPU / 8Gi; empty
+# requests: equal to the limits. Each concurrent engine also needs about 60GB
+# of disk (40GB of it /tmp). A location's overrideCPU/overrideMemory, if set in
+# BlazeMeter, replace the requests.
 engine:
   cpuLimit: ""
   memoryLimit: ""
+  # Engine requests. Empty: equal to the limits. Memory is integer MiB.
+  cpuRequest: ""
+  memoryRequestMi: ""
   # Integer MB.
   ephemeralRequestMb: ""
   ephemeralLimitMb: ""

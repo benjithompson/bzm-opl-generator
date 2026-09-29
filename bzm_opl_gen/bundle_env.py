@@ -88,6 +88,9 @@ _ENV_OWNERS = {
     "KUBERNETES_NODE_SELECTOR_JSON": "engine_node_selector",
     "KUBERNETES_RESOURCES_LIMITS_CPU": "engine_cpu_limit",
     "KUBERNETES_RESOURCES_LIMITS_MEMORY": "engine_mem_limit",
+    # Engine requests follow the limits (bundle_options.engine_request).
+    "KUBERNETES_RESOURCES_DEFAULT_CPU": "engine_cpu_limit",
+    "KUBERNETES_RESOURCES_DEFAULT_MEM": "engine_mem_limit",
     "KUBERNETES_REQUESTS_EPHEMERAL_STORAGE": "engine_ephemeral_request_mb",
     "KUBERNETES_LIMITS_EPHEMERAL_STORAGE": "engine_ephemeral_limit_mb",
     # Every CA mode writes these three.

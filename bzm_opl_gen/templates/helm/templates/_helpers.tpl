@@ -94,11 +94,20 @@ crane-hook's image and Role name. Both are also passed to the hook as env.
 {{- end -}}
 
 {{/*
-Engine limits, defaulting to 2 CPU / 8Gi. Engine requests are set by crane from
-the location's settings, not here.
+Engine limits, defaulting to 2 CPU / 8Gi, and engine requests, defaulting to the
+limits (memory as integer MiB, the unit crane reads).
 */}}
 {{- define "bzm-opl.engineCpuLimit" -}}{{- default "2" .Values.engine.cpuLimit -}}{{- end -}}
 {{- define "bzm-opl.engineMemoryLimit" -}}{{- default "8Gi" .Values.engine.memoryLimit -}}{{- end -}}
+{{- define "bzm-opl.engineCpuRequest" -}}{{- default (include "bzm-opl.engineCpuLimit" .) .Values.engine.cpuRequest -}}{{- end -}}
+{{- define "bzm-opl.engineMemoryRequestMi" -}}
+{{- $limit := include "bzm-opl.engineMemoryLimit" . -}}
+{{- if .Values.engine.memoryRequestMi -}}{{ .Values.engine.memoryRequestMi }}
+{{- else if regexMatch "^[0-9]+Gi$" $limit -}}{{ mul (trimSuffix "Gi" $limit | atoi) 1024 }}
+{{- else if regexMatch "^[0-9]+Mi$" $limit -}}{{ trimSuffix "Mi" $limit }}
+{{- else -}}{{ fail (printf "set engine.memoryRequestMi: engine.memoryLimit %q is not a whole number of Gi or Mi" $limit) }}
+{{- end -}}
+{{- end -}}
 
 {{/*
 Whether a proxy URL carries credentials (scheme://user:pass@host).

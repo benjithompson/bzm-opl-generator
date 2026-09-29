@@ -12,14 +12,12 @@ from .bundle_names import (CA_CONFIGMAP, CHART_DIR, DOCKER_CA_FILE,
                            DOCKER_RUN_FILE, MIRROR_SCRIPT_FILE,
                            NODEPOOLS_FILE, PROFILE_FILE,
                            docker_container_name)
-from .bundle_options import (DEFAULT_OPTIONS, cli, engine_size,
+from .bundle_options import (DEFAULT_OPTIONS, cli, engine_request, engine_size,
                              ignored_options, is_openshift,
                              separate_pools, service_account)
 from .ca_trust import ca_cfg
 from .facts import runs_engine
-from .footprint import (ENGINE_DEFAULT_REQUEST_CPU,
-                        ENGINE_DEFAULT_REQUEST_MEM, ENGINE_DISK_GB,
-                        ENGINE_TMP_GB, PUBLIC_REGISTRY)
+from .footprint import ENGINE_DISK_GB, ENGINE_TMP_GB, PUBLIC_REGISTRY
 from .markers import MARKER_PATTERN, helm_token_at_install, marker
 from .quantity import format_cpu, format_memory
 from .required_fields import (PLACEHOLDER_REFUSED_BY_API,
@@ -211,18 +209,21 @@ def sizing_bullet(facts, o):
 
 
 def requests_bullet(facts, o):
-    """Where the pod's requests come from (the location's overrides). Measured
-    on engines only, and said so for a location without one.
-    """
+    """The engine requests this bundle sets, and whether the location's own
+    overrides replace them. Measured on engines only, and said so for a
+    location without one."""
     m = sizing_vocab(facts, o)
-    if m is None or m["engine"]:
-        return (f"- Engine *requests* come from the location's `overrideCPU` / `overrideMemory`\n"
-                f"  (Settings -> Private Locations), default {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. Set them to match\n"
-                f"  the limits above, or engines share nodes and compete for CPU.")
-    return (f"- *Requests* come from the location too -- `overrideCPU` and `overrideMemory`\n"
-            f"  under Settings -> Private Locations, defaulting to "
-            f"{ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. Those were\n"
-            f"  measured on engines; what a {m['pod']} is given has not been.")
+    cpu, mib = engine_request(o)
+    have_cpu, have_mem = facts.get("override_cpu"), facts.get("override_memory")
+    if m is not None and not m["engine"]:
+        return (f"- Pods crane creates request {cpu} CPU / {mib}Mi (equal to the limits);\n"
+                f"  measured on engines, not yet on a {m['pod']}.")
+    line = (f"- Engines request what they are limited to: {cpu} CPU / {mib}Mi\n"
+            f"  (`KUBERNETES_RESOURCES_DEFAULT_CPU` / `_MEM`), so nodes are not overpacked.")
+    if have_cpu or have_mem:
+        line += (f"\n  This location's `overrideCPU` / `overrideMemory` ({have_cpu or 'unset'} /\n"
+                 f"  {have_mem or 'unset'}) replace them; clear them in BlazeMeter to use these.")
+    return line
 
 
 def location_bullet(facts, o):

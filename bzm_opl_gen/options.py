@@ -433,10 +433,10 @@ OPTIONS = [
             "a run. Unset means engines follow crane; an explicit `{}` means "
             "engines take no selector even though crane has one. **A dedicated "
             "pool does not by itself give engines their configured size**: "
-            "engine *requests* come from the location (overrideCPU/"
-            "overrideMemory, 250m/256Mi when unset), the scheduler and "
-            "autoscaler work on requests, and a pool without a `maxPods` "
-            "ceiling packs many engines onto one node. The generated "
+            "the scheduler and autoscaler work on requests, which the bundle "
+            "sets equal to the limits unless the location's overrideCPU/"
+            "overrideMemory replace them, and a pool without a `maxPods` "
+            "ceiling can still pack engines onto one node. The generated "
             "`nodepools.md` carries the per-provider recipe."),
     Option(
         "engines_per_node", "integer", "Scheduling",
@@ -466,25 +466,26 @@ OPTIONS = [
     Option(
         "engine_cpu_limit", "string", "Engine and agent sizing",
         default_note="BlazeMeter documents 2",
-        summary="KUBERNETES_RESOURCES_LIMITS_CPU -- the CPU limit crane stamps on every engine.",
+        summary="Engine CPU limit and request (KUBERNETES_RESOURCES_LIMITS_CPU / _DEFAULT_CPU).",
         doc="`KUBERNETES_RESOURCES_LIMITS_CPU` -- the CPU limit crane stamps on "
-            "every pod it spawns. Unset, it derives from the location's "
-            "`overrideCPU` (the engine's *request*), else BlazeMeter's "
-            "documented default of 2; the variable is always written, so "
-            "engines never run without a limit. Worth lowering on an emulated "
-            "arm64 runtime, where a 2-CPU engine stays Pending. No LimitRange "
-            "is emitted: crane sets engine requests explicitly, so a "
-            "`defaultRequest` would never reach them."),
+            "every pod it spawns -- and `KUBERNETES_RESOURCES_DEFAULT_CPU`, its "
+            "request, set to the same value. Unset, it derives from the "
+            "location's `overrideCPU`, else 2; always written, so engines never "
+            "run without a limit or on crane's small default request. A "
+            "location's `overrideCPU`, if set, replaces the request. Worth "
+            "lowering on an emulated arm64 runtime, where a 2-CPU engine stays "
+            "Pending."),
     Option(
         "engine_mem_limit", "string", "Engine and agent sizing",
         default_note="BlazeMeter documents 8Gi",
-        summary="KUBERNETES_RESOURCES_LIMITS_MEMORY -- the memory limit crane stamps on every engine.",
+        summary="Engine memory limit and request (KUBERNETES_RESOURCES_LIMITS_MEMORY / _DEFAULT_MEM).",
         doc="`KUBERNETES_RESOURCES_LIMITS_MEMORY` -- the memory limit crane stamps "
-            "on every pod it spawns. Unset, it derives from the location's "
-            "`overrideMemory` (MB, read as Mi), else the documented default of "
-            "8Gi -- always written, like the CPU limit. `livetest --run-test` "
-            "prints what an engine actually used as `ENGINE SIZING:`, which is "
-            "the number to size from."),
+            "on every pod it spawns -- and `KUBERNETES_RESOURCES_DEFAULT_MEM`, "
+            "its request, the same amount in MiB. Unset, it derives from the "
+            "location's `overrideMemory` (MB, read as Mi), else 8Gi. A "
+            "location's `overrideMemory`, if set, replaces the request. "
+            "`livetest --run-test` prints what an engine actually used as "
+            "`ENGINE SIZING:`, which is the number to size from."),
     Option(
         "engine_ephemeral_request_mb", "integer", "Engine and agent sizing",
         summary="KUBERNETES_REQUESTS_EPHEMERAL_STORAGE in MB, per engine pod.",

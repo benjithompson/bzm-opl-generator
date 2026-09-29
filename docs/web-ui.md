@@ -74,8 +74,9 @@ private location exists.
 
 Selecting a location expands it, showing what the sizing would change as before
 → after against what the account holds: **engines per agent** (`slots`),
-**virtual users per engine** (`threadsPerEngine`) and the engine's CPU and memory
-**requests** (`overrideCPU` / `overrideMemory`). The sizing above fills these
+**virtual users per engine** (`threadsPerEngine`) and the location's engine
+request overrides (`overrideCPU` / `overrideMemory`, which replace the requests
+the bundle sets). The sizing above fills these
 fields and they stay editable; **Save** is the only control here that writes to
 the account. `slots` is engines per *agent*, so the row divides the sizing by the
 location's agent count.

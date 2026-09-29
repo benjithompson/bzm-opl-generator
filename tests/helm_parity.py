@@ -48,6 +48,9 @@ CASES = {
     "auto-update-on-private-registry": {"platform": "k8s", "auto_update": True,
                                         "private_registry": "reg.example.com/bzm"},
     "proxy": {"platform": "k8s", "proxy": {"http": "http://px:3128"}},
+    # Requests follow the limits; neither quantity is a whole Gi.
+    "engine-fractional": {"platform": "k8s", "engine_cpu_limit": "1500m",
+                          "engine_mem_limit": "6144Mi"},
     # A leading `*` must be quoted, or YAML reads an alias.
     "proxy-wildcard-no-proxy": {"platform": "k8s", "proxy": {
         "http": "http://px:3128", "no_proxy": "*.corp.example,10.0.0.0/8"}},

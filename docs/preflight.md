@@ -164,26 +164,26 @@ deploys.
 
 ## Engine requests: where they come from, and why no LimitRange
 
-The agent variables set engine **limits** only —
-`KUBERNETES_RESOURCES_LIMITS_CPU` / `_MEMORY`. The **requests** come from the
-location's `overrideCPU` and `overrideMemory` (Settings → Private Locations). A
-location at `overrideCPU: 1` / `overrideMemory: 4096` with a bundle asking for
-2 CPU / 8Gi produces an engine pod carrying:
+The bundle sets both halves on the crane agent, and crane stamps them on every
+engine it creates:
 
-```
-requests {cpu: 1, memory: 4Gi}     limits {cpu: 2, memory: 8Gi}
-```
+| | variable | default |
+|---|---|---|
+| limits | `KUBERNETES_RESOURCES_LIMITS_CPU` / `_MEMORY` | `2` / `8Gi` |
+| requests | `KUBERNETES_RESOURCES_DEFAULT_CPU` / `_MEM` | equal to the limits (`2` / `8192`, memory in MiB) |
 
-Left unset — as on most locations — they default to **250m / 256Mi**. That is
-why engines pack: the scheduler and cluster autoscaler place pods by requests,
-so an engine that will use 2 CPU asks for a fraction of one, and several land
-where two fit. A run competing for CPU it was never given reports wrong numbers,
-not merely slow ones.
+These are the variables BlazeMeter's own Helm chart uses for executor requests
+and limits. Requests equal to limits matter because the scheduler and the
+cluster autoscaler place pods by requests: with crane's own default of
+**250m / 256Mi**, an engine that will use 2 CPU asks for a fraction of one,
+several land where two fit, and a run competing for CPU it was never given
+reports wrong numbers, not merely slow ones.
 
-**Set the location's overrides to match the engine limits.** Requests then
-equal limits, the scheduler places engines truthfully, and the autoscaler grows
-a dedicated pool by the right number of nodes. `overrideMemory` is in MB; a
-value that looks like GB is probably a typo.
+**A location's `overrideCPU` / `overrideMemory` replace the requests.** A
+location at `overrideCPU: 1` / `overrideMemory: 4096` with a 2 CPU / 8Gi bundle
+produces `requests {cpu: 1, memory: 4Gi}` against `limits {cpu: 2, memory:
+8Gi}`. Leave them unset, or set them to the engine size. `overrideMemory` is in
+MB; a value that looks like GB is probably a typo.
 
 **A LimitRange cannot do it.** `defaultRequest` only fills fields a pod leaves
 unset, and crane sets engine requests explicitly. A LimitRange would reach only
@@ -209,14 +209,13 @@ Unset and empty differ: unset means "engines go wherever crane goes"; `{}` or
 `[]` means "engines take no selector or toleration of their own", for crane
 pinned to a tainted infra pool with engines free to land anywhere.
 
-**A dedicated pool does not by itself give engines the size they are configured
-for.** If the location's overrides are unset, engines request 250m/256Mi, and a
-cluster autoscaler scales on requests just as the scheduler places on them — so
-an empty pool grows by *one* node and every engine of the run packs onto it.
-Set `overrideCPU`/`overrideMemory` to match the engine limits and the pool grows
-by the number of nodes the run actually needs.
+**Requests equal to limits are what make a dedicated pool scale correctly.** A
+cluster autoscaler scales on requests just as the scheduler places on them, so
+the bundle's requests grow the pool by the number of nodes the run needs. A
+location whose `overrideCPU`/`overrideMemory` are set lower brings back the
+packing: an empty pool grows by *one* node and the run lands on it.
 
-Where the overrides cannot be set, the backstop is the pool's own `maxPods`,
+The backstop is the pool's own `maxPods`,
 sized to the pods a node of that pool actually runs plus the engines you intend
 it to hold (`engines_per_node`). Measure it with `kubectl get pods -A
 --field-selector spec.nodeName=<node>` — **not** with `kubectl get ds -A`, which

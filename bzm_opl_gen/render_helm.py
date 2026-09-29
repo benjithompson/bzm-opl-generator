@@ -11,12 +11,10 @@ import os
 from .bundle_env import DEFAULT_NO_PROXY, extra_env, proxy_env, proxy_has_creds
 from .bundle_names import (CHART_DIR, HELM_DIR, HELM_VALUES_FILE,
                            MIRROR_SCRIPT_FILE, NODEPOOLS_FILE)
-from .bundle_options import (auto_update, engine_scheduling, engine_size,
-                             separate_pools, service_account)
+from .bundle_options import (auto_update, engine_request, engine_scheduling,
+                             engine_size, separate_pools, service_account)
 from .ca_trust import CA_FILENAME, CA_MOUNT_PATH, ca_cfg
-from .footprint import (ENGINE_DEFAULT_REQUEST_CPU,
-                        ENGINE_DEFAULT_REQUEST_MEM, ENGINE_DISK_GB,
-                        ENGINE_TMP_GB)
+from .footprint import ENGINE_DISK_GB, ENGINE_TMP_GB
 from .image_registry import crane_image, image_overrides, mirror_script
 from .markers import helm_token_at_install
 from .nodepools import nodepools_md
@@ -24,7 +22,8 @@ from .quantity import format_cpu, format_memory
 from .quoting import yq
 from .readme_parts import (bundle_table, ca_slot_block, deploy_steps,
                            ignored_block, location_bullet,
-                           placeholder_block, sa_bullet, sizing_bullet,
+                           placeholder_block, requests_bullet, sa_bullet,
+                           sizing_bullet,
                            sv_bullet, verify_block)
 from .service_virt import SV_INGRESS_BACKENDS, sv_cfg
 
@@ -190,17 +189,19 @@ def _helm_values(facts, o):
     else:
         lines.append("engineTolerations: []")
     cpu_limit, mem_limit = engine_size(o)
+    req_cpu, req_mem = engine_request(o)
     lines += [
         "",
-        "# Engine pod limits. Empty: the chart default. This location's engines",
-        f"# need {format_cpu(cpu_limit)} CPU + {format_memory(mem_limit)} each, plus ~{ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB of it /tmp).",
-        "#",
-        "# Engine requests are not settable here: they come from the location's",
-        "# overrideCPU/overrideMemory (Settings -> Private Locations), default",
-        f"# {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. Set them to match these limits.",
+        "# Engine pod requests and limits. Empty: the chart default (2 CPU / 8Gi,",
+        f"# requests equal to limits). This location's engines need {format_cpu(cpu_limit)} CPU + {format_memory(mem_limit)}",
+        f"# each, plus ~{ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB of it /tmp).",
         "engine:",
         f"  cpuLimit: {yq(o['engine_cpu_limit'] or '')}",
         f"  memoryLimit: {yq(o['engine_mem_limit'] or '')}",
+        # Written out whenever a limit is, so the chart never has to convert
+        # a quantity it cannot parse.
+        f"  cpuRequest: {yq(req_cpu if o['engine_cpu_limit'] else '')}",
+        f"  memoryRequestMi: {yq(req_mem if o['engine_mem_limit'] else '')}",
         f"  ephemeralRequestMb: {yq(o['engine_ephemeral_request_mb'] or '')}",
         f"  ephemeralLimitMb: {yq(o['engine_ephemeral_limit_mb'] or '')}",
     ]
@@ -325,6 +326,7 @@ helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE
 ## Worth knowing
 
 {sizing_bullet(facts, o)}{location_bullet(facts, o)}{sa_bullet(o)}{sv_bullet(facts, o)}
+{requests_bullet(facts, o)}
 {_upgrade_bullet(o)}
 - `{HELM_VALUES_FILE}` holds everything specific to you; `{CHART_DIR}/` is the same
   chart for everyone. `helm show values ./{CHART_DIR}` lists every option.

@@ -42,25 +42,28 @@ CRANE_MEM_LIMIT = "2Gi"
 # the same on every platform.
 CRANE_EPHEMERAL_STORAGE = "1Gi"
 
-# An engine pod's requests when the location sets neither overrideCPU nor
-# overrideMemory. The overrides set the requests and the bundle's
-# KUBERNETES_RESOURCES_LIMITS_* the limits (measured: overrideCPU=1,
-# overrideMemory=4096 gave requests {1, 4Gi} against limits {2, 8Gi}). A
-# LimitRange cannot change them: crane sets requests explicitly.
+# Crane's own engine requests when neither the bundle
+# (KUBERNETES_RESOURCES_DEFAULT_CPU/_MEM) nor the location (overrideCPU /
+# overrideMemory) sets them. A LimitRange cannot change them: crane sets
+# requests explicitly (measured: overrideCPU=1, overrideMemory=4096 gave
+# requests {1, 4Gi} against limits {2, 8Gi}).
 ENGINE_DEFAULT_REQUEST_CPU = "250m"
 ENGINE_DEFAULT_REQUEST_MEM = "256Mi"
 
 
-def engine_requests(facts):
-    """(cpu, memory) an engine pod requests, given the location's overrides.
+def engine_requests(facts, bundle=None):
+    """(cpu, memory) an engine pod requests: the location's overrides where
+    set, else `bundle` -- the (cpu, memory) the bundle's
+    KUBERNETES_RESOURCES_DEFAULT_* carry -- else crane's own default.
 
     overrideMemory is MB. Accounts hold values like 32, 4000 and 8196, so it is
     reported as found and never rescaled.
     """
     cpu = facts.get("override_cpu")
     mem = facts.get("override_memory")
-    return (f"{cpu}" if cpu else ENGINE_DEFAULT_REQUEST_CPU,
-            f"{mem}Mi" if mem else ENGINE_DEFAULT_REQUEST_MEM)
+    fallback = bundle or (ENGINE_DEFAULT_REQUEST_CPU, ENGINE_DEFAULT_REQUEST_MEM)
+    return (f"{cpu}" if cpu else fallback[0],
+            f"{mem}Mi" if mem else fallback[1])
 
 
 # The smallest overrideMemory (MB) read as an engine size. The field's unit is

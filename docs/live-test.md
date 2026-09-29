@@ -229,9 +229,10 @@ node address first.
 The test's `executions[].locations` are repointed at `harbor-<id>` and restored
 in a `finally`; the original is printed so it can be put back by hand if the
 process is killed. Engines are sized down with `--engine-cpu` / `--engine-mem`
-(default 1 / 4Gi). Crane sets engine *requests* itself, from the location's
-`overrideCPU`/`overrideMemory` (250m / 256Mi when unset); only the limits come
-from the bundle. The run prints the difference as `ENGINE SIZING:`.
+(default 1 / 4Gi). The bundle sets engine requests equal to the limits
+(`KUBERNETES_RESOURCES_DEFAULT_*`); a location's `overrideCPU`/`overrideMemory`
+replace them. The run prints any gap between requests and limits as
+`ENGINE SIZING:`.
 
 **Use a test that makes real requests.** A dummy-sampler script reports
 plausible samples while issuing none, so engine egress goes untested. The API

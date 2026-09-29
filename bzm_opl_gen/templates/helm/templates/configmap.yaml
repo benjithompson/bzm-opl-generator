@@ -79,6 +79,10 @@ data:
   {{- /* Always set: an engine with no limits can be OOM-killed by the node. */}}
   KUBERNETES_RESOURCES_LIMITS_CPU: {{ include "bzm-opl.engineCpuLimit" . | quote }}
   KUBERNETES_RESOURCES_LIMITS_MEMORY: {{ include "bzm-opl.engineMemoryLimit" . | quote }}
+  # Engine requests, equal to the limits (memory in MiB). A location's
+  # overrideCPU/overrideMemory, if set in BlazeMeter, replace them.
+  KUBERNETES_RESOURCES_DEFAULT_CPU: {{ include "bzm-opl.engineCpuRequest" . | quote }}
+  KUBERNETES_RESOURCES_DEFAULT_MEM: {{ include "bzm-opl.engineMemoryRequestMi" . | quote }}
   {{- with .Values.engine.ephemeralRequestMb }}
   KUBERNETES_REQUESTS_EPHEMERAL_STORAGE: {{ . | quote }}
   {{- end }}
