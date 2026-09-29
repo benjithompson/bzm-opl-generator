@@ -4,6 +4,7 @@
 import { Options } from "./api";
 import type { PlanInputs } from "./usePlan";
 import type { SavedSizing } from "./sizings";
+import type { ViewId } from "./layout/NavDrawer";
 
 /** Bumped whenever the shape changes. A snapshot of another version is dropped
  *  whole rather than half-read, since other code believes its ids and options.
@@ -29,8 +30,8 @@ export interface Session {
   declaredFunctionalities: string[];
   options: Options;
   step: number;
-  /** Which view is open; the capacity rollup is not a step. */
-  view: "flow" | "capacity";
+  /** Which view is open; the capacity rollup and the images are not steps. */
+  view: ViewId;
   /** What was typed into the sizing card. */
   plan: PlanInputs;
   /** The saved sizings, defaults included, or null before anything decided

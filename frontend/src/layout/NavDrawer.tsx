@@ -1,9 +1,8 @@
-// The left drawer: which of the two views is open, with the key and account at
-// its foot. It collapses to a rail; one corner holds both the open and the
-// close control.
+// The left drawer: which view is open, with the key and account at its foot.
+// It collapses to a rail; one corner holds both the open and the close control.
 import { ReactNode } from "react";
 
-export type ViewId = "flow" | "capacity";
+export type ViewId = "flow" | "capacity" | "images";
 
 interface NavItem {
   id: ViewId;
@@ -22,12 +21,16 @@ const Icon = ({ d }: { d: string }) => (
   </svg>
 );
 
-/** Plain inline shapes: a document for the bundle, bars for the rollup. */
+/** Plain inline shapes: a document for the bundle, bars for the rollup, a
+ *  stack of layers for the images. */
 const NAV: NavItem[] = [
   { id: "flow", label: "Generate",
     icon: <Icon d="M5 2.5h6l4 4v11h-10zM11 2.5v4h4M7.5 11h5M7.5 14h5" /> },
   { id: "capacity", label: "Account capacity",
     icon: <Icon d="M3 16.5h14M6 16.5v-5M10 16.5v-9M14 16.5v-3" /> },
+  // Enabled with no key: unconnected, it shows the catalogue.
+  { id: "images", label: "Images",
+    icon: <Icon d="M10 3l7 3.5-7 3.5-7-3.5zM3 10l7 3.5 7-3.5M3 13.5l7 3.5 7-3.5" /> },
 ];
 
 export function NavDrawer(props: {

@@ -15,6 +15,9 @@ import { Sv } from "../sv";
 /** What is being generated, for whom, and whether it can be. */
 interface BundleHandover {
   facts: Facts | null;
+  /** Facts for newly typed values are on their way, so `facts` is for the
+   *  previous ones and must not be downloaded. */
+  reading: boolean;
   shipId: string | null;
   /** The options as sent, markers included. */
   options: Options;
@@ -115,14 +118,14 @@ export function DownloadPanel(p: DownloadPanelProps) {
   const [gapsOpen, setGapsOpen] = useState(false);
   const { facts, shipId, options, format, sv } = bundle;
   const { plan } = credential;
-  // Only a missing bundle disables download: no facts, no agent, or a preview
-  // that failed. Blank fields are markers, and the configurations generate()
-  // refuses arrive as genErr.
-  const ready = !!facts && !!shipId && !bundle.genErr;
+  // Only a missing bundle disables download: no facts, facts still being read,
+  // no agent, or a preview that failed. Blank fields are markers, and the
+  // configurations generate() refuses arrive as genErr.
+  const ready = !!facts && !bundle.reading && !!shipId && !bundle.genErr;
   return (
             <div className="space-y-3">
               <div className="flex gap-2 items-center">
-                <Button disabled={!ready}
+                <Button disabled={!ready} busy={bundle.reading}
                   onClick={() => {
                     report(NO_ATTEMPT);
                     api.downloadZip(facts!, { ...options, ship_id: shipId },

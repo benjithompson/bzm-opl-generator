@@ -8,9 +8,10 @@ Installed with the `[ui]` extra (see the [README](../README.md#install)); from a
 checkout, `pip install -e ".[ui]"`. The page ships prebuilt, so there is no npm
 step.
 
-Two views, in a drawer down the left that collapses to a rail: **Generate**, the
-three steps below, and **Account capacity**, the account's rated virtual users
-rolled up by workspace. The API key, the account and the workspace live together
+Three views, in a drawer down the left that collapses to a rail: **Generate**,
+the three steps below; **Account capacity**, the account's rated virtual users
+rolled up by workspace; and **Images**, the container images to mirror into
+your own registry. The API key, the account and the workspace live together
 at the foot of that drawer, because they last the session while a location and
 an agent are chosen per bundle.
 
@@ -69,6 +70,13 @@ deleted in BlazeMeter).
 In manual entry both ids are optional: a blank one becomes a marker
 (`<HARBOR_ID>`, `<SHIP_ID>`), so a bundle can be produced for review before the
 private location exists.
+
+Manual entry reads no account, so the server pins each image to the newest
+release in BlazeMeter's public registry. That read usually takes about a
+second and can take up to 8 seconds. While it runs, the form says so and
+**Download** waits, because the facts on screen are for the previous values.
+When it is done, the form shows what those facts cannot tell. For example, a
+location can ask for an older release than the newest.
 
 ### Changing a location after it exists
 
@@ -260,6 +268,77 @@ the engine count, while virtual users per engine is what those engines are
 separately** rather than shown as zero. A location shared between workspaces is
 striped and counted once in the account total, so the total is not the sum of
 the workspace figures.
+
+## Images
+
+The third view lists the container images a corporate registry must hold for
+the agent to run: each image reference, what it is for, which functionality
+pulls it, when it is pulled, and what the public registry says about it. It
+needs no key.
+
+**Where the list comes from** is the first line of the view:
+
+| You are | The view shows |
+|---|---|
+| Connected, with a location chosen under Generate | "Images for location *name* (read from your account)": the versions crane asks for on that location. |
+| Connected, with no location chosen | BlazeMeter's image catalogue. Choose a location to see its versions. |
+| Not connected, or in manual entry | BlazeMeter's image catalogue, with each image pinned to the newest release in BlazeMeter's public registry. Where the registry did not answer, a tag can be `latest`. |
+
+Versions pinned to the newest release are not read from a location. A location
+can ask for an older release than the newest, and then a mirror built from this
+list does not have the image the agent asks for. The view says so above the
+table. For the exact list, connect an account and choose a location.
+
+The view reads the location again when you choose another one under Generate.
+
+**What a row says:**
+
+- **Image**: the full reference, with **Copy** beside it, the functionalities
+  that pull it, and where its tag came from (the location's version list, a
+  running agent's inventory, the newest release in BlazeMeter's registry, or
+  the catalogue). CSV and Markdown carry the same value. A functionality shows
+  BlazeMeter's name for it. Without a connected account, the tool has names
+  only for the functionalities it configures, so the view shows any other one
+  as its funcId (for example `functionalApi`), in code type.
+- **Purpose** and **pulled**: what the image does and when crane pulls it.
+  *(inferred)* marks a purpose that nobody has seen on a running agent.
+- **Size** and **digest**: the compressed size and the digest from the public
+  registry. Click the short digest to copy the full one.
+- **Tag**: *pinned*; a warning for a tag such as `latest`, which names a
+  different image after each release; or *newer tag available*, where
+  BlazeMeter's registry holds a newer tag in the same series. For a tag such as
+  `latest`, the view also shows the version tag that has the same digest now,
+  for example `latest = 2.4.538-reduced`. When no version tag has that digest,
+  the view says so. When the registry could not be read, the view says the
+  version was not read.
+- **Required**: only for a location. The catalogue cannot say what a location
+  needs, so it has no such column.
+
+A value the view could not read says **not read**, and the reason shows when
+you point at it. It is never blank and never `0`. A notice above the table says
+when the location's version list could not be read, when the location has no
+agent yet, and when the public registry did not answer for some or all images.
+
+For a location, **Show** switches between **Required only** and **All** (every
+image the location's functionalities can pull). The catalogue has no such
+choice, because it always lists every image it knows.
+
+**Copy** puts every reference on the clipboard, one per line. **CSV** and
+**Markdown** download the rows on screen; the page makes them itself and sends
+no further request. Both have a column for the version a tag resolves to. The
+CSV has a `func_ids` column beside the names, and a `registry_state` column,
+so a blank digest, size or resolved version is read against it.
+
+Tags follow BlazeMeter's releases, so a mirror goes out of date after an
+upgrade. Check it again after each one:
+
+```
+bzm-opl-gen images --verify <registry>
+```
+
+When the bundle's **Registry** option is set, the view fills in that registry.
+The view does not show the name each image has inside your mirror, because
+the generator composes those names.
 
 ## Running it
 

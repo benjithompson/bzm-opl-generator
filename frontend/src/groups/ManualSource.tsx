@@ -3,7 +3,7 @@
 // (manualIds.ts). None is required: a location that does not exist yet has no
 // ids, so an empty box shows the marker the bundle will carry instead. What the
 // location runs is declared on the configure step.
-import { Callout, Field, SecretInput, TextInput } from "../components";
+import { Callout, Field, SecretInput, Spinner, TextInput } from "../components";
 import { blankManualIds, checkId, HARBOR, IdRule, SHIP, tidy, TOKEN }
   from "../manualIds";
 import { marker, placeholderWarning } from "../placeholder";
@@ -12,6 +12,10 @@ export function ManualSource(props: {
   harborId: string;
   shipId: string;
   authToken: string;
+  /** The facts for these values are being read. */
+  reading: boolean;
+  /** What those facts cannot tell, in the server's plain prose. */
+  warnings: string[];
   onHarborId: (v: string) => void;
   onShipId: (v: string) => void;
   onAuthToken: (v: string) => void;
@@ -21,8 +25,10 @@ export function ManualSource(props: {
     <div className="space-y-3">
       <p className="text-xs text-slate-500">
         From the agent&apos;s install command in BlazeMeter (Settings → Private
-        Locations → your agent). Nothing is sent to BlazeMeter and nothing is
-        looked up — only the shape of each value is checked here.
+        Locations → your agent). These values are not sent to BlazeMeter and
+        not checked against an account; only the shape of each value is checked
+        here. To choose image versions, the server reads the newest releases
+        from BlazeMeter&apos;s public registry, which can take a few seconds.
       </p>
 
       <Field label="Harbor ID (private location)"
@@ -55,6 +61,19 @@ export function ManualSource(props: {
           {placeholderWarning(blanks)}
         </Callout>
       )}
+
+      {props.reading && (
+        <p role="status" className="flex items-center gap-1.5 text-xs text-slate-500">
+          <Spinner className="text-bzm" />
+          reading the newest image releases from BlazeMeter&apos;s registry…
+        </p>
+      )}
+      {/* The server's own sentences: what facts without an account cannot say. */}
+      {!props.reading && props.warnings.map((w) => (
+        <Callout key={w} tone="amber" className="text-xs">
+          <p role="note">{w}</p>
+        </Callout>
+      ))}
     </div>
   );
 }

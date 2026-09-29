@@ -44,7 +44,13 @@ export interface Facts {
 export interface GeneratedFile { name: string; content: string }
 /** Manual facts. `gui_images_incomplete` is served but not read here: the page
  *  cannot declare functionalGui in manual entry. */
-export interface ManualFactsOut { facts: Facts; gui_images_incomplete: boolean }
+export interface ManualFactsOut {
+  facts: Facts;
+  gui_images_incomplete: boolean;
+  /** Plain prose: what facts made without an account cannot tell, such as
+   *  versions pinned to the newest release rather than read from a location. */
+  warnings: string[];
+}
 export interface AgentStatus {
   state: string; heartbeat_age_s: number | null;
   installed_version?: string; online: boolean;
@@ -291,7 +297,9 @@ export const api = {
     & Partial<Record<keyof LocationSettings, string>>) =>
     req<LocationUpdate>("POST", "/api/locations/settings", body),
   facts: (harborId: string) => req<Facts>("GET", `/api/facts?harbor_id=${harborId}`),
-  /** Facts from typed values, with no API key. Nothing is validated. */
+  /** Facts from typed values, with no API key. Nothing is validated. The
+   *  server reads BlazeMeter's public registry for the newest releases, so an
+   *  answer can take several seconds. */
   manualFacts: (body: { harbor_id: string; ship_id: string; func_ids: string[] }) =>
     req<ManualFactsOut>("POST", "/api/facts/manual", body),
   status: (harborId: string, shipId: string) =>
@@ -315,6 +323,14 @@ export const api = {
   engineVus: (cpu: string, mem: string) =>
     req<EngineRating>(
       "GET", `/api/engine-vus?cpu=${encodeURIComponent(cpu)}&mem=${encodeURIComponent(mem)}`),
+  /** The container images to mirror: the selected location's versions with
+   *  `harborId`, BlazeMeter's catalogue without one. `all` asks for every image
+   *  of the location's functionalities, not only the ones it requires. */
+  images: (harborId: string | null, all: boolean) => req<ImagesAnswer>(
+    "GET", "/api/images?" + new URLSearchParams({
+      ...(harborId ? { harbor_id: harborId } : {}),
+      lookup: "true", all: String(all),
+    })),
   /** Rated capacity by workspace (core.account_capacity). */
   capacity: (accountId: number) =>
     req<Capacity>("GET", `/api/capacity?account_id=${accountId}`),
@@ -371,6 +387,62 @@ export const api = {
     return token;
   },
 };
+
+/** How one read ended. "unread" is asked and not answered, and is never shown
+ *  as empty; "not-asked" is nobody asking. */
+type ReadState = "read" | "unread" | "not-asked";
+
+/** One image to mirror, from /api/images. The registry fields are null unless
+ *  `registry_state` is "read", and even then a registry may omit one. */
+export interface ImageRow {
+  key: string;
+  repo: string;
+  tag: string;
+  /** The full reference crane pulls: repo and tag. */
+  ref: string;
+  category: string;
+  /** The funcIds that pull it. Some are funcIds this tool does not cover
+   *  (`functionalApi`, `proxyRecorder`), named only by an account's vocabulary. */
+  functionalities: string[];
+  purpose: string;
+  pulled_when: string;
+  /** False: the purpose is inferred, not observed on a live agent. */
+  verified: boolean;
+  /** Does the selected location need it? Null in catalogue mode. */
+  required: boolean | null;
+  /** A tag such as `latest`, which names a different image after a release. */
+  tag_mutable: boolean;
+  /** For a mutable tag, the version tag that has the same digest now
+   *  (`latest` -> `2.4.538-reduced`). Null is not resolved, and
+   *  `registry_state` says whether that is unread or no match. Absent from
+   *  servers that do not resolve tags, which says nothing either way. */
+  resolves_to?: string | null;
+  /** Where the tag came from. "registry-newest" is the newest release in
+   *  BlazeMeter's public registry, not read from any location. */
+  source: "location-versions" | "agent-inventory" | "registry-newest" | "catalogue";
+  registry_state: ReadState;
+  registry_detail: string | null;
+  digest: string | null;
+  /** Compressed size, as the registry reports it. */
+  size_mb: number | null;
+  newest_tag: string | null;
+  /** True: a newer tag in the same series is in BlazeMeter's registry. */
+  update_available: boolean | null;
+}
+
+/** The images answer. `source` "location" is read from the account for the
+ *  selected location; "catalogue" is the built-in list, whose rows are pinned
+ *  to the newest release where the registry answered and may be `latest`
+ *  where it did not. */
+export interface ImagesAnswer {
+  source: "location" | "catalogue";
+  location: { harbor_id: string; name: string; func_ids: string[] } | null;
+  /** How reading the location's version list went. */
+  image_list_state: "read" | "unread" | "no-agent" | "not-asked";
+  /** The public-registry lookup over every row; "partial" where some answered. */
+  registry_lookup: { state: ReadState | "partial"; detail: string | null };
+  images: ImageRow[];
+}
 
 /** Every route the page calls, handed to App as a prop so a test can pass a
  *  fake (main.tsx picks the real one). */
