@@ -95,14 +95,14 @@ def test_secret_options_are_the_ones_profile_json_omits():
 
 
 def test_ca_options_are_the_ones_this_registry_files_under_ca_trust():
-    """generate.CA_OPTIONS is exactly the registry's CA trust section."""
+    """ca_trust.CA_OPTIONS is exactly the registry's CA trust section."""
     ca = {o.name for o in opt.OPTIONS if o.group == "CA trust"}
     assert ca == set(ca_trust.CA_OPTIONS)
 
 
 def test_clearing_the_ca_options_leaves_no_mode_configured():
-    """The other half of it: cleared to what? `no_ca()` answers with each
-    option's own default, so `_ca_cfg` resolves to no CA at all."""
+    """`no_ca()` answers with each option's own default, so `ca_cfg`
+    resolves to no CA at all."""
     assert ca_trust.ca_cfg({**bundle_options.DEFAULT_OPTIONS, "ca_bundle_slot": True,
                         **ca_trust.no_ca()}) is None
 

@@ -1,21 +1,14 @@
 """`GET /private-locations/{h}/ships/{s}/versions`, recorded off real locations.
 
-Three single-functionality locations in one real account, read verbatim and
-trimmed of nothing. Two things about them are the whole point:
+Three single-functionality locations, read verbatim. What they pin:
 
-  - **No agent had ever been online.** The performance and GUI recordings come
-    from agents in state `empty`, so this list needs no deployment, no live
-    inventory and no heartbeat -- which is what closes the browser-image gap
-    that `facts.gui_images_incomplete` was written for.
+  - **The list needs no agent.** The performance and GUI recordings come from
+    agents in state `empty` (never online).
   - **The map's keys are BlazeMeter's resource ids, not crane's image keys.**
-    `taurusEngineDockerImage` names nothing crane resolves an override by;
-    `dockerTag` does, and `dockerTag:version` is exactly the form a live
-    Kubernetes agent reports its images in. Read the id and a bundle's
-    IMAGE_OVERRIDES gets a key crane never asks about.
+    `dockerTag:version` is the key crane resolves an override by, and the form
+    a live Kubernetes agent reports its images in.
 
-One source file rather than a copy per suite, for the reason
-`evidence_fixtures.py` is one: two recordings of the same endpoint drift, and
-the halves that read them then disagree about what BlazeMeter answers.
+One shared copy, so every suite reads the same recording.
 """
 
 # funcIds ["performance"], agent state `empty`. Three resources -- and neither
@@ -85,7 +78,7 @@ VERSIONS_GUI = {
 
 # funcIds ["mockServices"]. Three resources, and **no taurus engine** -- an SV
 # agent carries no `v4` and no `apm` at all, which is the evidence
-# core.ENGINE_FUNCTIONALITIES and sv.exclusiveWith rest on.
+# facts.runs_engine and the page's sv.exclusiveWith rest on.
 VERSIONS_SV = {
     "resources": {
         "blazemeter/service-mock": {

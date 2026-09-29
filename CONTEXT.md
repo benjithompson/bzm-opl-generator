@@ -64,8 +64,9 @@ A format may hide an option, and must then never refuse it.
 What a required field left blank resolves to, so the failure is loud and early
 rather than a plausible-looking default. It is `<KEY>` — the option's own key in
 upper case, a dotted key joined by an underscore — so the file says which field
-is missing. _Avoid_: placeholder, except for `<PLACEHOLDER>` itself, which is
-the one marker every field carried before the key was in it.
+is missing. Documentation writes a sample value in lower case (`<token>`) so it
+is never mistaken for a marker.
+_Avoid_: placeholder
 
 **Reserved variable**:
 An agent environment variable the generator writes itself, so it is refused

@@ -1,11 +1,5 @@
-"""Offline tests for the capacity planner.
-
-The planner is the one module here that reaches nothing at all -- no account,
-no cluster, no options file -- so these are pure arithmetic and pure prose.
-What they mostly defend is the honesty of the document: an infrastructure
-request is acted on by somebody who cannot check it, so the assumption behind
-the node count has to survive every refactor that touches the wording.
-"""
+"""Offline tests for the capacity planner: pure arithmetic and the request
+document's wording, including that every assumed figure is stated as one."""
 
 import os
 import subprocess
@@ -21,14 +15,9 @@ from test_core import _imports  # noqa: E402
 # -- what it is allowed to reach --------------------------------------------
 
 def test_plan_reaches_nothing():
-    """The planner sizes a cluster for somebody with no cluster, no account and
-    no evidence file, so nothing it imports, directly or transitively, may be a
-    client for any of them.
-
-    Checked over the whole import closure in a fresh interpreter: a direct
-    import list passed while plan reached the API client through the module
-    it took its constants from. The direct list is kept too, for the message.
-    """
+    """Nothing plan imports, directly or transitively, may reach an account, a
+    cluster or the network -- checked over the whole import closure in a fresh
+    interpreter as well as the direct list."""
     imported = _imports(plan.__file__)
     reaching = imported & {"subprocess", "urllib", "http", "socket", "os",
                            "facts", "doctor", "livetest", "core", "kubectl",
@@ -62,14 +51,8 @@ def test_engines_are_the_target_over_threads_rounded_up():
 
 
 def test_slots_is_engines_per_agent_not_the_whole_run():
-    """BlazeMeter's `slots` is "Engines per agent" in its own UI -- "the number
-    of engines/tests that can run on one agent" -- so a location's concurrency
-    is agents x slots.
-
-    This was wrong here first: `slots` was set to the whole engine count, which
-    on a two-agent location is twice the run and twice the cluster. Real
-    accounts lean on the multiplication -- one has 17 agents at slots=1.
-    """
+    """BlazeMeter's `slots` is "Engines per agent", so a location's
+    concurrency is agents x slots."""
     one = plan.capacity_plan(5000)
     assert one["engines"] == 10
     assert one["location"]["slots"] == 10        # one agent: the same number
@@ -189,8 +172,8 @@ def test_each_model_is_asked_for_in_its_own_unit():
 
 
 def test_browser_instances_scale_with_the_pod_as_virtual_users_do():
-    """4 is the account owner's figure for BlazeMeter's own engine size, not a
-    constant -- the same thing 500 is, so it moves the same way."""
+    """4 is the figure for BlazeMeter's standard engine size, and scales like
+    500 does."""
     base = (2000, 8 * 1024 ** 3)
     assert plan.per_pod_capacity("functionalGui", *base) == 4
     assert plan.per_pod_capacity("functionalGui", 1000, 4 * 1024 ** 3) == 2
@@ -201,9 +184,8 @@ def test_browser_instances_scale_with_the_pod_as_virtual_users_do():
 
 
 def test_a_locations_funcids_pick_the_models_that_describe_it():
-    """The join every surface that has a *location* makes: the bundle README and
-    doctor both have funcIds and had no way to turn them into a unit, so both
-    spoke performance's whatever the location ran (#165)."""
+    """The join the bundle README and doctor use to size a location in its own
+    unit."""
     assert plan.sizing_models_for(["functionalGui"]) == ["functionalGui"]
     assert plan.sizing_models_for(["mockServices"]) == ["mockServices"]
     # SIZING_MODELS order, not the location's -- the same tie-break the page's
@@ -214,19 +196,16 @@ def test_a_locations_funcids_pick_the_models_that_describe_it():
 
 
 def test_funcids_nobody_could_read_are_not_funcids_that_size_nothing():
-    """Three answers, and the middle one is the whole reason this returns a list
-    rather than one id. A location carrying only tdm or delphix was *read*, and
-    it is sized by no model here; facts with no funcIds at all were not read.
-    Both leave the same absent unit behind, so the value has to carry which."""
+    """Three answers: None (funcIds not read), [] (read, but no model here
+    sizes them), or the list."""
     assert plan.sizing_models_for(None) is None
     assert plan.sizing_models_for([]) == []
     assert plan.sizing_models_for(["tdm", "delphix"]) == []
 
 
 def test_service_virtualization_has_no_figure_to_be_sized_with():
-    """The point of the whole table. `vus_per_engine_assumed` carries supplied
-    against defaulted; requests per second per core is in neither position,
-    because nobody has measured it. None, so no arithmetic can reach past it."""
+    """Requests per second per core is unmeasured: None, so no arithmetic can
+    use it."""
     assert plan.SIZING_MODELS["mockServices"]["baseline"] is None
     assert plan.per_pod_capacity("mockServices", 2000, 8 * 1024 ** 3) is None
 
@@ -294,9 +273,7 @@ def test_service_virtualization_is_carried_unsized_rather_than_defaulted():
 
 
 def test_unmeasured_is_not_the_same_answer_as_assumed():
-    """The rule this repo keeps everywhere else: could not read and there is
-    nothing there must not share a representation. Three states, three
-    values."""
+    """Supplied, assumed and unmeasured are three distinct values."""
     p = plan.capacity_plan(5000, vus_per_engine=250, sizings=[
         {"functionality": "functionalGui", "target": 20},
         {"functionality": "mockServices", "target": 2000}])
@@ -391,12 +368,11 @@ def test_a_browser_only_request_asks_for_browser_testing():
 
 
 def test_the_document_says_where_the_browser_figure_came_from():
-    """Roughly 4, from the account owner. An assumption, and one this tool can
-    measure even less than it can measure virtual users per engine."""
+    """The browser figure is stated as an estimate, not a measurement."""
     doc = plan.plan_document(plan.capacity_plan(
         sizings=[{"functionality": "functionalGui", "target": 20}]))
     assert "4 browser instances per engine" in doc
-    assert "account owner" in doc
+    assert "rough" in doc and "estimate" in doc
     assert "not a measurement" in doc
 
 
@@ -468,10 +444,8 @@ def test_default_threads_are_marked_as_assumed():
 
 
 def test_the_assumed_figure_follows_the_engine_size():
-    """500 is BlazeMeter's number for *its* engine, not a constant. Carried onto
-    another size it is wrong in both directions -- and the small case is the
-    worse one, because the planner then warns about the figure it chose
-    itself."""
+    """500 is BlazeMeter's figure for its 2 CPU / 8Gi engine; other sizes
+    scale it."""
     small = plan.capacity_plan(10000, engine_cpu="1", engine_mem="4Gi")
     standard = plan.capacity_plan(10000)
     large = plan.capacity_plan(10000, engine_cpu="4", engine_mem="16Gi")
@@ -482,9 +456,8 @@ def test_the_assumed_figure_follows_the_engine_size():
 
 
 def test_an_assumed_figure_never_warns_about_itself():
-    """The over-threading warning is about a *supplied* figure the engine cannot
-    carry. Firing it against the planner's own default made the tool look broken
-    on the small engine preset."""
+    """The over-threading warning is only for a *supplied* figure the engine
+    cannot carry."""
     for cpu, mem in (("1", "4Gi"), ("2", "8Gi"), ("4", "16Gi")):
         p = plan.capacity_plan(10000, engine_cpu=cpu, engine_mem=mem)
         assert not any("throttle" in w for w in p["warnings"]), (cpu, mem)
@@ -601,11 +574,8 @@ def test_warnings_are_prose_in_both_places_they_are_shown():
 
 
 def test_document_says_the_blazemeter_side_does_not_wait_for_the_cluster():
-    """A location and its agent are records in BlazeMeter, not things running on
-    the cluster: both can be created while the infrastructure request is still
-    being read, and an agent that has never sent a heartbeat is the expected
-    state before a deployment rather than a fault. Saying so is the difference
-    between the wait being dead time and being setup time."""
+    """The location and agent can be created before the cluster exists, and
+    an agent with no heartbeat yet is expected."""
     doc = plan.plan_document(plan.capacity_plan(5000))
     assert "None of that waits for the cluster" in doc
     assert "never" in doc and "heartbeat" in doc
@@ -630,20 +600,14 @@ def test_document_does_not_mention_agents_when_there_is_one():
 
 
 def test_a_fractional_engine_has_no_whole_core_request():
-    """overrideCPU takes whole cores, so a 500m engine has none to state.
-
-    None rather than a formatted "500m": the field cannot hold it, and the web
-    UI used to find that out with a regex over the plan's own string. Unknown
-    is the null; a number is always a number the field will take.
-    """
+    """overrideCPU takes whole cores, so a 500m engine gets None rather than
+    a value the field cannot hold."""
     p = plan.capacity_plan(100, engine_cpu="500m", engine_mem="2Gi")
     assert p["location"]["override_cpu"] is None
     assert p["location"]["override_memory"] == 2048
     doc = plan.plan_document(p)
     assert "whole cores" in doc
-    # Never the repr of a missing value in the cell somebody types from. (Not
-    # `"None" not in doc` -- the prose says "None of that waits for the
-    # cluster", which is how the first version of this assertion failed.)
+    # Never the repr of a missing value (the prose itself contains "None of").
     assert "`None`" not in doc
 
     whole = plan.capacity_plan(100, engine_cpu="2", engine_mem="8Gi")
@@ -651,12 +615,8 @@ def test_a_fractional_engine_has_no_whole_core_request():
 
 
 def test_the_slots_row_only_multiplies_when_there_is_something_to_multiply():
-    """At one agent, "1 x 10 = 10" is arithmetic for its own sake -- and it
-    invites the question of where the 1 came from, which is the one thing the
-    planner cannot answer: how many agents a location ends up with is decided
-    after the cluster exists and changes at will. The web planner therefore has
-    no agents field, and this is what its document says.
-    """
+    """At one agent the row states slots plainly and suggests adding agents,
+    rather than "1 x 10 = 10"."""
     one = plan.plan_document(plan.capacity_plan(5000))
     row = [l for l in one.splitlines() if "Engines per agent" in l][0]
     assert "1 x 10" not in row

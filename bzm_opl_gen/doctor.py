@@ -1231,7 +1231,7 @@ def evidence_summary(doc, namespace=None):
 
 def _ca_configured(opts):
     """Does the bundle configure CA trust in any mode? `.get` over CA_MODES,
-    not _ca_cfg: a doctor reports rather than raises over a refused pair."""
+    not ca_trust.ca_cfg: a doctor reports rather than raises over a refused pair."""
     return any(opts.get(k) for k in CA_MODES)
 
 

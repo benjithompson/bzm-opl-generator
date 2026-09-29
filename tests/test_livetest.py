@@ -1552,7 +1552,7 @@ def test_the_proxy_overlay_replaces_every_ca_mode_too():
 
 
 def test_the_file_mode_names_the_configmap_the_bundle_itself_writes():
-    """File mode mounts generate.CA_CONFIGMAP under the rig's non-default key."""
+    """File mode mounts bundle_names.CA_CONFIGMAP under the rig's non-default key."""
     o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="file")
     ca = ca_trust.ca_cfg({**bundle_options.DEFAULT_OPTIONS, **o})
     assert ca["mode"] == "file"

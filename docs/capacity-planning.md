@@ -59,7 +59,7 @@ at all, so the planner has a model for each — and one of them has no figure:
 | functionality | asked for in | what one 2 CPU / 8Gi pod carries |
 |---|---|---|
 | Performance | virtual users | 500 — BlazeMeter's own figure |
-| GUI Functional | browser instances | about 4 — the account owner's estimate |
+| GUI Functional | browser instances | about 4 — an estimate, not a measurement |
 | Service Virtualization | requests per second | **nothing measured** |
 
 `--users`, `--browsers` and `--requests-per-second` are the three targets, and
@@ -102,13 +102,10 @@ a browsing journey does, and no arithmetic here reaches that.
 So `--vus-per-engine` is the input everything multiplies by, and unset it
 assumes **what an engine of the chosen size is rated for** — 500 for the
 standard 2 CPU / 8Gi engine, scaled linearly on whichever of CPU and memory is
-tighter for any other. It follows the engine size for a reason: a flat 500 on
-the Small preset assumed load the engine cannot carry and then warned about the
-figure the planner itself had picked, and on Large it asked for twice the nodes
-needed. Every answer says which of the two it was (`vus_per_engine_assumed` in
-the JSON, a line in the summary, a section in the document), because a plan that
-quietly turns an assumption into a node count is how an infrastructure request
-comes back wrong by a factor of three.
+tighter for any other. Every answer says whether the figure was supplied or
+assumed (`vus_per_engine_assumed` in the JSON, a line in the summary, a section
+in the document), because a plan that quietly turns an assumption into a node
+count is how an infrastructure request comes back wrong by a factor of three.
 
 **The honest sequence is: plan, provision small, measure, re-plan.** Run the
 real script against one engine, raise the load until that engine saturates, and
@@ -121,7 +118,7 @@ re-run `plan` with the number that comes out. That first step needs one node.
 | `--users` | – | virtual users the test has to reach. One of the three targets; at least one is needed |
 | `--vus-per-engine` | what the engine size is rated for | virtual users one engine carries (BlazeMeter's `threadsPerEngine`) — see above |
 | `--browsers` | – | browser instances a GUI Functional suite runs at once |
-| `--browsers-per-engine` | about 4 for the standard engine | an estimate from the account owner, not a measurement |
+| `--browsers-per-engine` | about 4 for the standard engine | an estimate, not a measurement |
 | `--requests-per-second` | – | what the virtual services have to serve. Stated in the request, never sized from — see above |
 | `--engine-cpu-limit` / `--engine-mem-limit` | `2` / `8Gi` | the same two flags `generate` takes, so a plan and the bundle it leads to are one vocabulary |
 | `--agents` | 1 | agents that will serve the location; `slots` is per agent, so this divides the run |
@@ -180,9 +177,10 @@ location settings panel), and it does cover `overrideCPU` and `overrideMemory`.
 
 - **Web UI** — the *Sizing* card at the top of step 1, usable before
   connecting anything ([web-ui.md](web-ui.md)).
-- **MCP** — `opl_plan capacity {users, vus_per_engine?, engine_cpu?,
-  engine_mem?, engines_per_node?, agents?}`, which returns the numbers and the
-  document together ([mcp.md](mcp.md)).
+- **MCP** — `opl_plan capacity {users?, vus_per_engine?, browsers?,
+  browsers_per_engine?, requests_per_second?, engine_cpu?, engine_mem?,
+  engines_per_node?, agents?}`, which returns the numbers and the document
+  together ([mcp.md](mcp.md)).
 
 ## What it deliberately does not do
 

@@ -1,12 +1,9 @@
-"""Facts built from the three values BlazeMeter shows, with no account access.
+"""Facts built from typed values with no account access, and how gather()
+reads a location's images.
 
-The case: producing manifests for a customer whose BlazeMeter account and
-cluster you cannot reach. What matters is that the resulting facts are the same
-*shape* gather() returns, so nothing downstream learns which way they arrived --
-and that the image catalogue actually covers the functionalities a location can
-be
-told it has, because a missing key is the silent failure (crane resolves it
-against the public registry).
+Manual facts must have the same shape gather() returns, and the image catalogue
+must cover every functionality: a missing key silently resolves against the
+public registry.
 """
 
 import json
@@ -53,13 +50,8 @@ class _OneLocationClient:
 
 
 def test_manual_facts_match_the_shape_gather_returns():
-    """Same keys, so every consumer downstream is indifferent to the source.
-
-    Compared against what gather() *actually returns*, not against a stored
-    fixture plus a list of keys the fixture predates: that list had to grow
-    every time a location field was read, which is the drift this test exists
-    to catch doing the catching itself.
-    """
+    """Same keys as what gather() actually returns, so consumers are
+    indifferent to the source."""
     gathered = facts_mod.gather(
         _OneLocationClient({"id": H, "name": "L", "funcIds": ["performance"],
                             "ships": []}), H)
@@ -67,10 +59,8 @@ def test_manual_facts_match_the_shape_gather_returns():
 
 
 def test_how_the_facts_arrived_is_readable_from_the_marker_they_already_carry():
-    """Doctor has to tell "there was no account to ask" from "the account said
-    no slots", and the facts already record which -- `images_source`. One
-    predicate over it, rather than a second field (which would be a second
-    shape) or a source test spelled out at each call site."""
+    """from_manual_entry() tells "no account to ask" from "the account said no
+    slots", off `images_source`."""
     assert facts_mod.from_manual_entry(facts_mod.manual(H, S))
     assert not facts_mod.from_manual_entry(
         facts_mod.gather(_FakeClient([_ship([])]), "H1"))     # catalogue fallback
@@ -120,11 +110,8 @@ def test_no_validation_of_the_ids():
 
 # -- the location that does not exist yet -------------------------------------
 #
-# The case: a customer who needs the manifests *before* their private location
-# is created, because the manifests are what their platform team has to approve.
-# BlazeMeter has issued no harbor id, no ship id and no token, so all three are
-# blank -- and blank here is the marker, not a refusal, exactly as it already was
-# for the token alone.
+# Manifests wanted before the private location is created: no ids and no token
+# exist yet, so each blank one is its marker, not a refusal.
 
 @pytest.mark.parametrize("harbor,ship,marked", [
     ("", "", ["harbor_id", "ship_id"]),
@@ -140,9 +127,7 @@ def test_an_id_nobody_has_is_its_own_marker(harbor, ship, marked):
                           ("ship_id", f["ships"][0]["id"]))
            if markers_mod.is_placeholder(v)]
     assert got == marked
-    # Each names its own field, which is the half a shared marker never had: the
-    # bundle is handed on, and `<SHIP_ID>` in the labels says which id is missing
-    # without the README being the only thing that does.
+    # Each marker names its own field.
     if "harbor_id" in marked:
         assert f["harbor_id"] == markers_mod.marker("harbor_id")
     if "ship_id" in marked:
@@ -150,11 +135,9 @@ def test_an_id_nobody_has_is_its_own_marker(harbor, ship, marked):
 
 
 def test_a_bundle_for_a_location_that_does_not_exist_yet():
-    """Everything renders, the markers reach the objects that carry the identity,
-    and the README names both fields. What stops it is the cluster: a marker is
-    not a legal label value, so the crane Deployment is refused with the field
-    named -- measured with `kubectl apply --dry-run=server` (see
-    required_fields.PLACEHOLDER_REFUSED_BY_API)."""
+    """Everything renders, the markers reach the identity labels, and the
+    README names both fields; the API server refuses the marker as a label
+    value (required_fields.PLACEHOLDER_REFUSED_BY_API)."""
     f = facts_mod.manual("", "")
     files = _gen(f)
     cm = _cm(files)
@@ -168,16 +151,12 @@ def test_a_bundle_for_a_location_that_does_not_exist_yet():
     readme = files["README.md"]
     assert "not finished" in readme
     assert "`harbor_id`" in readme and "`ship_id`" in readme
-    # The refusal is stated as the cluster's, because that is what was measured.
     assert "not legal Kubernetes names or label values" in readme
 
 
 def test_the_profile_records_the_agent_and_not_the_location():
-    """`profile.json` carries options, and `harbor_id` is a fact -- which is why
-    `placeholder_options` reports one of the two and `placeholder_fields` both.
-    A replay through the profile alone therefore cannot know the location was
-    blank, and must not be made to look as though it could: livetest reads
-    HARBOR_ID out of the ConfigMap for the same reason."""
+    """`profile.json` records options, so `ship_id` but not `harbor_id` (a
+    fact): `placeholder_options` reports one, `placeholder_fields` both."""
     files = _gen(facts_mod.manual("", ""))
     prof = json.loads(files[bundle_names.PROFILE_FILE])
     assert "harbor_id" not in prof
@@ -186,9 +165,8 @@ def test_the_profile_records_the_agent_and_not_the_location():
 
 
 def test_a_second_real_agent_is_still_a_refusal_rather_than_a_marker():
-    """The one blank the marker may not stand in for. Two agents and nobody
-    saying which is a question with two answers rather than none, and picking one
-    binds the bundle to an identity somebody else may be running."""
+    """Two agents and no ship_id is ambiguous, not blank: refused rather than
+    guessed."""
     f = facts_mod.manual(H, S)
     f["ships"].append({"id": "9f8e7d6c5b4a39281706f5e4", "name": None,
                        "state": None, "installed_version": None,
@@ -200,9 +178,8 @@ def test_a_second_real_agent_is_still_a_refusal_rather_than_a_marker():
 
 # -- the image catalogue ------------------------------------------------------
 
-# The performance set is four, not two: torero and richrach were missing until a
-# live Kubernetes agent was read properly. Neither is pulled by an ordinary run,
-# but crane lists both for a performance-only location.
+# torero and richrach are not pulled by an ordinary run, but a Kubernetes crane
+# lists both for a performance-only location.
 PERF_KEYS = {"taurus-cloud:latest", "apm-image:latest",
              "torero:latest", "richrach:latest"}
 
@@ -217,11 +194,8 @@ PERF_KEYS = {"taurus-cloud:latest", "apm-image:latest",
     (["functionalGui"], PERF_KEYS | {"blazemeter/doduo:latest"}),
 ])
 def test_every_selectable_functionality_names_its_images(func_ids, expect_keys):
-    """A functionality whose category the catalogue does not cover produces an
-    empty
-    or partial IMAGE_OVERRIDES, and crane then resolves the missing keys against
-    the public registry without logging anything -- which looks fine until the
-    cluster is actually sealed."""
+    """An uncovered category gives a partial IMAGE_OVERRIDES, whose missing
+    keys crane silently resolves against the public registry."""
     sv = ({"sv_ingress": "nginx", "sv_subdomain": "apps.example.com",
            "sv_tls_secret": "wc"} if "mockServices" in func_ids else {})
     f = facts_mod.manual(H, S, func_ids=func_ids)
@@ -276,16 +250,8 @@ def test_dropping_the_alias_does_not_change_what_generates():
 
 
 def test_gui_browser_images_are_the_gap_where_nothing_named_one():
-    """The catalogue carries no browser image and cannot: the account holds 60+
-    version-pinned repos. So a bundle built from it alone runs browser tests
-    with no browser image, whatever else it got right.
-
-    Read off the images rather than off where they came from. Provenance was a
-    proxy for the question -- it said "complete" of any facts with an
-    inventory, including one that happened to carry no browser -- and now it
-    would say it of an image list too, which is the one source that can close
-    the gap and can also fail to.
-    """
+    """The catalogue carries no browser image (the account holds 60+ pinned
+    repos), so the predicate reads the images, not their provenance."""
     assert facts_mod.gui_images_incomplete(
         facts_mod.manual(H, S, func_ids=["functionalGui"]))
     assert not facts_mod.gui_images_incomplete(
@@ -296,10 +262,8 @@ def test_gui_browser_images_are_the_gap_where_nothing_named_one():
 
 
 def test_the_image_list_closes_the_browser_gap():
-    """The gap existed because only a live agent was thought to say which
-    version-pinned browser a location runs. The account says it, off an agent
-    that has never started -- so this is a fact about the location now, not a
-    caveat carried beside the bundle."""
+    """The location's image list names its pinned browser, with no agent
+    running."""
     f = facts_mod.gather(
         _FakeClient([{"id": "S1", "state": "empty"}], VERSIONS_GUI,
                     func_ids=["functionalGui", "chrome:default"]), "H1")
@@ -314,8 +278,7 @@ def test_the_image_list_closes_the_browser_gap():
 
 
 def test_a_gui_bundle_names_the_browser_the_location_pins():
-    """What it is all for: IMAGE_OVERRIDES carries the exact build, so a sealed
-    cluster's mirror has the key crane asks for."""
+    """IMAGE_OVERRIDES carries the exact browser build."""
     f = facts_mod.gather(
         _FakeClient([{"id": "S1", "state": "empty"}], VERSIONS_GUI,
                     func_ids=["functionalGui", "chrome:default"]), "H1")
@@ -350,12 +313,7 @@ def test_service_virtualization_still_refuses_without_an_ingress():
 
 
 def test_the_helm_format_serves_a_mock_location_typed_by_hand():
-    """Manual entry reaches every format the same way a gathered location does.
-
-    This was a refusal until the chart carried an ingress, and the pairing is
-    the one worth keeping a test for: a bundle for an account nobody here can
-    reach, in the format a platform team installs with.
-    """
+    """Manual entry reaches every format, the chart included."""
     f = facts_mod.manual(H, S, func_ids=["mockServices"])
     files = _gen(f, output_format="helm", sv_ingress="nginx",
                  sv_subdomain="apps.example.com", sv_tls_secret="wc")
@@ -371,14 +329,9 @@ def _ship(images):
 
 
 class _FakeClient:
-    """Just enough BzmClient for gather(): a location, its agents' reported
-    inventories, and the image list served per agent.
-
-    `versions` is what `GET .../versions` does -- a recorded payload, or an
-    exception to raise. It defaults to raising, because most of these tests are
-    about the inventory and an endpoint that answers would decide their result
-    instead; a test about the image list says so by passing one.
-    """
+    """Just enough BzmClient for gather(). `versions` is the `GET .../versions`
+    answer -- a payload, or an exception to raise (the default, so inventory
+    tests are not decided by the image list)."""
 
     def __init__(self, ships, versions=None, func_ids=("performance",)):
         self._ships = ships
@@ -401,10 +354,7 @@ class _FakeClient:
 
 def test_kubernetes_agent_inventory_is_read():
     """A Kubernetes agent reports bare keys with no registry and Size 0 --
-    `taurus-cloud:latest`, not `gcr.io/.../v4:2.4.444`. Only the Docker shape
-    used to be handled, so every k8s agent produced no inventory at all and
-    fell through to the catalogue: `images_source` could never say otherwise
-    for the very agents this tool generates."""
+    `taurus-cloud:latest`, not `gcr.io/.../v4:2.4.444`."""
     f = facts_mod.gather(_FakeClient([_ship([
         {"RepoTags": ["taurus-cloud:latest"], "Size": 0},
         {"RepoTags": ["torero:4.6.182"], "Size": 0},
@@ -434,10 +384,8 @@ def test_docker_agent_inventory_still_read():
 
 
 def test_crane_is_pinned_from_a_reference_carrying_no_key():
-    """A Docker agent reports crane as `blazemeter/crane:3.7.56` beside its
-    registry-qualified reference and *no* `:latest` tag -- read off a live one.
-    There is no key there to override crane by, and there does not need to be:
-    it is the image the Deployment runs, so the version is still the answer."""
+    """A Docker agent reports crane with no `:latest` key; its version still
+    pins the crane image."""
     f = facts_mod.gather(_FakeClient([_ship([
         {"RepoTags": ["blazemeter/crane:3.7.56",
                       "gcr.io/verdant-bulwark-278/blazemeter/crane:3.7.56"],
@@ -454,10 +402,8 @@ def test_no_inventory_still_falls_back():
 
 # -- the location's own image list --------------------------------------------
 #
-# GET /private-locations/{h}/ships/{s}/versions. It answers for an agent that
-# has never been online, so it reaches the case the inventory never could: the
-# bundle is generated before anything is deployed, which is every first
-# install.
+# GET /private-locations/{h}/ships/{s}/versions answers for an agent that has
+# never been online.
 
 def test_the_image_list_answers_for_an_agent_that_has_never_run():
     """The recording is from an agent in state `empty`, with no hostInfo at all
@@ -468,8 +414,7 @@ def test_the_image_list_answers_for_an_agent_that_has_never_run():
     by_key = {i["key"]: i for i in f["images"]}
     assert by_key["taurus-cloud:2.4.454-reduced"]["repo"].endswith("/v4")
     assert by_key["apm-image:1.7.112"]["tag"] == "1.7.112"
-    # crane comes out of the same list, pinned to what the account advertises
-    # rather than floating on :latest as an agentless location used to.
+    # crane is pinned from the same list.
     assert f["crane_image"].endswith("/crane:3.7.56")
     assert "location image list" in f["images_source"]
 
@@ -490,14 +435,9 @@ def test_the_image_list_outranks_a_live_inventory():
 
 
 def test_a_key_no_image_list_names_is_still_carried():
-    """The image list is the location's resources, not everything crane pulls.
-
-    A live Kubernetes agent reports `torero` and `richrach` beside them and no
-    /versions response names either, so the two earlier sources are not
-    replaced -- they fill keys the image list is silent about. Dropping them
-    would put the ImagePullBackOff the catalogue exists to prevent back into
-    every bundle generated before an agent has ever started.
-    """
+    """The image list is the location's resources, not everything crane
+    pulls; the inventory and catalogue fill keys it does not name (torero,
+    richrach)."""
     f = facts_mod.gather(_FakeClient(
         [_ship([{"RepoTags": ["richrach:1.0.81"], "Size": 0}])],
         VERSIONS_PERFORMANCE), "H1")
@@ -519,13 +459,8 @@ def test_the_image_list_is_asked_once_per_location():
 
 
 def test_a_refusal_that_answers_for_the_location_is_asked_once():
-    """A 403 is about the token and this location, not about the agent it was
-    asked through, so the remaining agents are not asked.
-
-    The loop used to re-issue it per agent: one real account holds 221 agents
-    and 17-agent locations are ordinary, so a dead key or a location this key
-    may not read cost a sequential round trip each before the same `unread`
-    came back."""
+    """A 403 is about the token and the location, not the agent, so the
+    remaining agents are not asked."""
     c = _FakeClient([{"id": f"S{i}", "state": "idle"} for i in range(5)],
                     api.BzmApiError("GET /private-locations/H1/ships/S0/"
                                     "versions -> HTTP 403: forbidden",
@@ -538,9 +473,8 @@ def test_a_refusal_that_answers_for_the_location_is_asked_once():
 
 
 def test_a_refusal_that_could_be_this_agents_is_worth_the_next():
-    """A 5xx is not an answer about the location, so the next agent is asked.
-    Keeping the retry for these is why the rule is on the status rather than on
-    "a refusal ends it"."""
+    """A 5xx is not an answer about the location, so the next agent is
+    asked."""
     c = _FakeClient([{"id": f"S{i}", "state": "idle"} for i in range(3)],
                     api.BzmApiError("GET ... -> HTTP 502: bad gateway",
                                     status=502))
@@ -564,10 +498,8 @@ def test_a_service_virtualization_location_carries_no_engine():
 
 # -- "could not read" is not "there is nothing there" -------------------------
 #
-# Four answers, and they have to stay four. `images` alone cannot carry them:
-# a refused read, a location with no agent to ask, an answer with nothing in it
-# and a set of facts nobody ever asked for all leave the same fallback images
-# behind. The state is what tells them apart.
+# read / unread / no-agent / not-asked all leave the same fallback images, so
+# `image_list` state is what tells them apart.
 
 def test_an_image_list_that_was_read_says_how_much_it_held():
     f = facts_mod.gather(
@@ -617,9 +549,6 @@ def test_manually_entered_facts_never_asked_at_all():
 
 
 def test_the_four_answers_are_four_distinct_values():
-    """Stated over the constants so that collapsing two of them -- the bug this
-    whole rule is about -- fails here rather than at a call site that reads one
-    and means the other."""
     states = {facts_mod.IMAGE_LIST_READ, facts_mod.IMAGE_LIST_UNREAD,
               facts_mod.IMAGE_LIST_NO_AGENT, facts_mod.IMAGE_LIST_NOT_ASKED}
     assert len(states) == 4
@@ -647,10 +576,7 @@ def test_key_to_repo_covers_the_irregular_names():
 
 
 # What a live functionalGui agent reported (crane 3.7.55), against the repos
-# those keys were confirmed to be pullable from. The catalogue carries no
-# browser images and cannot -- the account holds 60+ version-pinned repos and
-# only an agent says which one a location uses -- so this pairing is the only
-# place their real shape is written down.
+# those keys were confirmed pullable from.
 BROWSER_IMAGES = [
     ("blazemeter/charmander/chrome_136.0.7103.113:2.10.45",
      "gcr.io/verdant-bulwark-278/blazemeter/charmander/chrome_136.0.7103.113"),
@@ -666,11 +592,8 @@ BROWSER_KEYS = [k for k, _ in BROWSER_IMAGES]
 
 @pytest.mark.parametrize("key,repo", BROWSER_IMAGES)
 def test_browser_keys_resolve_to_the_repo_that_serves_them(key, repo):
-    """Both sides are written out rather than derived: deriving the expected
-    repo would apply the rule under test to produce the answer it is checked
-    against. Each of these four was pulled from the registry by hand. The
-    category rides along because it is read off the repo string, so the two
-    fail together -- see repo_for_key for what that cost."""
+    """Both sides written out (each pulled by hand); the category is read off
+    the repo, so the two fail together."""
     assert facts_mod.repo_for_key(key) == repo
     assert facts_mod.image_category(repo) == "gui"
 
@@ -690,8 +613,7 @@ def test_a_key_that_already_names_its_registry_is_left_alone(ref, repo):
 
 
 def test_a_gui_agents_browser_inventory_survives_gather():
-    """End to end on the shape that produced the defect: the entry crane is
-    handed has to carry the repo and the category, not just resolve them."""
+    """Each entry carries the repo and the category end to end."""
     f = facts_mod.gather(_FakeClient([_ship(
         [{"RepoTags": [k], "Size": 0} for k in BROWSER_KEYS]
         + [{"RepoTags": ["taurus-cloud:2.4.444-reduced"], "Size": 0}])]), "H1")
