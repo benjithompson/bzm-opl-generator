@@ -761,7 +761,7 @@ def test_mirroring_by_hand_pushes_where_the_bundle_will_look():
     map to (crane keeps its short form)."""
     reg = "reg.local/bzm"
     pushed = {c.split()[-1] for c in core.mirror_images(
-        core.bundle_images(FACTS), mirror=reg, dry_run=True)["commands"]
+        FACTS, mirror=reg, dry_run=True)["commands"]
         if " push " in c}
     files = gen.generate(FACTS, {"namespace": "ns1", "private_registry": reg})
     overrides = json.loads(yaml.safe_load(

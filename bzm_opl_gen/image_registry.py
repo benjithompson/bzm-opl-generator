@@ -56,9 +56,10 @@ def composed_image_ref(repo, tag, registry):
     return f"{registry.rstrip('/')}/{path}:{tag}"
 
 
-def cluster_composed_targets(facts, o):
+def cluster_composed_targets(facts, o, all_images=False):
     """{pinned public ref: composed reference} for every image a Kubernetes
-    crane pulls. Empty for docker or without a private registry.
+    crane pulls (`all_images`: every image the facts name). Empty for docker
+    or without a private registry.
 
     Tags stay pinned, since IMAGE_OVERRIDES names one. Only the engine
     reference was observed live; the value is the composed name, which pulls
@@ -68,12 +69,13 @@ def cluster_composed_targets(facts, o):
         return {}
     return {f"{i['repo']}:{i['tag']}":
             composed_image_ref(i["repo"], i["tag"], o["private_registry"])
-            for i in select_images(facts)}
+            for i in select_images(facts, all_images=all_images)}
 
 
-def docker_composed_targets(facts, o):
+def docker_composed_targets(facts, o, all_images=False):
     """{pinned public ref: composed reference} for every image a docker crane
-    creates. Empty for the cluster formats or without a private registry.
+    creates (`all_images`: every image the facts name). Empty for the cluster
+    formats or without a private registry.
 
     Crane composes from the key and asks for `latest`; there is no
     IMAGE_OVERRIDES on this platform. The pinned ref records which version the
@@ -84,22 +86,24 @@ def docker_composed_targets(facts, o):
         return {}
     registry = o["private_registry"].rstrip("/")
     return {f"{i['repo']}:{i['tag']}": f"{registry}/{key_base(i['key'])}:latest"
-            for i in select_images(facts)}
+            for i in select_images(facts, all_images=all_images)}
 
 
-def mirror_targets(facts, o):
+def mirror_targets(facts, o, all_images=False):
     """[(public ref, destination)] in the order the mirror script copies them:
-    crane first, then the location's images, then crane-hook's where the
-    bundle carries it. The destination is what crane asks for on this
-    platform; crane and crane-hook keep only their last path segment.
+    crane first, then the location's images (`all_images`: every image the
+    facts name), then crane-hook's where the bundle carries it. The
+    destination is what crane asks for on this platform; crane and crane-hook
+    keep only their last path segment. Every mirror path reads this.
     """
-    refs = image_refs(facts)
+    refs = image_refs(facts, all_images=all_images)
     # The hook's image is not in the location's inventory. Docker ignores
     # crane_hook, so it is not mirrored there.
     if o.get("crane_hook") and "crane_hook" not in ignored_options(o):
         refs = refs + [f"{PUBLIC_REGISTRY}/{HOOK_IMAGE_REPO}:{HOOK_IMAGE_TAG}"]
     reg = o["private_registry"].rstrip("/")
-    composed = docker_composed_targets(facts, o) or cluster_composed_targets(facts, o)
+    composed = (docker_composed_targets(facts, o, all_images)
+                or cluster_composed_targets(facts, o, all_images))
     return [(ref, composed.get(ref, f"{reg}/{ref.rsplit('/', 1)[-1]}"))
             for ref in refs]
 

@@ -74,8 +74,9 @@ Generate with `--private-registry <registry>` and the bundle carries
 `bzm-opl-image-mirror.sh`, which pulls each image and pushes it to the name the
 agent asks for. The names differ per platform: on Kubernetes the agent composes
 `<registry>/<repo path>:<tag>`, and on a docker host `<registry>/blazemeter/<name>:latest`.
-Keep the names the script uses. For a Kubernetes bundle,
-`images --pull --mirror <registry>` does the same copy from this tool.
+Keep the names the script uses. `images --pull --mirror <registry>` does the
+same copy from this tool, to the same names; pass the bundle's
+`--profile profile.json` for a docker bundle's names.
 
 ## Checking a mirror
 

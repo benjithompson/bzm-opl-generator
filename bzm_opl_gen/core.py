@@ -778,20 +778,26 @@ def read_bundle_file(out_dir, name):
         raise BadRequest(f"{name!r} is not text")
 
 
-def mirror_images(refs, mirror=None, platform="linux/amd64", dry_run=False):
-    """Pull each image and, with `mirror`, tag and push it under that prefix.
+def mirror_images(facts, mirror=None, platform="linux/amd64", dry_run=False,
+                  all_images=False, options=None):
+    """Pull each image the location's bundle needs and, with `mirror`, tag and
+    push it under that prefix.
 
-    Returns the commands (a dry run is a readable plan). Targets are the names
-    a Kubernetes agent composes from DOCKER_REGISTRY and the repo path.
+    Returns the commands (a dry run is a readable plan). Targets are
+    image_registry.mirror_targets, the names the bundle's own mirror script
+    pushes: `options` are the bundle's (its profile.json), whose format and
+    crane_hook decide them; without them, a Kubernetes bundle's.
     """
+    if mirror:
+        o = {**bundle_options.DEFAULT_OPTIONS, **(options or {}),
+             "private_registry": mirror}
+        pairs = image_registry.mirror_targets(facts, o, all_images=all_images)
+    else:
+        pairs = [(ref, None) for ref in bundle_images(facts, all_images)]
     ran = []
-    for ref in refs:
+    for ref, target in pairs:
         ran.append(_docker(["pull", "--platform", platform, ref], dry_run))
-        if mirror:
-            repo, _, tag = ref.rpartition(":")
-            target = (f"{mirror.rstrip('/')}/{ref.rsplit('/', 1)[-1]}"
-                      if repo == facts_mod.CRANE_REPO else
-                      image_registry.composed_image_ref(repo, tag, mirror))
+        if target:
             ran.append(_docker(["tag", ref, target], dry_run))
             ran.append(_docker(["push", target], dry_run))
     return {"mirror": mirror, "platform": platform, "dry_run": bool(dry_run),

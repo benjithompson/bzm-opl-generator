@@ -439,15 +439,20 @@ def _print_explain(cat, fmt):
         print(f"\nWARN: {cat['registry_lookup']['detail']}", file=sys.stderr)
 
 
+def _profile_options(a):
+    """The bundle options --profile names, or None for a Kubernetes bundle's."""
+    if not a.profile:
+        return None
+    try:
+        with open(a.profile) as fh:
+            return json.load(fh)
+    except (OSError, ValueError) as e:
+        sys.exit(f"--profile {a.profile}: {e}")
+
+
 def _verify(f, a):
-    options = None
-    if a.profile:
-        try:
-            with open(a.profile) as fh:
-                options = json.load(fh)
-        except (OSError, ValueError) as e:
-            sys.exit(f"--profile {a.profile}: {e}")
-    out = core.verify_mirror(f, a.verify, options=options, ca_file=a.ca_file)
+    out = core.verify_mirror(f, a.verify, options=_profile_options(a),
+                             ca_file=a.ca_file)
     print(f"checking {out['registry']} (credentials: {out['credentials']})")
     for i in out["images"]:
         state = i["state"].upper() if i["state"] == "missing" else i["state"]
@@ -482,9 +487,11 @@ def cmd_images(a):
         print(ref)
     if not a.pull:
         return
-    # core runs the pull/tag/push, so this and the MCP tool agree on targets.
-    for cmd in core.mirror_images(imgs, mirror=a.mirror, platform=a.platform,
-                                  dry_run=a.dry_run)["commands"]:
+    # core runs the pull/tag/push, so this, the MCP tool and the bundle's
+    # mirror script agree on targets.
+    for cmd in core.mirror_images(f, mirror=a.mirror, platform=a.platform,
+                                  dry_run=a.dry_run, all_images=a.all,
+                                  options=_profile_options(a))["commands"]:
         print(("DRY-RUN: " if a.dry_run else "+ ") + cmd)
 
 
@@ -1095,9 +1102,9 @@ def main():
                    help="with --verify: the CA that signed REGISTRY's "
                         "certificate")
     i.add_argument("--profile", metavar="PROFILE_JSON",
-                   help="with --verify: the bundle's profile.json, whose format "
-                        "and crane_hook decide the names (default: a Kubernetes "
-                        "bundle)")
+                   help="with --verify or --mirror: the bundle's profile.json, "
+                        "whose format and crane_hook decide the names "
+                        "(default: a Kubernetes bundle)")
     i.set_defaults(fn=cmd_images)
 
     t = sub.add_parser("livetest", help="start a bundle for real, verify the "

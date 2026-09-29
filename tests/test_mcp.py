@@ -1072,3 +1072,12 @@ def test_listing_images_explains_each_one(fake_account):
     assert body["registry_lookup"]["state"] == "not-asked"
     looked = ok("opl_bundle", "images", {"facts": FACTS, "lookup": True})
     assert looked["registry_lookup"]["state"] == "unread"
+
+
+def test_mirroring_images_uses_the_bundle_s_own_names(fake_account):
+    """The bundle's options decide the destinations, as in its mirror script."""
+    body = ok("opl_bundle", "images",
+              {"facts": FACTS, "mirror": "reg.local/bzm", "dry_run": True,
+               "options": {"output_format": "docker"}})
+    assert any(c.endswith("reg.local/bzm/taurus-cloud:latest")
+               for c in body["commands"] if " push " in c)

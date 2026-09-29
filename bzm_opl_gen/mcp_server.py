@@ -531,9 +531,9 @@ DESCRIPTIONS["opl_bundle"] = (
     "the funcIds that need it, when it is pulled, whether that was seen "
     "live. lookup=true adds digest, size and newest tag from BlazeMeter's "
     "public registry. With mirror=<prefix> it also pulls them and pushes them "
-    "into that registry, under the names a Kubernetes agent then asks "
-    "for, which writes to it -- confirm before calling it that way. A "
-    "docker bundle's images are its own script's, not these.\n"
+    "into that registry, under the names the bundle's own mirror script "
+    "uses (pass the bundle's options, e.g. output_format, for a docker "
+    "bundle), which writes to it -- confirm before calling it that way.\n"
     "Applying the bundle is yours: `kubectl apply -f <out_dir>`. No "
     "action on this tool touches a cluster at all.")
 
@@ -592,9 +592,10 @@ def _bundle(action, args):
         # Not gated like `delete`: mirroring only adds images to a registry the
         # caller named. The destructive hint makes a client confirm it.
         return core.mirror_images(
-            refs, mirror=args.get("mirror"),
+            facts, mirror=args.get("mirror"),
             platform=args.get("platform", "linux/amd64"),
-            dry_run=bool(args.get("dry_run")))
+            dry_run=bool(args.get("dry_run")), all_images=bool(args.get("all")),
+            options=_no_secrets(args.get("options") or {}))
 
     raise _unknown(action, BUNDLE_ACTIONS)
 

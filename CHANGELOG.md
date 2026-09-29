@@ -34,6 +34,13 @@ anything that breaks.
   `BZM_REGISTRY_PASSWORD` or your docker config, never from a flag. See
   [docs/images.md](docs/images.md).
 
+- **`images --pull --mirror` takes `--profile profile.json`**, and pushes to
+  the same names as the bundle's own `bzm-opl-image-mirror.sh` for every
+  format. Before, it always used a Kubernetes bundle's names, so a mirror made
+  this way for a docker bundle was not where the docker agent looks. The MCP
+  server's `opl_bundle images` takes the bundle's `options` for the same
+  reason. Without a profile the names are a Kubernetes bundle's, as before.
+
 - **`GET /api/images`** serves the catalogue to the web UI, and the MCP
   server's `opl_bundle images` returns it as `catalogue`.
 

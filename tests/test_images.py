@@ -314,6 +314,57 @@ def test_verify_asks_for_exactly_what_the_mirror_script_pushes(registry, fmt,
         assert f"/v2/{path}/manifests/{tag}" in asked
 
 
+def _pushed(out):
+    return [c.split()[-1] for c in out["commands"] if c.startswith("docker push ")]
+
+
+@pytest.mark.parametrize("fmt,extra", [
+    ("manifests", {}), ("manifests", {"crane_hook": True}),
+    ("helm", {}), ("docker", {}),
+])
+def test_pull_mirror_pushes_exactly_what_the_mirror_script_pushes(fmt, extra):
+    """`images --pull --mirror` reads the script's destinations, per format,
+    never a rule of its own."""
+    o = {**FORMAT_BASE[fmt], **extra, "private_registry": "reg.corp/bzm"}
+    files = gen.generate(FACTS, o)
+    profile = json.loads(files[bundle_names.PROFILE_FILE])
+    out = core.mirror_images(FACTS, mirror="reg.corp/bzm", dry_run=True,
+                             options=profile)
+    assert _pushed(out) == _mirror_destinations(files[bundle_names.MIRROR_SCRIPT_FILE])
+
+
+@pytest.mark.parametrize("fmt", ["manifests", "docker"])
+def test_pull_mirror_all_names_every_image_the_way_the_agent_asks(fmt):
+    """With --all the images the funcIds do not select are pushed to the
+    names crane composes too, not to a bare last segment."""
+    o = {**bundle_options.DEFAULT_OPTIONS, **FORMAT_BASE[fmt],
+         "private_registry": "reg.corp/bzm"}
+    out = core.mirror_images(FACTS, mirror="reg.corp/bzm", dry_run=True,
+                             all_images=True, options=FORMAT_BASE[fmt])
+    pushed = _pushed(out)
+    assert pushed == [t for _, t in image_registry.mirror_targets(
+        FACTS, o, all_images=True)]
+    mock = next(i for i in FACTS["images"] if "service-mock" in i["repo"])
+    want = ("reg.corp/bzm/blazemeter/service-mock:latest" if fmt == "docker"
+            else image_registry.composed_image_ref(mock["repo"], mock["tag"],
+                                                   "reg.corp/bzm"))
+    assert want in pushed
+
+
+def test_pull_without_a_mirror_only_pulls():
+    out = core.mirror_images(FACTS, dry_run=True, all_images=True)
+    assert [c.split()[1] for c in out["commands"]] == ["pull"] * len(
+        facts_mod.image_refs(FACTS, all_images=True))
+
+
+def test_pull_mirror_reads_the_bundle_s_profile(monkeypatch, tmp_path, capsys):
+    profile = tmp_path / "profile.json"
+    profile.write_text(json.dumps({"output_format": "docker"}))
+    _run(monkeypatch, "images", "--facts", _facts_file(tmp_path), "--pull",
+         "--dry-run", "--mirror", "reg.corp/bzm", "--profile", str(profile))
+    assert "docker push reg.corp/bzm/taurus-cloud:latest" in capsys.readouterr().out
+
+
 def test_verify_counts_each_state(registry):
     registry(manifests={("bzm/crane", "3.7.55"): _manifest(1)})
     out = core.verify_mirror(FACTS, "reg.corp/bzm")
