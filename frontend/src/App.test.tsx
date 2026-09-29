@@ -13,10 +13,12 @@ import { afterEach, expect, test, vi } from "vitest";
 import App from "./App";
 import {
   AgentStatus, Api, Capacity, CapacityPlan, Facts, FuncIdChoice,
-  FuncIdVocabulary, Functionality, Location, Options, Ship, TokenRequest,
+  FuncIdVocabulary, Functionality, Location, ManualFactsOut, Options, Ship,
+  TokenRequest,
 } from "./api";
 import {
-  catalogueImages, deferred, fakeApi, locationImages,
+  catalogueImages, deferred, fakeApi, locationImages, manualAnswer,
+  PINNED_NEWEST_WARNING,
 } from "./fakeApi";
 // The served ignored-options table, from the one copy of it.
 import {
@@ -2097,15 +2099,12 @@ function manualPage(asked: string[][], generated: Options[] = [],
     ], "baseline"),
     manualFacts: async (b) => {
       asked.push(b.func_ids);
-      return {
-        // As the server does, a blank id becomes its marker in the facts; the
-        // page reads its agent out of this answer.
-        facts: { harbor_id: b.harbor_id || marker("harbor_id"),
-                 func_ids: b.func_ids,
-                 ships: [{ id: b.ship_id || marker("ship_id"),
-                           name: "agent-1" }], images: [] },
-        gui_images_incomplete: false,
-      };
+      // As the server does, a blank id becomes its marker in the facts; the
+      // page reads its agent out of this answer.
+      return manualAnswer({ harbor_id: b.harbor_id || marker("harbor_id"),
+                            func_ids: b.func_ids,
+                            ships: [{ id: b.ship_id || marker("ship_id"),
+                                      name: "agent-1" }], images: [] });
     },
     ...extra,
   });
@@ -2164,6 +2163,59 @@ test("a bundle with nothing left blank says so, and offers nothing to open",
       .toBeNull();
     expect(screen.queryByRole("button", { name: /Placeholders/ })).toBeNull();
   });
+
+test("manual facts take seconds: the page says it is reading, holds the download, "
+     + "then shows the server's warnings", async () => {
+  // Each request held open until the test answers it.
+  const pending: ReturnType<typeof deferred<ManualFactsOut>>[] = [];
+  const bodies: Parameters<Api["manualFacts"]>[0][] = [];
+  render(<App api={manualPage([], [], {
+    manualFacts: (b) => {
+      bodies.push(b);
+      const d = deferred<ManualFactsOut>();
+      pending.push(d);
+      return d.promise;
+    },
+  })} />);
+  fireEvent.click(await screen.findByRole("radio", { name: /Enter values manually/ }));
+  await waitFor(() => expect(bodies).toHaveLength(1));
+  expect(screen.getByRole("status").textContent)
+    .toMatch(/reading the newest image releases/);
+
+  const facts = (harbor: string) => ({
+    harbor_id: harbor, func_ids: ["performance"],
+    ships: [{ id: marker("ship_id"), name: "agent-1" }], images: [] });
+  await act(async () => {
+    pending[0].settle(manualAnswer(facts(marker("harbor_id")), [PINNED_NEWEST_WARNING]));
+    await pending[0].promise;
+  });
+  await waitFor(() => expect(screen.queryByText(/reading the newest image releases/))
+    .toBeNull());
+  expect(screen.getByRole("note").textContent).toBe(PINNED_NEWEST_WARNING);
+
+  // The token is not in the request, so typing it reads nothing again.
+  fireEvent.change(screen.getByLabelText(/^Auth token/),
+                   { target: { value: "a".repeat(64) } });
+  await new Promise((r) => setTimeout(r, 400));
+  expect(bodies).toHaveLength(1);
+
+  // A new harbor id is a new read; until it lands, the facts on screen are
+  // for the old one, so the download waits.
+  fireEvent.change(screen.getByLabelText(/^Harbor ID/),
+                   { target: { value: TYPED.harbor } });
+  await waitFor(() => expect(bodies).toHaveLength(2));
+  expect(bodies[1].harbor_id).toBe(TYPED.harbor);
+  fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+  const download = await screen.findByRole<HTMLButtonElement>(
+    "button", { name: /Download bundle/ });
+  expect(download.disabled).toBe(true);
+
+  await act(async () => {
+    pending[1].settle(manualAnswer(facts(TYPED.harbor)));
+    await pending[1].promise;
+  });
+  await waitFor(() => expect(download.disabled).toBe(false));
+});
 
 test("the empty identity boxes show the marker the bundle will carry",
   async () => {

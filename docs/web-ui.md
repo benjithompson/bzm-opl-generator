@@ -71,6 +71,13 @@ In manual entry both ids are optional: a blank one becomes a marker
 (`<HARBOR_ID>`, `<SHIP_ID>`), so a bundle can be produced for review before the
 private location exists.
 
+Manual entry reads no account, so the server pins each image to the newest
+release in BlazeMeter's public registry. That read usually takes about a
+second and can take up to 8 seconds. While it runs, the form says so and
+**Download** waits, because the facts on screen are for the previous values.
+When it is done, the form shows what those facts cannot tell. For example, a
+location can ask for an older release than the newest.
+
 ### Changing a location after it exists
 
 Selecting a location expands it, showing what the sizing would change as before
@@ -275,7 +282,12 @@ needs no key.
 |---|---|
 | Connected, with a location chosen under Generate | "Images for location *name* (read from your account)": the versions crane asks for on that location. |
 | Connected, with no location chosen | BlazeMeter's image catalogue. Choose a location to see its versions. |
-| Not connected, or in manual entry | BlazeMeter's image catalogue. Tags can be `latest`. |
+| Not connected, or in manual entry | BlazeMeter's image catalogue, with each image pinned to the newest release in BlazeMeter's public registry. Where the registry did not answer, a tag can be `latest`. |
+
+Versions pinned to the newest release are not read from a location. A location
+can ask for an older release than the newest, and then a mirror built from this
+list does not have the image the agent asks for. The view says so above the
+table. For the exact list, connect an account and choose a location.
 
 The view reads the location again when you choose another one under Generate.
 
@@ -283,7 +295,8 @@ The view reads the location again when you choose another one under Generate.
 
 - **Image**: the full reference, with **Copy** beside it, the functionalities
   that pull it, and where its tag came from (the location's version list, a
-  running agent's inventory, or the catalogue). A functionality shows
+  running agent's inventory, the newest release in BlazeMeter's registry, or
+  the catalogue). CSV and Markdown carry the same value. A functionality shows
   BlazeMeter's name for it. Without a connected account, the tool has names
   only for the functionalities it configures, so the view shows any other one
   as its funcId (for example `functionalApi`), in code type.

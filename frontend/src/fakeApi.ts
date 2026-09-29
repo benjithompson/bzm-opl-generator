@@ -1,6 +1,6 @@
 // A route caller for tests. Every route not stubbed rejects naming itself, so
 // a test never passes on an invented answer; the names come from the real client.
-import { api, Api, ImageRow, ImagesAnswer } from "./api";
+import { api, Api, Facts, ImageRow, ImagesAnswer, ManualFactsOut } from "./api";
 
 /** The real client's shape, answering only what `stubs` answers. */
 export function fakeApi(stubs: Partial<Api> = {}): Api {
@@ -18,6 +18,16 @@ export function deferred<T>() {
   const promise = new Promise<T>((res) => { settle = res; });
   return { promise, settle };
 }
+
+/** A /api/facts/manual answer for `facts`, with the server's `warnings`. */
+export function manualAnswer(facts: Facts, warnings: string[] = []): ManualFactsOut {
+  return { facts, gui_images_incomplete: false, warnings };
+}
+
+/** The kind of sentence the server warns with when it pinned manual facts to
+ *  the newest releases. A sample for tests, not the server's wording. */
+export const PINNED_NEWEST_WARNING = "These image versions are the newest"
+  + " releases in BlazeMeter's registry, not your location's list.";
 
 /** One /api/images row with every registry field read; `over` changes any. */
 export function imageRow(over: Partial<ImageRow> = {}): ImageRow {
@@ -45,6 +55,15 @@ export function locationImages(over: Partial<ImagesAnswer> = {}): ImagesAnswer {
     images: [imageRow()],
     ...over,
   };
+}
+
+/** The catalogue as the server answers it with the registry read: each image
+ *  pinned to its newest release rather than `latest`. */
+export function pinnedCatalogueImages(): ImagesAnswer {
+  return catalogueImages({
+    images: [imageRow({ tag: "2.4.538-reduced", ref: "blazemeter/v4:2.4.538-reduced",
+                        required: null, source: "registry-newest" })],
+  });
 }
 
 /** An /api/images answer from the built-in catalogue: no location, and

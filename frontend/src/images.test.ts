@@ -2,9 +2,11 @@
 // registry field is never blank or zero, and CSV/Markdown carry what is shown.
 import { expect, test } from "vitest";
 
-import { catalogueImages, imageRow, locationImages } from "./fakeApi";
 import {
-  digestText, driftNote, fileStem, functionalityNames, groupByCategory,
+  catalogueImages, imageRow, locationImages, pinnedCatalogueImages,
+} from "./fakeApi";
+import {
+  catalogueLine, digestText, newestNotice, driftNote, fileStem, functionalityNames, groupByCategory,
   listNotice, refsText, registryNotice, resolvedText, sizeText, sourceHeading,
   tagNotes, toCsv, toMarkdown,
 } from "./images";
@@ -12,6 +14,27 @@ import {
 // Only a covered funcId is named with no account connected.
 const labelOf = (id: string) =>
   ({ performance: "Performance" } as Record<string, string>)[id] ?? null;
+
+test("a catalogue pinned to the newest releases says so, and that a location can differ", () => {
+  const pinned = pinnedCatalogueImages();
+  expect(catalogueLine(pinned)).toMatch(/pinned to the newest release/);
+  expect(catalogueLine(catalogueImages())).toBe("Built-in list. Tags can be latest.");
+  const note = newestNotice(pinned);
+  expect(note).toMatch(/not read from a location/);
+  expect(note).toMatch(/older release than the newest/);
+  expect(note).toMatch(/Connect an account/);
+  expect(note).not.toMatch(/`|--|\*|->/);
+  expect(newestNotice(catalogueImages())).toBeNull();
+  expect(newestNotice(locationImages())).toBeNull();
+
+  const lines = toCsv(pinned.images, labelOf).split("\r\n");
+  const head = lines[0].split(",");
+  expect(lines[1].split(",")[head.indexOf("tag_source")]).toBe("registry-newest");
+
+  const md = toMarkdown(pinned, labelOf, null);
+  expect(md).toContain("> These versions were not read from a location.");
+  expect(md).toContain("(`registry-newest`)");
+});
 
 test("a funcId nothing served names stays a funcId, in the caller's format", () => {
   const r = imageRow({ functionalities: ["performance", "functionalApi"] });
@@ -168,7 +191,7 @@ test("Markdown has the heading, the notices, a table per category and the drift 
   }), labelOf, "registry.corp");
   expect(md).toMatch(/^# Images for location Dublin/);
   expect(md).toMatch(/> The location's version list could not be read/);
-  expect(md).toMatch(/## Engines\n\n\| Image .* Resolves to \| Required \|/);
+  expect(md).toMatch(/## Engines\n\n\| Image .* Resolves to \| Tag from \| Required \|/);
   expect(md).toContain("Performance, `proxyRecorder`");
   expect(md).toContain("| `2.4.538-reduced` |");
   expect(md).toMatch(/## Agent/);

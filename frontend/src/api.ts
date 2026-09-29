@@ -44,7 +44,13 @@ export interface Facts {
 export interface GeneratedFile { name: string; content: string }
 /** Manual facts. `gui_images_incomplete` is served but not read here: the page
  *  cannot declare functionalGui in manual entry. */
-export interface ManualFactsOut { facts: Facts; gui_images_incomplete: boolean }
+export interface ManualFactsOut {
+  facts: Facts;
+  gui_images_incomplete: boolean;
+  /** Plain prose: what facts made without an account cannot tell, such as
+   *  versions pinned to the newest release rather than read from a location. */
+  warnings: string[];
+}
 export interface AgentStatus {
   state: string; heartbeat_age_s: number | null;
   installed_version?: string; online: boolean;
@@ -291,7 +297,9 @@ export const api = {
     & Partial<Record<keyof LocationSettings, string>>) =>
     req<LocationUpdate>("POST", "/api/locations/settings", body),
   facts: (harborId: string) => req<Facts>("GET", `/api/facts?harbor_id=${harborId}`),
-  /** Facts from typed values, with no API key. Nothing is validated. */
+  /** Facts from typed values, with no API key. Nothing is validated. The
+   *  server reads BlazeMeter's public registry for the newest releases, so an
+   *  answer can take several seconds. */
   manualFacts: (body: { harbor_id: string; ship_id: string; func_ids: string[] }) =>
     req<ManualFactsOut>("POST", "/api/facts/manual", body),
   status: (harborId: string, shipId: string) =>
@@ -409,8 +417,9 @@ export interface ImageRow {
    *  `registry_state` says whether that is unread or no match. Absent from
    *  servers that do not resolve tags, which says nothing either way. */
   resolves_to?: string | null;
-  /** Where the tag came from. */
-  source: "location-versions" | "agent-inventory" | "catalogue";
+  /** Where the tag came from. "registry-newest" is the newest release in
+   *  BlazeMeter's public registry, not read from any location. */
+  source: "location-versions" | "agent-inventory" | "registry-newest" | "catalogue";
   registry_state: ReadState;
   registry_detail: string | null;
   digest: string | null;
@@ -422,7 +431,9 @@ export interface ImageRow {
 }
 
 /** The images answer. `source` "location" is read from the account for the
- *  selected location; "catalogue" is the built-in list, whose tags may be `latest`. */
+ *  selected location; "catalogue" is the built-in list, whose rows are pinned
+ *  to the newest release where the registry answered and may be `latest`
+ *  where it did not. */
 export interface ImagesAnswer {
   source: "location" | "catalogue";
   location: { harbor_id: string; name: string; func_ids: string[] } | null;

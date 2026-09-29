@@ -9,7 +9,8 @@ import {
   Button, Callout, cardCls, ErrorMsg, SegmentedControl, Spinner,
 } from "./components";
 import {
-  digestText, driftNote, fileStem, groupByCategory, LabelOf, listNotice,
+  catalogueLine, digestText, driftNote, fileStem, groupByCategory, LabelOf,
+  listNotice, newestNotice,
   refsText, registryNotice, resolvedText, sizeText, SOURCE_TEXT, sourceHeading, TagNote,
   tagNotes, toCsv, toMarkdown,
 } from "./images";
@@ -64,7 +65,8 @@ export function ImagesView(props: {
 
   const drift = driftNote(props.registry);
   const notices = answer
-    ? [listNotice(answer), registryNotice(answer)].filter((n): n is string => !!n)
+    ? [newestNotice(answer), listNotice(answer), registryNotice(answer)]
+      .filter((n): n is string => !!n)
     : [];
   const showRequired = !!answer?.images.some((r) => r.required !== null);
 
@@ -78,7 +80,7 @@ export function ImagesView(props: {
             </h2>
             {answer?.source === "catalogue" && (
               <p className="text-xs text-slate-500 mt-0.5">
-                Built-in list; tags can be <code className="font-mono">latest</code>.
+                {catalogueLine(answer)}
                 {props.catalogueReason && <> {CATALOGUE_HINT[props.catalogueReason]}</>}
               </p>
             )}
@@ -264,7 +266,7 @@ function Row(props: {
           })}
         </span>
         <span className="block text-3xs text-slate-400 mt-0.5">
-          tag from {SOURCE_TEXT[r.source]}
+          tag from {SOURCE_TEXT[r.source] ?? r.source}
         </span>
       </th>
       <td className="px-2 py-1.5 text-slate-700">

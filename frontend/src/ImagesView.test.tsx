@@ -6,7 +6,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ImagesAnswer } from "./api";
-import { catalogueImages, imageRow, locationImages } from "./fakeApi";
+import {
+  catalogueImages, imageRow, locationImages, pinnedCatalogueImages,
+} from "./fakeApi";
 import { CatalogueReason, ImagesView } from "./ImagesView";
 
 afterEach(cleanup);
@@ -92,6 +94,17 @@ test("a funcId nothing served names is shown as the funcId, in code type", () =>
   expect(named.className).not.toMatch(/font-mono/);
   expect(raw.className).toMatch(/font-mono/);
   expect(raw.getAttribute("title")).toMatch(/connect an account/);
+});
+
+test("a catalogue pinned to the newest releases says those are not a location's", () => {
+  view(pinnedCatalogueImages());
+  expect(screen.getByText(/pinned to the newest release/)).toBeTruthy();
+  expect(screen.getByRole("note").textContent)
+    .toMatch(/older release than the newest.*Connect an account/);
+  expect(screen.getByText(/tag from the newest release in BlazeMeter's registry, not your location/))
+    .toBeTruthy();
+  // Pinned, so no mutable-tag warning.
+  expect(screen.queryByText(/names a different image/)).toBeNull();
 });
 
 test("the catalogue hint follows why there is no location", () => {

@@ -507,14 +507,22 @@ export default function App({ api }: { api: Api }) {
     [functionalities, declared]);
 
   // Facts rebuilt from the typed values, debounced like the preview. Nothing is
-  // built from an id that is not the shape one comes in.
+  // built from an id that is not the shape one comes in. The token is not in
+  // the request, so only whether it is well formed is a dependency: typing it
+  // does not re-read the registry.
+  const manualReady = manualComplete(manual.harbor_id, manual.ship_id,
+                                     String(options.auth_token ?? ""));
+  // The server reads the public registry for these facts, which takes seconds.
+  // While it does, the facts on screen are for the previous values.
+  const [manualReading, setManualReading] = useState(false);
+  const [manualWarnings, setManualWarnings] = useState<string[]>([]);
   useEffect(() => {
     if (sourceMode !== "manual") return;
-    if (!manualComplete(manual.harbor_id, manual.ship_id,
-                        String(options.auth_token ?? ""))) {
-      setFacts(null); setShipId(null); return;
+    if (!manualReady) {
+      setFacts(null); setShipId(null); setManualWarnings([]); return;
     }
     let live = true;
+    setManualReading(true);
     const timer = window.setTimeout(() => {
       api.manualFacts({
         harbor_id: manual.harbor_id.trim(),
@@ -524,10 +532,13 @@ export default function App({ api }: { api: Api }) {
         if (!live) return;
         setFacts(r.facts);
         setShipId(r.facts.ships[0].id);
-      }).catch((e) => { if (live) setGenErr(String(e.message)); });
+        setManualWarnings(r.warnings);
+      }).catch((e) => { if (live) setGenErr(String(e.message)); })
+        .finally(() => { if (live) setManualReading(false); });
     }, 250);
-    return () => { live = false; window.clearTimeout(timer); };
-  }, [api, sourceMode, manual, manualFuncIds, options.auth_token, setGenErr]);
+    // A superseded read is dropped; the next run marks itself as reading.
+    return () => { live = false; window.clearTimeout(timer); setManualReading(false); };
+  }, [api, sourceMode, manual, manualFuncIds, manualReady, setGenErr]);
 
   /** Switching modes drops what the other one established, the token included. */
   const switchMode = (m: string) => {
@@ -859,6 +870,7 @@ export default function App({ api }: { api: Api }) {
             source={{
               mode: sourceMode, switchTo: switchMode,
               manual, setManual, who,
+              manualReading, manualWarnings,
             }}
             locations={{
               accountName, workspaceName,
@@ -931,7 +943,8 @@ export default function App({ api }: { api: Api }) {
             api={api}
             bundle={{
               // What the preview showed, markers included.
-              facts, shipId, options: sentOptions, format,
+              facts, reading: sourceMode === "manual" && manualReading,
+              shipId, options: sentOptions, format,
               sv, genErr: preview.genErr, gaps: downloadGaps,
               goToConfigure: () => setStep(1),
               goToAgent: () => setStep(0),

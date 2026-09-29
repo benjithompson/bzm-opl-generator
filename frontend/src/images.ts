@@ -84,6 +84,29 @@ export function sourceHeading(answer: ImagesAnswer): string {
     : "BlazeMeter's image catalogue";
 }
 
+const pinnedNewest = (answer: ImagesAnswer) =>
+  answer.images.some((r) => r.source === "registry-newest");
+
+/** What the catalogue's tags are, in one sentence. Pinned where the registry
+ *  gave the newest release; the built-in tags, latest among them, where not. */
+export function catalogueLine(answer: ImagesAnswer): string {
+  return pinnedNewest(answer)
+    ? "Built-in list, with each image pinned to the newest release in"
+      + " BlazeMeter's public registry where the registry answered."
+    : "Built-in list. Tags can be latest.";
+}
+
+/** Why versions pinned to the newest release are not a location's list, or
+ *  null where no row is pinned that way. */
+export function newestNotice(answer: ImagesAnswer): string | null {
+  if (!pinnedNewest(answer)) return null;
+  return "These versions were not read from a location. They are the newest"
+    + " releases in BlazeMeter's public registry. A location can ask for an older"
+    + " release than the newest, so a mirror built from this list can lack the"
+    + " image the agent asks for. Connect an account and choose a location for"
+    + " the exact list.";
+}
+
 /** Why the location's version list is not the whole story, or null where it is. */
 export function listNotice(answer: ImagesAnswer): string | null {
   switch (answer.image_list_state) {
@@ -128,6 +151,7 @@ export function driftNote(registry: string | null): { text: string; command: str
 export const SOURCE_TEXT: Record<ImageRow["source"], string> = {
   "location-versions": "the location's version list",
   "agent-inventory": "a running agent's inventory",
+  "registry-newest": "the newest release in BlazeMeter's registry, not your location",
   catalogue: "the catalogue",
 };
 
@@ -188,19 +212,16 @@ const mdCell = (v: string) => v.replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " ");
 export function toMarkdown(answer: ImagesAnswer, labelOf: LabelOf,
                            registry: string | null): string {
   const out = [`# ${sourceHeading(answer)}`, ""];
-  if (answer.source === "catalogue") {
-    out.push("Built-in list. Tags can be latest; a location's own versions come"
-      + " from the account.", "");
-  }
-  for (const n of [listNotice(answer), registryNotice(answer)]) {
+  if (answer.source === "catalogue") out.push(catalogueLine(answer), "");
+  for (const n of [newestNotice(answer), listNotice(answer), registryNotice(answer)]) {
     if (n) out.push(`> ${n}`, "");
   }
   const showRequired = answer.images.some((r) => r.required !== null);
   for (const g of groupByCategory(answer.images)) {
     out.push(`## ${g.category}`, "");
     out.push("| Image | Functionalities | Purpose | Pulled | Size | Digest | Tag |"
-      + " Resolves to |" + (showRequired ? " Required |" : ""));
-    out.push("|---|---|---|---|---|---|---|---|" + (showRequired ? "---|" : ""));
+      + " Resolves to | Tag from |" + (showRequired ? " Required |" : ""));
+    out.push("|---|---|---|---|---|---|---|---|---|" + (showRequired ? "---|" : ""));
     for (const r of g.rows) {
       const cells = [
         `\`${r.ref}\``,
@@ -211,6 +232,7 @@ export function toMarkdown(answer: ImagesAnswer, labelOf: LabelOf,
         r.digest && r.registry_state === "read" ? `\`${r.digest}\`` : digestText(r),
         tagNotes(r).map((t) => t.text).join("; "),
         r.resolves_to ? `\`${r.resolves_to}\`` : resolvedText(r) ?? "",
+        `${SOURCE_TEXT[r.source] ?? r.source} (\`${r.source}\`)`,
       ];
       if (showRequired) cells.push(requiredText(r));
       out.push("| " + cells.map(mdCell).join(" | ") + " |");
