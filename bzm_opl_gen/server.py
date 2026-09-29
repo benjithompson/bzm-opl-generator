@@ -327,7 +327,9 @@ def generate_preview(g: GenerateIn):
     built = _build(g)
     return {"files": [{"name": n, "content": built.files[n]}
                       for n in core.preview_order(built.files)],
-            "token": built.token._asdict()}
+            "token": built.token._asdict(),
+            # An inline CA bundle's lint: warned, never refused.
+            "warnings": core.ca_bundle_warnings(g.options)}
 
 @app.post("/api/generate/zip")
 def generate_zip(g: GenerateIn):

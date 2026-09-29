@@ -21,10 +21,11 @@ def run(cmd, check=True, capture=False):
     return subprocess.run(cmd, check=check, text=True, capture_output=capture)
 
 
-def quiet(cmd, timeout=None):
+def quiet(cmd, timeout=None, input=None):
     """Run a command without echoing it; the CompletedProcess, never raising on
-    a non-zero exit."""
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    a non-zero exit. `input` is written to its stdin."""
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                          input=input)
 
 
 def poll_until(fn, timeout, interval, clock=time.monotonic, sleep=time.sleep):

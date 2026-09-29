@@ -104,7 +104,9 @@ Reference, readable as resources on this server ({RESOURCE_SCHEME}://docs/...):
 options.md (every generate option), preflight.md (evidence files and what the
 checks mean), capacity-planning.md (sizing a cluster nobody has yet), helm.md
 and docker.md (the two non-manifest output formats), service-virtualization.md,
-hardened-engines.md, live-test.md. Read the one that covers the question rather
+hardened-engines.md, live-test.md, ca-trust.md (a corporate CA, and the
+`bzm-opl-gen ca-check` command the customer runs on their own network to test
+it). Read the one that covers the question rather
 than guessing at an option name -- `opl_bundle options` lists them all with a
 one-line summary each, and every page this server serves is in `docs`.
 
@@ -197,6 +199,8 @@ DOC_SUMMARIES = {
     "hardened-engines.md": "The restricted engine posture, and which images "
                            "have run under it.",
     "live-test.md": "The live rig: what it proves and what it costs.",
+    "ca-trust.md": "A corporate TLS-inspecting CA: the four ways to supply it, "
+                   "and checking it with ca-check before deploying.",
     "web-ui.md": "The local web UI, for a human doing this by hand.",
     # That page's fix is a patch to crane's source; the runnable workarounds
     # are elsewhere, and the summary has to say so.
@@ -638,6 +642,7 @@ def _bundle_warnings(options):
     slot = ca_trust.ca_slot_notice(options)
     if slot:
         out.append(slot)
+    out += core.ca_bundle_warnings(options)
     if options.get("auto_update"):
         out.append(
             "auto_update is on: crane will take field ownership of its own "
