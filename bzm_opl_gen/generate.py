@@ -1397,9 +1397,11 @@ ENV_OWNER = {
     "KUBERNETES_RESOURCES_LIMITS_MEMORY": "engine_mem_limit",
     "KUBERNETES_REQUESTS_EPHEMERAL_STORAGE": "engine_ephemeral_request_mb",
     "KUBERNETES_LIMITS_EPHEMERAL_STORAGE": "engine_ephemeral_limit_mb",
-    "REQUESTS_CA_BUNDLE": "ca_bundle | ca_existing_configmap",
-    "AWS_CA_BUNDLE": "ca_bundle | ca_existing_configmap",
-    "KUBERNETES_CA_BUNDLE_MOUNT": "ca_bundle | ca_existing_configmap",
+    # Every CA mode writes these three, so every mode owns them -- read off
+    # CA_MODES rather than listed, which is how the slot and inject modes went
+    # missing from a hand-written pair.
+    **{name: " | ".join(CA_MODES) for name in
+       ("REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "KUBERNETES_CA_BUNDLE_MOUNT")},
 }
 
 
@@ -1641,7 +1643,7 @@ metadata:
     # Only `inline` reaches here now: the file mode emits no ConfigMap at all,
     # because the file is what it is built from and this generator has not read
     # it (see `generate`, and the README's `kubectl create configmap` line).
-    pem = "\n".join("    " + line for line in ca_pem(o).strip().splitlines())
+    pem = "\n".join("    " + line for line in o["ca_bundle"].strip().splitlines())
     return f"""kind: ConfigMap
 apiVersion: v1
 metadata:
@@ -1651,16 +1653,6 @@ data:
   {ca['key']}: |
 {pem}
 """
-
-
-def ca_pem(o):
-    """The certificate the bundle writes, where there is one to write.
-
-    One helper because both platforms write it -- a ConfigMap entry here, a file
-    beside the script on docker. It is no longer ever a marker: the file mode
-    names a file rather than holding a slot, so a bundle with no certificate in
-    it writes no certificate anywhere."""
-    return o["ca_bundle"]
 
 
 def _proxy_secret_block(o):
@@ -1779,7 +1771,7 @@ def _nodepools_md(facts, o):
     """
     cpu, mem = engine_size(o)
     eng_sel, eng_tol = engine_scheduling(o)
-    crane_sel, crane_tol = crane_scheduling(o)
+    crane_sel, _ = crane_scheduling(o)
     slots = facts.get("slots")
     taints = _taints_from_tolerations(eng_tol)
     per_node = engines_per_node(o)
@@ -3999,7 +3991,7 @@ def docker_file_mounts(o):
 
     out = []
     if _ca_cfg(o):
-        out.append(mount("ca_bundle", ca_pem(o)))
+        out.append(mount("ca_bundle", o["ca_bundle"]))
     sv = _sv_docker_cfg(o)
     if sv and sv["cert"]:
         out += [mount("sv_tls_cert", sv["cert"]), mount("sv_tls_key", sv["key"])]
@@ -4916,7 +4908,7 @@ def generate(facts, options):
         # the chart then refuses the install naming the field, which is a better
         # answer than a file holding a marker that resolves and installs.
         if ca and ca["mode"] == "inline":
-            out[f"{CHART_DIR}/{ca['key']}"] = ca_pem(o).strip() + "\n"
+            out[f"{CHART_DIR}/{ca['key']}"] = o["ca_bundle"].strip() + "\n"
         if o["private_registry"]:
             out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
         if separate_pools(o):
@@ -4950,14 +4942,6 @@ def generate(facts, options):
             if o["use_secret"] else ""
         ),
         "SCHEDULING_BLOCK": _scheduling_block(o),
-        # Always empty now. It carried the `ca-slot-check` guard (#241), which
-        # existed only because the bundle shipped a ConfigMap holding a marker;
-        # the file mode ships no ConfigMap and no marker, so the kubelet refuses
-        # the pod by name instead. The substitution stays rather than the
-        # template losing the line: an initContainer is the natural place for
-        # the next guard that has to run before crane, and a Deployment with
-        # none renders exactly the bytes it rendered before.
-        "INIT_CONTAINERS_BLOCK": "",
         "VOLUME_MOUNTS_BLOCK": (
             "          volumeMounts:\n"
             f"            - name: cacerts\n"
