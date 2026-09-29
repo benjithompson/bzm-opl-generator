@@ -1,42 +1,19 @@
-// What the sizing would change about this location, and the one
-// control that writes it.
-//
-// The case this is for is not setup, it is the correction that follows one. A
-// location and its agent get built for 500 virtual users an engine, a real run
-// says the figure is 1,000, and that is a change to the *location* -- none of
-// these four values appears in a manifest, so nothing has to be regenerated,
-// re-applied or restarted. Before this existed the answer was "go and edit it
-// in BlazeMeter", which is the one place this tool otherwise never sends you.
-//
-// It opens as a before -> after: the left column is what the account holds, the
-// right column is the field that will be sent, and the profile above the list
-// is what those fields open filled with. There is no separate calculator any
-// more (it was a third place the same four numbers were worked out, seeded from
-// a target typed per location) and no Apply -- filling a field applies nothing,
-// so a button to do it was a click between the profile and the only control
-// here that costs anything.
-//
-// It is a write to the customer's account, so it follows the same rules as the
-// other two on this page: its own control rather than a side effect of
-// something else, what it costs said before it is pressed, and the answer
-// reporting what the account *now holds* rather than what was typed --
-// core.update_location re-reads for exactly that reason.
+// What the sizing would change about this location, and the one control that
+// writes it. These four settings live in the account, not in any manifest, so
+// changing one needs no regenerate. The panel reads before -> after; Save is a
+// write to the account, and it reports what the account holds afterwards.
 import { useEffect, useRef, useState } from "react";
 
 import { Api, CapacityPlan, Location, LocationSettings as Settings,
          LocationUpdate } from "../api";
 import { Button, ErrorMsg, NumberInput, PlanCaveats } from "../components";
-// The same ask the profile card makes, re-made with this location's agent
-// count: `slots` is engines per *agent*, and the division is plan.py's.
+// The sizing card's ask, re-made with this location's agent count.
 import { PlanAsk, useCapacityPlan } from "../usePlan";
-// A location deleted since the list was read, told apart from a write the
-// account refused for any other reason.
 import { goneNotice } from "../stale";
 import { plural } from "../text";
 
-/** The form, as strings. Blank means "leave this one alone", which is also what
- *  the API takes: there is deliberately no way to *clear* a setting here, since
- *  clearing one and not mentioning it are different intents. */
+/** The form, as strings. Blank means "leave this one alone", which is also
+ *  what the API takes; there is no way to clear a setting here. */
 interface Draft {
   slots: string;
   threads_per_engine: string;
@@ -53,18 +30,8 @@ const KEYS = Object.keys(EMPTY) as (keyof Draft)[];
 const shown = (v: number | null | undefined) =>
   v === null || v === undefined ? "" : String(v);
 
-/** Whether a typed field says the same thing the location already holds.
- *
- *  Compared as a *number*, not as text. Both sides are whole numbers by the
- *  time they get here, but the two sides are written by different hands -- the
- *  profile stringifies an int, a `type=number` input hands back whatever was
- *  typed -- so `4`, `4.0` and ` 4` are the same setting arriving three ways.
- *  Textual comparison called each of them a change, which put the panel in the
- *  state this rule is about: a Save offering to write the value already there,
- *  and a Reset live with nothing to give back.
- *
- *  Blank is not zero and not "same as anything": it means "leave this one
- *  alone", so blank matches only blank. */
+/** Does a typed field say what the location already holds? Compared as
+ *  numbers, so "4", "4.0" and " 4" agree; blank matches only blank. */
 export function same(a: string, b: string): boolean {
   const [x, y] = [a.trim(), b.trim()];
   if (x === y) return true;
@@ -82,16 +49,9 @@ function draftOf(loc: Location): Draft {
   };
 }
 
-/** What the fields open on: the location's own values, with the profile's over
- *  the top of them where there is a profile.
- *
- *  Filling is not applying. Nothing has reached the account until Save, and the
- *  numbers are in the fields where they can be read and edited first -- which
- *  is the whole reason the profile fills a draft rather than being sent.
- *
- *  A null setting is left as the location's. Only `override_cpu` can be one --
- *  the plan says null where the engine is not a whole number of cores, which
- *  overrideCPU cannot express. */
+/** What the fields open on: the location's values, with the sizing's over them
+ *  where there is one. Filling sends nothing. A null (only override_cpu, for an
+ *  engine that is not whole cores) keeps the location's value. */
 function seed(loc: Location, fill: Settings | null): Draft {
   const current = draftOf(loc);
   if (!fill) return current;
@@ -118,39 +78,25 @@ const HINTS: Record<keyof Draft, string> = {
 };
 
 export function LocationSettings(props: {
-  /** The caller of the local routes. Handed down rather than imported: Save is
-   *  one of the three writes this page makes to the customer's account, and a
-   *  write that cannot be swapped for a fake is a write no test can watch. */
+  /** The route caller, so the write can be tested. */
   api: Api;
   location: Location;
-  /** What the profile is sizing, assembled once by App. Its `users` is blank
-   *  until somebody sizes one, which is the "no profile yet" state -- not an
-   *  error, and not a reason to hide the fields. */
+  /** What the sizing card states. With no targets the fields still show. */
   profile: PlanAsk;
   /** Put the changed location back into the page's own list and selection. */
   onUpdated: (loc: Location) => void;
-  /** Done with this location: fold it away and open the agent under it.
-   *
-   *  The panel needed a way *out*. Its only button was Save, greyed whenever
-   *  nothing had been typed -- which is the common case, since most locations
-   *  are already configured -- so choosing a location opened a form whose one
-   *  control was dead, and the next thing to do was somewhere else on the page
-   *  with nothing pointing at it. */
+  /** Done with this location: fold it and open the agents. */
   onConfirm: () => void;
 }) {
   const { location } = props;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<LocationUpdate | null>(null);
-  // Whether anything in here was typed. A hand edit outranks a later change to
-  // the profile: the fields would otherwise be rewritten under someone who is
-  // in the middle of correcting one of them. Reset gives the profile back.
+  // Whether anything was typed. A hand edit outranks later sizing changes
+  // until Reset.
   const [touched, setTouched] = useState(false);
 
-  // Not a field: the location already says how many agents it has, and a box to
-  // retype it is a second source for the same fact -- one that can disagree
-  // with the row it sits under. An empty location counts as one, which is what
-  // it will have as soon as the first agent is created.
+  // Read off the location; an empty one counts as one agent, as it soon will.
   const agents = Math.max((location.ships ?? []).length, 1);
   const { plan, err: planErr, busy: planBusy } =
     useCapacityPlan({ ...props.profile, agents: String(agents) }, props.api);
@@ -158,26 +104,18 @@ export function LocationSettings(props: {
 
   const [draft, setDraft] = useState<Draft>(() => seed(location, fill));
 
-  // A different location is a different everything: the fields, the last
-  // outcome, the last refusal, and whether any of it was typed. Without this,
-  // picking another location left the previous one's numbers in the fields and
-  // Save would have written them to it.
+  // A different location resets the fields, the outcome and the refusal.
   useEffect(() => {
     setTouched(false); setResult(null); setErr(null);
   }, [location.id]);
 
-  // The fields follow the location and the profile until something is typed
-  // into them.
-  //
-  // The outcome is deliberately not cleared here. A save changes the location,
-  // the changed location comes back through `onUpdated`, and this effect runs
-  // *because of* the save that just landed -- so clearing it took the report of
-  // what the account now holds off screen at the moment it arrived.
+  // The fields follow the location and the sizing until something is typed.
+  // The outcome is not cleared: a save changes the location, which re-runs this.
   useEffect(() => {
     if (touched) return;
     setDraft(seed(location, fill));
-    // The plan's own four values rather than the plan: a fresh object every
-    // render would re-seed on every keystroke anywhere on the page.
+    // The plan's four values rather than the plan object, which is new every
+    // render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.id, location.slots, location.threadsPerEngine,
       location.overrideCPU, location.overrideMemory, touched,
@@ -198,9 +136,8 @@ export function LocationSettings(props: {
     const forLocation = location.id;
     setBusy(true); setErr(null); setResult(null);
     try {
-      // Only the fields that changed. Sending all four would write back three
-      // values this browser may have been holding since before someone else
-      // edited the location.
+      // Only the changed fields, so values somebody else edited are not
+      // written back.
       const body: Record<string, string> = {};
       edited.forEach((k) => { body[k] = draft[k].trim(); });
       const out = await props.api.updateLocation(
@@ -208,8 +145,6 @@ export function LocationSettings(props: {
       props.onUpdated(out.location);
       if (locationId.current === forLocation) setResult(out);
     } catch (e) {
-      // A location deleted since this list was read says so, rather than
-      // relaying BlazeMeter's 404 as though the settings had been rejected.
       if (locationId.current === forLocation) {
         setErr(goneNotice(e, "location") ?? String((e as Error).message));
       }
@@ -219,9 +154,7 @@ export function LocationSettings(props: {
   };
 
   return (
-    // Named after the location it is about: it opens inside that location's own
-    // row, and "Location settings" on its own is the same heading whichever row
-    // is open.
+    // Named after its location, since it opens inside that location's row.
     <section aria-label={`${location.name} settings`}
       className="border border-slate-200 rounded-md p-3 space-y-3 bg-slate-50">
       <div>
@@ -239,13 +172,10 @@ export function LocationSettings(props: {
         touched={touched} />
       <ErrorMsg msg={planErr} />
 
-      {/* Before -> after, with the after column editable. Two panels -- a diff
-          to read and a form to fill -- would be two answers to "what is about
-          to be written", and only one of them would be the one that is sent. */}
+      {/* Before -> after, with the after column the form. */}
       <div className="space-y-1.5">
         {KEYS.map((k) => (
-          // The label wraps the whole row, so the value it is about is the one
-          // named beside it however the row is laid out.
+          // The label wraps the row, so it names the value beside it.
           <label key={k} className="flex items-center gap-2">
             <span className="grow min-w-0">
               <span className="text-xs font-medium text-slate-600">
@@ -289,20 +219,9 @@ export function LocationSettings(props: {
         the engines apart.
       </p>
 
-      {/* What it costs on the left, the control that commits on the right --
-          the reading order of the panel is "this is what changes, this is what
-          it costs, do it".
-
-          One button, always live, and its label is what pressing it does.
-          Nothing typed, it is the way on: Confirm folds this location away and
-          opens the agent under it, writing nothing. Something typed, it is
-          Save, and the sentence beside it says what that costs -- which is why
-          the two are not one control called Confirm that sometimes writes to
-          somebody's account. Saving does not fold: the outcome under this row
-          is a re-read of the location saying what it now holds, and collapsing
-          the panel would take that off screen at the moment it arrived. So a
-          save leaves nothing edited, the label falls back to Confirm, and the
-          way on is the same button it always was. */}
+      {/* One button, always live: Confirm (writes nothing, moves on) when
+          nothing is typed, Save when something is, with its cost beside it.
+          Saving does not fold, so the outcome stays on screen. */}
       <div className="flex items-center gap-2">
         <span className={"text-2xs "
           + (edited.length ? "text-amber-700" : "text-slate-500")}>
@@ -334,12 +253,8 @@ export function LocationSettings(props: {
   );
 }
 
-/** Where the numbers in the right-hand column came from.
- *
- *  The per-agent division is the line worth saying out loud: the profile sizes
- *  a run, `slots` is what *one* agent may run, and the same 10 engines is 5
- *  each against two agents. Writing the run's own figure into `slots` would
- *  size this location for twenty. */
+/** Where the right-hand column came from. The run's engines are divided by
+ *  the agents, since `slots` is engines per agent. */
 function ProfileLine({ plan, agents, busy, touched }: {
   plan: CapacityPlan | null; agents: number; busy: boolean; touched: boolean;
 }) {
@@ -354,9 +269,7 @@ function ProfileLine({ plan, agents, busy, touched }: {
   return (
     <div className={"space-y-1 " + (busy ? "opacity-50" : "")}>
       <p className="text-2xs text-slate-500">
-        {/* Every sizing in its own unit, because two of the three are not
-            virtual users -- and `plan.users` is null where no load test was
-            sized at all, which this sentence used to read straight through. */}
+        {/* Every sizing in its own unit; there may be no virtual users at all. */}
         The sizing — <b>{plan.sizings.map(
           (s) => `${s.target.toLocaleString()} ${s.unit}`).join(", ")}</b>
         {" "}— needs{" "}
@@ -371,13 +284,9 @@ function ProfileLine({ plan, agents, busy, touched }: {
   );
 }
 
-/** What the account holds now -- not what was typed.
- *
- *  The distinction is the reason core re-reads: BlazeMeter's own POST accepts
- *  `threadsPerEngine` and does not store it, and a location in that state 403s
- *  every test start while a form that echoed the request back would show the
- *  number as saved. So a field that came back unchanged is reported as such,
- *  in amber, rather than folded into a green tick. */
+/** What the account holds now, not what was typed: BlazeMeter accepts
+ *  `threadsPerEngine` and may not store it, so an unchanged field is shown in
+ *  amber. */
 function Outcome({ result }: { result: LocationUpdate }) {
   const changed = Object.keys(result.changed) as (keyof Settings)[];
   return (

@@ -1,31 +1,10 @@
-// The left drawer: which of the two things this page is.
-//
-// The views were buttons in the header, competing with the product name and the
-// connected account for the same line. A drawer is where an app this shape
-// keeps them, and it collapses to a rail so the width is the reader's choice
-// rather than the layout's.
-//
-// There were three. "Plan capacity" is now the first card of Generate's first
-// step: it was a view because it needs no account, but sitting beside the flow
-// made the first question look like an alternative to it, and its answer had to
-// be carried across by hand. Needing no account is not a reason to be
-// elsewhere -- it is a reason to be first.
-//
-// The controls follow the convention rather than inventing one: a hamburger
-// opens it, and an outlined left arrow closes it. Both live in the same corner,
-// so the thing that opened it is the thing that closes it -- a rail whose open
-// control is at the top and whose close control is somewhere else is two
-// controls to learn.
+// The left drawer: which of the two views is open, with the key and account at
+// its foot. It collapses to a rail; one corner holds both the open and the
+// close control.
 import { ReactNode } from "react";
 
 export type ViewId = "flow" | "capacity";
 
-// Neither item carries a hint any more, and the rail renders none. Generate
-// lost its first ("The Generate rail says nothing step 1 does not"), and
-// Account capacity's -- "what this account can generate" -- said in the chrome
-// what the view says at the top of itself, one line above a total the same
-// sentence describes. A label a whole view is named after does not need a
-// second sentence in the furniture beside it.
 interface NavItem {
   id: ViewId;
   label: string;
@@ -43,8 +22,7 @@ const Icon = ({ d }: { d: string }) => (
   </svg>
 );
 
-/** Deliberately plain shapes: a document for the bundle, bars for the account
- *  rollup. No icon set is worth a dependency for two glyphs. */
+/** Plain inline shapes: a document for the bundle, bars for the rollup. */
 const NAV: NavItem[] = [
   { id: "flow", label: "Generate",
     icon: <Icon d="M5 2.5h6l4 4v11h-10zM11 2.5v4h4M7.5 11h5M7.5 14h5" /> },
@@ -57,13 +35,9 @@ export function NavDrawer(props: {
   setView: (v: ViewId) => void;
   open: boolean;
   setOpen: (v: boolean) => void;
-  /** Without a key there is no account to roll up, so that view is out of
-   *  reach rather than empty -- and it says which button fixes that. */
+  /** Without a key the capacity view is out of reach, and says how to fix it. */
   connected: boolean;
-  /** The key and the account, at the foot of the drawer. Session-wide, like the
-   *  views above them and unlike anything inside a step -- and down here rather
-   *  than in the header because that is where an application this shape keeps
-   *  the identity it is working under. */
+  /** The key and account, at the drawer's foot. */
   footer?: ReactNode;
 }) {
   const { open } = props;
@@ -89,7 +63,7 @@ export function NavDrawer(props: {
             + "flex items-center justify-center w-8 h-8 "
             + (open ? "border border-slate-300" : "")}>
           {open ? (
-            // Outlined, and pointing at the edge it collapses towards.
+            // Pointing at the edge it collapses towards.
             <svg viewBox="0 0 20 20" className="w-4 h-4" {...stroke}>
               <path d="M12 5l-5 5 5 5" />
             </svg>
@@ -109,8 +83,7 @@ export function NavDrawer(props: {
             <button type="button" key={item.id} onClick={() => !off && props.setView(item.id)}
               aria-current={on ? "page" : undefined}
               disabled={off}
-              // The label is the tooltip while collapsed, so the rail is
-              // usable without opening it first.
+              // The label is the tooltip while collapsed.
               title={off ? "connect an account first — the key at the foot of this menu"
                 : item.label}
               className={"w-full flex items-center gap-2.5 rounded-md text-left "
@@ -128,9 +101,7 @@ export function NavDrawer(props: {
         })}
       </div>
 
-      {/* Pinned to the bottom, so the key does not move when the drawer
-          collapses or when the view changes. It used to share that job with a
-          per-view hint above it, both on `mt-auto`. */}
+      {/* Pinned to the bottom, so the key stays put. */}
       {props.footer && (
         <div className={"mt-auto border-t border-slate-200 space-y-1.5 "
           + (open ? "p-2" : "p-1.5")}>

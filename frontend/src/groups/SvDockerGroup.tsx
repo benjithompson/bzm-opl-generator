@@ -1,18 +1,9 @@
 import { Field, inputCls, TextInput } from "../components";
 
-/** How a docker agent publishes its virtual services: the hostname it
- *  advertises, and the certificate it serves them with.
- *
- *  The peer of `SvGroup`, and the two are never on screen together -- each
- *  group's keys are the other format's ignored options, so `groupsFor` shows
- *  exactly one of them (#182).
- *
- *  Everything it writes is one of three handlers and it decides nothing itself.
- *  The two checks worth knowing about happen on the server, at generate time,
- *  and are named in the hints rather than repeated here as rules: a private key
- *  that is not PKCS#8, and a hostname the certificate does not cover, are both
- *  agents that start, report online and serve nothing a client will accept.
- */
+/** How a docker agent publishes virtual services: the hostname it advertises
+ *  and the certificate it serves. Never on screen with SvGroup (each one's keys
+ *  are the other format's ignored options). The server checks the key is PKCS#8
+ *  and the certificate covers the hostname; the hints say so. */
 export function SvDockerGroup(props: {
   hostname: string;
   cert: string;
@@ -25,9 +16,7 @@ export function SvDockerGroup(props: {
     <>
       <Field label="Hostname"
         hint="HOSTNAME_OVERRIDE — endpoint URLs are built from this and a port, rather than from this host's IP address">
-        {/* No placeholder resembling a name. BlazeMeter's own example value is
-            `C123ABCXYZ` and nothing they publish says what shape it has to be,
-            so a suggestion here would be this page inventing one. */}
+        {/* No sample name: BlazeMeter documents no required shape. */}
         <TextInput mono value={props.hostname}
           onChange={(v) => props.onHostname(v || null)} />
       </Field>

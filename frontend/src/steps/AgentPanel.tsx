@@ -1,27 +1,7 @@
 // Step 1: which location, which agent, and the credential that agent runs on.
-//
-// A location holds agents; an agent is one deployment. That containment is what
-// the step is built around now -- a path line that names both, two lists that
-// look alike because they are the same kind of choice, and the agent's
-// credential inside the agent's own row rather than in a field further down the
-// page that could belong to anything.
-//
-// The state stays in App: `harborId` and `shipId` are what everything
-// downstream is generated from, and the effects that clear the token when
-// either moves live there too. What changed (#103) is the interface -- four
-// records in DownloadPanel's shape rather than thirty-six props, and three
-// things this file used to be handed that it can answer for itself:
-//
-//   * the filtered list. It arrived beside the full one, from a filter this
-//     panel renders the box for. Two lists side by side are two answers to one
-//     question: the count on the placeholder came off `locations` and the rows
-//     under it off `filteredLocs`, free to be about different lists.
-//   * the freshness rule. A predicate passed down is a rule with no tests of
-//     its own -- see heartbeat.ts, which is now the only statement of it.
-//   * the create-location form, which arrived as a finished element. The write
-//     behind it is still App's (see NewLocation below); what moved here is the
-//     markup, which is the half that belongs beside the agent form it is a pair
-//     with.
+// The selection and every write live in App; this panel renders the two lists,
+// the forms, and the folds, and keeps only view state (filter, open rows, the
+// regenerate confirmation, the new agent's name).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Api, Facts, FuncIdChoice, Location, Ship, SlotMinimum } from "../api";
 import {
@@ -29,27 +9,16 @@ import {
   NumberInput, SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
 } from "../components";
 import { LocationSettings } from "../groups/LocationSettings";
-// The funcId list of a location being created is a declaration like manual
-// entry's, so it is edited by the same function and keeps the same rule: see
-// sv.exclusiveWith for why service virtualization is created on its own.
+// Creating a location decides its funcIds, so the manual declaration's rule
+// applies (sv.exclusiveWith).
 import { toggleDeclared } from "../optionGroups";
 import { exclusiveWith, SV_ALONE } from "../sv";
-// What BlazeMeter requires of `slots` before it will make the location at all
-// (#159) -- read here so the field can say it, and in App so Create is held.
 import { slotRule } from "../slots";
 import { ManualSource } from "../groups/ManualSource";
-// Whether an agent is reporting, from one module rather than from a function
-// this panel is handed. Two readers here -- the count on a location's row and
-// the state on an agent's -- and they were the same call twice.
 import { onlineCount, shipOnline } from "../heartbeat";
 import { useOpenRow } from "../openRow";
-// A location or agent that is gone, told apart from one nothing could be read
-// about. Two ways in: a 404 from something acted on (goneNotice, at the call
-// sites in App) and a Refresh that came back without it (here).
 import { goneNotice, vanishedNotice } from "../stale";
 import { rotateHazard } from "../token";
-// What the profile card above this panel is sizing, on its way to the one
-// location panel that measures itself against it.
 import { PlanAsk } from "../usePlan";
 import { plural } from "../text";
 
@@ -62,17 +31,12 @@ interface SourceHandover {
   switchTo: (m: "connect" | "manual") => void;
   manual: ManualIds;
   setManual: (f: (m: ManualIds) => ManualIds) => void;
-  /** Who the page is connected as. Read here, never asked for: the key is the
-   *  Account menu's, and what this step needs is whether there is one -- a
-   *  location list needs a key, not the form that supplies it. */
+  /** Who the page is connected as; the key itself is the Account menu's. */
   who: { email: string; keyId: string } | null;
 }
 
-/** What a new location is being asked for. The four fields the account takes,
- *  in its own names, so nothing is renamed between this form and the request.
- *  `workspace_id` is not here: the workspace is chosen at the foot of the nav
- *  drawer and the write picks it up there, which is why the name field says
- *  which one it is about to write into. */
+/** What a new location is asked for, in the account's own field names. The
+ *  workspace comes from the nav drawer. */
 interface LocationDraft {
   name: string;
   func_ids: string[];
@@ -80,38 +44,20 @@ interface LocationDraft {
   threads_per_engine: number;
 }
 
-/** Making a private location: the form's fields, and the one call that writes
- *  it to the account.
- *
- *  `submit` is App's. Creating a location is one of the writes CLAUDE.md holds
- *  to the rule that a request touching the account is made where its cost is on
- *  screen -- so this panel renders the fields and the button, and what the
- *  button does stays a named function in App, exactly as the agent form beside
- *  it already worked. Nothing here can reach the client, so no click can grow
- *  into a second write by accident. */
+/** The new-location form: its fields, and App's write behind Create. */
 interface NewLocationHandover {
   open: boolean;
-  /** Also drops whatever the last attempt was refused for: an error about a
-   *  form that is no longer on screen describes nothing. */
+  /** Also drops the last refusal. */
   setOpen: (v: boolean) => void;
   /** The workspace it would be created in, by name. */
   workspace: string | null;
   draft: LocationDraft;
   setDraft: (f: (d: LocationDraft) => LocationDraft) => void;
-  /** What a location may be for. Served (facts.CATEGORY_BY_FUNC), never spelled
-   *  in the frontend -- the copy that used to be here lost sv-bridge. */
+  /** What a location may be for: the served funcId vocabulary. */
   choices: FuncIdChoice[];
-  /** Which of those funcIds run a taurus engine, from the served `runs_engine`
-   *  -- what `exclusiveWith` applies its one rule against. Handed down rather
-   *  than derived here for the reason `choices` is: the answer is a Python
-   *  table, and this form offers the account's whole vocabulary rather than the
-   *  three functionalities the page configures. */
+  /** Which of those funcIds run an engine (served), for exclusiveWith. */
   engines: string[];
-  /** The slots each funcId needs before BlazeMeter will make the location, from
-   *  /api/slot-minimums. Handed down for the reason `choices` is: the number
-   *  was found on a live POST and the sentence is BlazeMeter's own, so core is
-   *  where both live. Empty until the fetch lands, which states nothing and
-   *  refuses nothing -- see slots.slotRule. */
+  /** Slot minimums per funcId (served). Empty until read, refusing nothing. */
   minimums: Record<string, SlotMinimum>;
   /** What Create is waiting for, as the sentence it shows; "" when ready. */
   blockedBy: string;
@@ -120,66 +66,47 @@ interface NewLocationHandover {
 
 /** The locations to choose from, the one chosen, and making a new one. */
 interface LocationHandover {
-  // Both are chosen at the foot of the nav drawer (AccountMenu), because every
-  // view reads the account and the location list is the only thing here the
-  // workspace narrows -- so this step names them rather than asking again.
+  // Both chosen in the nav drawer's account menu; named here, not asked again.
   accountName: string | null;
   workspaceName: string | null;
-  /** Every location in that workspace. One list: the box below narrows it, and
-   *  the panel that renders the box is the one that applies it. */
+  /** Every location in the workspace; the filter box here narrows it. */
   list: Location[];
   selectedId: string | null;
   pick: (id: string) => void;
   busy: boolean;
   error: string | null;
-  /** Re-read this workspace's locations from BlazeMeter, past the server's own
-   *  cache. Writes the list and nothing else -- see App.refreshLocations, which
-   *  is a separate path from the initial load for exactly that reason. */
+  /** Re-read the locations past the server's cache. Writes the list only. */
   refresh: () => void;
-  /** ...and whether that read is in flight. Its own flag rather than `busy`:
-   *  that one blanks the list behind a "reading this workspace" line, and a
-   *  refresh is the case where what is on screen stays on screen. */
+  /** Whether a refresh is in flight. Unlike `busy`, the list stays on screen. */
   refreshing: boolean;
-  /** The location came back changed: App owns the list and the selection, so
-   *  it is App that puts it back. */
+  /** Put a location that came back changed into App's list. */
   updated: (loc: Location) => void;
-  /** Has this location been confirmed? Not "is one selected": the settings
-   *  under it are a real read, and step 1 is finished when somebody has said so
-   *  rather than when a row happens to be highlighted. Withdrawn by choosing a
-   *  different location -- App holds which one was confirmed, not a flag. */
+  /** Has somebody confirmed this location? Selecting is not confirming, and
+   *  choosing another withdraws it. */
   confirmed: boolean;
   confirm: () => void;
   create: NewLocationHandover;
 }
 
-/** The agents inside the selected location, and making one.
- *
- *  No list of its own: the agents are the selected location's, and a second
- *  copy passed in beside it is a copy that can be about a different location
- *  than the row the user is looking at. */
+/** The agents of the selected location, and making one. */
 interface AgentHandover {
   id: string | null;
   pick: (id: string) => void;
   /** Reading this location's agents and images. */
   busy: boolean;
   facts: Facts | null;
-  /** Whether the create form was asked for. Whether it is *shown* is not this:
-   *  a location with no agents has nothing to pick, so it opens on the form
-   *  regardless -- see `creating` below, which is a view's decision and made in
-   *  the view. */
+  /** Whether the create form was asked for. A location with no agents shows it
+   *  regardless. */
   showCreate: boolean;
   setShowCreate: (v: boolean) => void;
   /** Create an agent with this name; resolves true once it exists. */
   create: (name: string) => Promise<boolean>;
   error: string | null;
-  /** The agent WAS created and only its credential was refused. In the red
-   *  error slot that reads as a failed creation, and the next click makes a
-   *  second agent. */
+  /** The agent was created and only its credential was refused: a notice, not
+   *  an error, so it does not invite a second create. */
   tokenNotice: string | null;
-  /** As the location's: confirmed, and withdrawn by choosing another agent.
-   *  A lone agent is auto-picked, so without this the whole step could complete
-   *  itself and the one screen naming what the bundle is for would never have
-   *  been looked at. */
+  /** Confirmed, as the location's; a lone agent is auto-picked, so picking is
+   *  not enough to finish the step. */
   confirmed: boolean;
   confirm: () => void;
 }
@@ -188,58 +115,39 @@ interface AgentHandover {
 interface CredentialHandover {
   token: string;
   setToken: (v: string) => void;
-  /** Issue a new one for an agent that already exists. Resolves once the token
-   *  is in the field; throws with the account's own refusal if it is refused. */
+  /** Issue a new token for an existing agent. Resolves true once it is in the
+   *  field, false if the agent changed meanwhile; rejects with the refusal. */
   regenerate: () => Promise<boolean>;
-  /** Why the field is empty, or null where there is nothing to say.
-   *
-   *  Written by token.recallNote rather than chosen here, because the choice is
-   *  between the two states this codebase never lets share a representation: an
-   *  agent this app minted nothing for, and one it could not be asked about.
-   *  Null covers both "there is a token in the field" and "the answer has not
-   *  arrived yet" -- neither is a sentence, and the second must not borrow the
-   *  first's. */
+  /** Why the field is empty (token.recallNote), or null. */
   note: string | null;
 }
 
 interface AgentPanelProps {
-  /** Passed straight through to the open location's settings, which is where
-   *  the one write on this step is made (DownloadPanel takes the client for the
-   *  same reason). Nothing in this file calls a route itself. */
+  /** Passed through to the open location's settings, the one write on this step. */
   api: Api;
   source: SourceHandover;
   locations: LocationHandover;
   agents: AgentHandover;
   credential: CredentialHandover;
-  /** What the sizing above this panel states. Passed through to
-   *  the open location's settings, which is where a profile turns into four
-   *  numbers about one location -- and where the only control that writes them
-   *  to the account lives. Sizing needs no account, so this is not a record
-   *  about the connection and does not belong in any of the four above. */
+  /** What the sizing card states, passed to the open location's settings. */
   profile: PlanAsk;
 }
 
-/** Where the confirm has got to. Per agent, and reset by changing agent:
- *  "Regenerated" is a statement about one identity. */
+/** Where the regenerate confirmation has got to, reset by changing agent. */
 type Arm = "idle" | "armed" | "done";
 
-/** The rows a query leaves. Trimmed, because a filter pasted with a trailing
- *  space is a paste artefact rather than a search for one. */
+/** The locations a filter leaves, trimmed and case-insensitive. */
 function matching(list: Location[], query: string): Location[] {
   const q = query.trim().toLowerCase();
   return q ? list.filter((l) => l.name.toLowerCase().includes(q)) : list;
 }
 
-/** Above this many, the list gets a filter box. A real account has 171
- *  locations and eight fit on the screen they are on, so the box appears where
- *  scrolling stops being enough and not before. */
+/** Above this many locations, the list gets a filter box. */
 const FILTER_ABOVE = 8;
 
 export function AgentPanel({
   api, source, locations, agents, credential, profile,
 }: AgentPanelProps) {
-  // Derived here rather than passed in beside the list: both are answers to
-  // "which location", and only one of them can be the list's.
   const location = locations.list.find((l) => l.id === locations.selectedId)
     ?? null;
   const ships: Ship[] = location?.ships ?? [];
@@ -250,81 +158,52 @@ export function AgentPanel({
   const empty = !!location && ships.length === 0;
   /** The chosen agent's name, for the rows that name it. */
   const shipName = ships.find((x) => x.id === agents.id)?.name ?? null;
-  // Which half of the agent section is on screen -- picking an identity and
-  // minting one are one-of, because reusing an identity that is already running
-  // conflicts with that install while creating one is free. Derived, not a
-  // second piece of state: a location with no agents has nothing to pick, so it
-  // opens on the create form, and creating the first agent drops back to the
-  // list showing it. The same derivation is why Cancel appears only when there
-  // is a list to go back to.
+  // Picking an identity and minting one are one-of. A location with no agents
+  // opens on the create form.
   const creating = agents.showCreate || ships.length === 0;
   const ship = ships.find((s) => s.id === agents.id);
-  // An identity that already existed, with no credential in hand for it: its
-  // token was issued once, at creation, and no API reads one back. Selecting
-  // the row does not rotate anything -- the button below is what does.
+  // An existing identity with no token in hand: its token cannot be read back.
   const reusing = !!ship && !credential.token;
 
   const [arm, setArm] = useState<Arm>("idle");
   const [issuing, setIssuing] = useState(false);
   const [issueErr, setIssueErr] = useState<string | null>(null);
   const [makingShip, setMakingShip] = useState(false);
-  // Which row of each list is open. Separate from what the list selects,
-  // because closing a row is a view action and must not un-choose the location
-  // or the agent the bundle is for -- see openRow.ts.
+  // Which row of each list is open; separate from what is selected.
   const agentRow = useOpenRow();
   const locRow = useOpenRow();
-  // Which of the three sections is expanded. `null` means "wherever the step
-  // has got to", which is what makes the panel open on the next thing to do
-  // rather than on all of it; a click pins one and stops it moving underneath
-  // whoever clicked -- a section that re-folds itself when the state behind it
-  // changes is the worst of both.
+  // Which section is expanded: null follows the step; a click pins one, and
+  // "none" is everything closed by hand.
   type Fold = "location" | "agent";
-  // null = follow the step; "none" = the user closed the open one and wants all
-  // three folded. Three states rather than two, because "closed everything" is
-  // a choice and re-opening the current step over it would fight the click.
   const [pinned, setPinned] = useState<Fold | "none" | null>(null);
-  // A location that was chosen and is no longer in the list: a Refresh has been
-  // pressed and the account no longer has it. The selection is deliberately not
-  // cleared for us -- App writes the list and nothing else -- so this is what
-  // the panel does about it, and it is a view decision like every other fold
-  // here. Guarded on `busy`, because the initial load has an empty list and a
-  // restored id for a moment, which is not the same thing at all.
+  // The selected location is not in the list after a Refresh. Not while the
+  // first load is in flight, when the list is empty for another reason.
   const vanished = !!locations.selectedId && !location && !locations.busy;
   const reached: Fold = !locations.selectedId ? "location" : "agent";
-  // `vanished` outranks the pin, which nothing else here does. The rule against
-  // re-folding under a click is about sections whose *contents* changed; this
-  // is the one state where what is pinned open describes a location that is not
-  // there, and the only control that can resolve it is in the other section.
+  // `vanished` outranks a pin: only the location section can resolve it.
   const section = vanished ? "location" : (pinned ?? reached);
   const fold = (id: Fold) => ({
     open: section === id,
     onToggle: () => setPinned(section === id ? "none" : id),
   });
-  // Disarm on every change of agent, and open that agent's row. Keyed on shipId
-  // rather than on the click so the lone-agent auto-pick opens its row too, and
-  // so a row closed by hand stays closed.
+  // Disarm and open the agent's row whenever the agent changes, including an
+  // auto-pick; a row closed by hand stays closed.
   const openAgentRow = agentRow.setOpen;
   useEffect(() => {
     setArm("idle"); setIssueErr(null); openAgentRow(agents.id);
   }, [agents.id, openAgentRow]);
-  // The same, one list up: choosing a location opens it, including when the
-  // choice was a session restore rather than a click.
+  // Likewise one list up, including a restored selection.
   const openLocRow = locRow.setOpen;
   useEffect(() => {
     openLocRow(locations.selectedId);
   }, [locations.selectedId, openLocRow]);
 
   const toggle = (id: string) => {
-    // Choosing an agent by hand is the move on from the location, so the fold
-    // goes back to following the step -- which lands it here. Picking the
-    // location pinned it open (below); this is what releases it.
+    // Picking an agent by hand moves on from the location: follow the step again.
     if (agents.id !== id) { agents.pick(id); setPinned(null); return; }
     agentRow.toggle(id);
   };
-  /** The location list's rows. A row that is not selected is chosen, which
-   *  opens it; the one that is already chosen folds and unfolds, because the
-   *  body is long and hiding it is not a reason to generate for somewhere
-   *  else. */
+  /** A location row: choosing one opens it; the chosen one folds and unfolds. */
   const toggleLocation = (l: Location) => {
     if (locations.selectedId !== l.id) {
       locations.pick(l.id);
@@ -333,23 +212,13 @@ export function AgentPanel({
     }
     locRow.toggle(l.id);
   };
-  /** Done with the location: fold its row and its whole section away, and open
-   *  the agent list under it.
-   *
-   *  The one move the panel could not make on its own. `pinned` follows the
-   *  step until something is clicked, and choosing a location pins it *open* --
-   *  correctly, since its settings are the next thing to read -- so nothing
-   *  released it again except picking an agent, which is inside the section
-   *  that was in the way. Both halves are needed: the section carries the
-   *  fold, and the row carries the settings form, which would otherwise still
-   *  be open behind it the next time the section is expanded. */
+  /** Done with the location: fold its row and section, and open the agents. */
   const confirmLocation = () => {
     locations.confirm();
     locRow.setOpen(null);
     setPinned("agent");
   };
-  /** ...and done with the agent: fold it away too. Nothing opens after it --
-   *  the step is finished, which is what Next now waits for. */
+  /** Done with the agent: fold everything; the step is finished. */
   const confirmAgent = () => {
     agents.confirm();
     agentRow.setOpen(null);
@@ -368,12 +237,7 @@ export function AgentPanel({
       if (await credential.regenerate() && agentId.current === forAgent) setArm("done");
     } catch (e) {
       if (agentId.current !== forAgent) return;
-      // The account's own refusal, which names the ship and says a token read
-      // off the BlazeMeter UI works just as well. Back to idle: nothing was
-      // issued, so nothing was lost, and the button has to be pressable again.
-      // Unless the agent is simply gone, which is not a refusal to say anything
-      // about a credential -- see stale.ts on why "agent" is right here even
-      // where it was the location that went.
+      // The account's refusal, or a gone agent. Back to idle: nothing was issued.
       setIssueErr(goneNotice(e, "agent") ?? String((e as Error).message));
       setArm("idle");
     } finally { setIssuing(false); }
@@ -393,8 +257,7 @@ export function AgentPanel({
         options={[
           { value: "connect", label: "Connect to BlazeMeter",
             hint: "Pick a location and agent; a new agent's token is issued once, when you create it.",
-            // Nothing to pick from without a key, and the key is not this
-            // step's to ask for any more -- it is the key at the foot of the nav drawer.
+            // Nothing to pick from without a key.
             disabledReason: source.who ? undefined
               : "connect an account first — the key at the foot of the menu" },
           { value: "manual", label: "Enter values manually",
@@ -411,21 +274,10 @@ export function AgentPanel({
           onAuthToken={credential.setToken} />
       ) : (
         <>
-          {/* One block, in one place, whatever state it is in. It used to
-              swap for a single "Connected as ..." line, so connecting made the
-              whole step jump and disconnecting made it jump back -- and the
-              way out moved with it. The fields stay put and describe the key
-              in use; the button that connected is the button that
-              disconnects. */}
           <SubSection title="Private location" done={!!locations.selectedId}
             {...fold("location")}
             action={
-              /* One word, and what it costs is said under the list rather than
-                 on the button -- the rule this page keeps for every label. It
-                 is shown only in connect mode for free, by being here: manual
-                 entry renders none of this branch, and has no account to
-                 re-read. Disabled until there is a key, for the same reason the
-                 list below is empty then. */
+              /* Needs a key; connect mode only, since this branch is. */
               <Button kind="ghost" onClick={locations.refresh}
                 busy={locations.refreshing} disabled={!source.who}>
                 Refresh
@@ -436,12 +288,7 @@ export function AgentPanel({
             hint="A location holds agents. Open one to see what the sizing
                   above would change about it, and to save that change.">
             <div className="space-y-3">
-              {/* Neither picker is here any more: both are at the foot of the
-                  nav drawer with the key, because the account decides what
-                  three separate views show and the workspace comes with it.
-                  What is left is the sentence saying which of them this list
-                  is -- a list of locations with no idea which account they are
-                  from is the thing the pickers were really for. */}
+              {/* Which account and workspace this list is from. */}
               <p className="text-2xs text-slate-500">
                 {locations.accountName ? (
                   <>Locations in <b>{locations.workspaceName ?? "every workspace"}</b>
@@ -453,16 +300,10 @@ export function AgentPanel({
                   </span>
                 )}
               </p>
-              {/* The selection survived a Refresh that its location did not.
-                  A notice and not an error: nothing failed, and the remedy is
-                  one row down rather than a retry. */}
+              {/* The selection survived a Refresh its location did not. */}
               <NoticeMsg msg={vanished ? vanishedNotice("location") : null} />
-              {/* Outside the form rather than only beside the button that opens
-                  it: a refused create leaves the form open, so an error shown
-                  only in the closed state is an error nobody sees. */}
+              {/* Outside the form, so a refusal stays visible with it open. */}
               <ErrorMsg msg={locations.error} />
-              {/* Above the list, like the agent panel below: the two read the
-                  same way down the page -- make one, or choose one. */}
               {locations.create.open ? (
                 <NewLocation create={locations.create} />
               ) : (
@@ -480,43 +321,22 @@ export function AgentPanel({
                   <Spinner className="text-bzm" /> reading this workspace&apos;s locations…
                 </p>
               )}
-              {/* A list has to look like one: zebra banding and a divider a
-                  shade darker than the card's own border. Rows that share a
-                  background and a hairline read as one block of text. */}
+              {/* Zebra rows with a visible divider, so it reads as a list. */}
               <div className={"max-h-[32rem] overflow-y-auto border border-slate-300 rounded-md divide-y divide-slate-200 "
                 + (locations.busy ? "opacity-40" : "")}>
                 {shown.map((l, i) => {
                   const n = (l.ships ?? []).length;
                   const up = onlineCount(l.ships);
-                  // Chosen and open are two things now: the row folds without
-                  // giving up being the location the bundle is for.
+                  // Chosen and open are separate: a row folds and stays chosen.
                   const on = l.id === locations.selectedId;
                   const isOpen = locRow.open === l.id;
                   return (
-                    // A div wrapping the row and its body, like an agent row:
-                    // the settings belong to this location, so they open out of
-                    // it rather than sitting under the list where they would
-                    // read as the list's.
                     <div key={l.id}
                       className={on ? "bg-bzm/10 border-l-4 border-bzm"
                         : i % 2 ? "bg-slate-50/70" : "bg-white"}>
-                      {/* Pinned open by the click that selects: the row opens
-                          onto what the sizing would change about this
-                          location and the one control that saves it, and a
-                          section that folds itself the moment you act on it
-                          takes that decision off screen. It was worse than it
-                          sounds -- a location with one idle agent is auto-picked,
-                          so the panel could arrive and be hidden in the same
-                          frame. Clicking an agent below releases it.
-
-                          Not for an empty location: it has no agent to run
-                          anything under, so the next thing is creating one and
-                          the fold should go where it always went.
-
-                          A second click on the same header folds the body back
-                          up. Before, the only way to put that much text away was
-                          to click a different location -- which changes what is
-                          being generated in order to hide something. */}
+                      {/* Selecting pins the location section open on its
+                          settings; clicking an agent releases it. A second click
+                          on the chosen row folds its body. */}
                       <button type="button" onClick={() => toggleLocation(l)}
                         aria-expanded={isOpen}
                         className="w-full text-left px-3 py-2.5 text-sm hover:bg-slate-100/60 flex items-center gap-2">
@@ -533,9 +353,7 @@ export function AgentPanel({
                           {n ? `${plural(n, "agent")}${up ? ` · ${up} online` : ""}`
                              : "no agents yet"}
                         </span>
-                        {/* The chevron follows the body, not the selection:
-                            it is the control's own state, and a chosen row
-                            folded shut points down at nothing. */}
+                        {/* Follows the body, not the selection. */}
                         <Chevron open={isOpen} />
                       </button>
                       <Collapse open={isOpen}>
@@ -596,10 +414,7 @@ export function AgentPanel({
                           placeholder="e.g. k8s-prod-cluster" />
                       </Field>
                       <div className="flex gap-2 items-center">
-                        {/* Creating an agent is a round trip that also issues
-                            its token; the button says so while it waits rather
-                            than looking ignored, which is how a second click --
-                            and a second agent -- happens. */}
+                        {/* Busy while it waits: a second click is a second agent. */}
                         <Button disabled={!locations.selectedId || !newName}
                           busy={makingShip} onClick={createShip}>
                           {makingShip ? "Creating…" : "Create"}
@@ -624,16 +439,10 @@ export function AgentPanel({
                         const on = s.id === agents.id;
                         const isOpen = agentRow.open === s.id;
                         return (
-                          // Selected is the same blue as a selected location
-                          // above: the two lists are the same kind of choice,
-                          // and a fainter tint here read as banding rather than
-                          // as selection.
+                          // Selected in the same blue as a location.
                           <div key={s.id} className={on ? "bg-bzm/10"
                             : i % 2 ? "bg-slate-50/70" : "bg-white"}>
-                            {/* A div, not a button: the row is clickable and so
-                                are the controls inside it, and a button inside a
-                                button is not valid HTML -- the browser unnests
-                                it and the inner one stops receiving clicks. */}
+                            {/* A div: a button would nest the buttons inside it. */}
                             <div onClick={() => toggle(s.id)}
                               className={"w-full text-left px-3 py-2.5 text-sm hover:bg-slate-100 flex items-center gap-2 cursor-pointer "
                                 + (on ? "border-l-4 border-bzm" : "")}>
@@ -665,10 +474,7 @@ export function AgentPanel({
                                         placeholder="paste the token this agent was created with" />
                                     </label>
                                     <div className="flex items-center gap-2 flex-wrap">
-                                      {/* Regenerating is an act, not a
-                                          consequence of having clicked the row:
-                                          nothing changes until this is pressed
-                                          twice. */}
+                                      {/* Nothing changes until this is pressed twice. */}
                                       {(reusing || arm === "done") && (
                                         <button type="button"
                                           disabled={issuing || arm === "done"}
@@ -685,9 +491,7 @@ export function AgentPanel({
                                                 done: "Regenerated" }[arm]}
                                         </button>
                                       )}
-                                      {/* Armed has to have a way out, or the
-                                          only exits are the destructive button
-                                          and closing the row. */}
+                                      {/* A way out of the armed state. */}
                                       {arm === "armed" && !issuing && (
                                         <button type="button"
                                           onClick={(e) => { e.stopPropagation(); setArm("idle"); }}
@@ -695,16 +499,7 @@ export function AgentPanel({
                                           Cancel
                                         </button>
                                       )}
-                                      {/* Whichever of the two it is. It used to
-                                          be one sentence, because there was one
-                                          state: nothing remembered a token, so
-                                          an empty field could only mean the
-                                          agent predated this app's knowledge of
-                                          it. Now the field can be empty because
-                                          the store could not be asked, and
-                                          saying "cannot be read back" over that
-                                          would be a claim about the agent made
-                                          without asking. */}
+                                      {/* "could not ask" and "holds none" read differently. */}
                                       {reusing && arm === "idle" && !issuing
                                         && credential.note && (
                                         <span className="text-2xs text-slate-500">
@@ -758,13 +553,8 @@ export function AgentPanel({
                   {agents.facts.func_ids?.join(", ")}
                 </p>
               )}
-              {/* The same row, in the same place, as the location's above: what
-                  is being confirmed on the left, the control on the right.
-                  Nothing to write here -- an agent is chosen, not edited -- so
-                  the only reason this button exists is the one the location's
-                  Confirm turned out to need as well: somebody has to say the
-                  choice is made. A lone agent is auto-picked, so without it the
-                  step could complete itself. */}
+              {/* Confirming the agent, like the location: a lone agent is
+                  auto-picked, so somebody still has to say it is the one. */}
               {!agents.busy && location && !empty && (
                 <div className="flex items-center gap-2 border-t border-slate-100 pt-3">
                   <span className="text-2xs text-slate-500">
@@ -788,17 +578,8 @@ export function AgentPanel({
   );
 }
 
-/** The new-location form: four fields, and App's write behind Create.
- *
- *  Rendered here rather than handed over as a finished element (#103), and the
- *  distinction that makes it safe is that `submit` is still App's -- this file
- *  has no client and cannot reach the account, so what a click costs is decided
- *  in one place and said in this one. The agent form above it has worked that
- *  way all along; a location arriving pre-rendered was the odd one out.
- *
- *  Busy while it waits, like that form and for the same reason: this is a round
- *  trip to BlazeMeter, and a button that looks ignored gets a second click --
- *  which here means a second location in the customer's account. */
+/** The new-location form. The write is App's `submit`; busy while it waits,
+ *  since a second click would create a second location. */
 function NewLocation({ create }: { create: NewLocationHandover }) {
   const [busy, setBusy] = useState(false);
   const { draft, setDraft } = create;
@@ -812,8 +593,7 @@ function NewLocation({ create }: { create: NewLocationHandover }) {
       <p className="text-xs font-semibold text-slate-700">
         New private location
       </p>
-      {/* The workspace is named on the field rather than asked for: it is the
-          one at the foot of the drawer, and this write lands in it. */}
+      {/* The workspace is named, not asked: it is the drawer's. */}
       <Field required
         label={`Name (created in workspace: ${create.workspace ?? "?"})`}>
         <TextInput value={draft.name}
@@ -823,12 +603,8 @@ function NewLocation({ create }: { create: NewLocationHandover }) {
           {create.choices.map((c) => (
             <Check key={c.id} label={c.label}
               checked={draft.func_ids.includes(c.id)}
-              // The same rule the manual declaration keeps, at the other
-              // surface that *decides* what a location is: service
-              // virtualization is created on its own, because crane sizes every
-              // pod it creates from one CPU/memory pair. `toggleDeclared` is
-              // also what keeps the list in the order the boxes are drawn and
-              // free of the duplicate the old spread could produce.
+              // Service virtualization is created alone; toggleDeclared keeps
+              // the list in box order.
               onChange={(on) => setDraft((d) => ({
                 ...d,
                 func_ids: toggleDeclared(d.func_ids, c.id, on,
@@ -836,15 +612,11 @@ function NewLocation({ create }: { create: NewLocationHandover }) {
                                          exclusiveWith(create.engines)),
               }))} />
           ))}
-          {/* Said whether or not it has happened yet: a rule that only speaks
-              up after it has taken a tick away reads as the form losing one. */}
+          {/* Said before a tick is taken away, not after. */}
           <p className="basis-full text-2xs text-slate-500">{SV_ALONE}</p>
         </div>
-        {/* The minimum is on the field, and it is there from the moment the
-            box is ticked rather than from the moment Create is refused: what
-            the amber sentence below carries is BlazeMeter's own words, which
-            say what is wrong and not what to type. Nothing raises the number
-            here -- slots is engines per agent and a real cost. */}
+        {/* The minimum is on the field from the moment the box is ticked; the
+            refusal below is BlazeMeter's own words. Nothing raises it for you. */}
         <Field label="Slots"
           hint={rule ? `${rule.label} needs at least ${rule.minimum}`
                      : "concurrent engines"}>
@@ -858,9 +630,7 @@ function NewLocation({ create }: { create: NewLocationHandover }) {
               setDraft((d) => ({ ...d, threads_per_engine: Number(v) }))} />
         </Field>
       </div>
-      {/* Create stays put and greys out, and says which of the two things it is
-          waiting for -- a button that disables itself without a reason is the
-          same dead end as one that disappears. */}
+      {/* Create greys out and says what it is waiting for. */}
       <div className="flex gap-2 items-center">
         <Button disabled={!!create.blockedBy} busy={busy} onClick={submit}>
           {busy ? "Creating…" : "Create"}

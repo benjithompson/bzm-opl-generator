@@ -1,29 +1,7 @@
-// The sizing: what the run needs, above the locations it might run on.
-//
-// A *sizing*, never a profile (#155). A profile in this repo is a JSON file
-// of generator options -- `profiles/*.json`, `out/profile.json`, `--profile`
-// -- and this is a different kind of thing entirely: a statement of the
-// capacity one functionality needs, which the planner turns into engines,
-// nodes and a machine size.
-//
-// It was a view of its own -- "Plan capacity", beside Generate in the drawer --
-// and being beside it was the problem. The planner is the *first* question ("how
-// much cluster does 5,000 users need?"), the generator is the last, and a person
-// who has neither an account nor a cluster had to know that the answer to the
-// first one had to be carried into the second by hand, with a button, from
-// another screen. So it is step 1's first card: sized before anything is
-// connected, and every location below it measured against what it says.
-//
-// It reaches nothing, and that is the requirement rather than a property.
-// /api/plan is arithmetic in this process -- no key, no account, no cluster --
-// which is why this card renders and computes on a page nobody has connected.
-// Any dependency added here puts the first step behind a later one.
-//
-// Nothing in it applies anything. The fields *are* the sizing: there is no
-// Apply, because there is nothing to apply it to that is not already reading
-// them -- the location panels below take their `after` column straight from
-// this, and the engine size is the bundle's own option rather than a copy of
-// one.
+// The sizing card, step 1's first: what the run needs (a sizing, not a
+// profile), before anything is connected. /api/plan needs no key, account or
+// cluster, and must stay that way. Nothing here applies anything: the fields
+// are the sizing, and the location panels below read them.
 import { useState } from "react";
 
 import { Api, SizingModel } from "../api";
@@ -35,57 +13,40 @@ import { remove, save, SavedSizing, sizingNamed } from "../sizings";
 import { PlanAsk, PlanInputs, useCapacityPlan, useEngineRating } from "../usePlan";
 
 export function Sizing(props: {
-  /** The caller of the local routes, handed down like every other route on this
-   *  page. /api/plan reaches nothing outside this process, which is the whole
-   *  reason this card works unconnected -- but it is still a request, and a
-   *  request this page cannot swap is a request its tests cannot drive. */
+  /** The route caller; /api/plan reaches nothing outside this process. */
   api: Api;
-  /** What is being sized. The same record every location row measures itself
-   *  against, assembled once by App -- the sizing rows are the planner's own
-   *  (below) and the rest are bundle options. */
+  /** What is being sized, the same record every location row measures against. */
   ask: PlanAsk;
-  /** The three models, served. Empty until /api/sizing-models lands, and then
-   *  the card has no fields: a unit invented here to fill the gap is the one
-   *  thing that would put a figure on screen this tool never measured. */
+  /** The served sizing models. Empty until they land, and then there are no fields. */
   models: SizingModel[];
   inputs: PlanInputs;
   setInputs: (v: PlanInputs) => void;
-  /** Sizings saved under a name, and the writer for them. Held by App with
-   *  every other piece of session state, for the same reason. */
+  /** Sizings saved under a name, held by App with the session. */
   saved: SavedSizing[];
   setSaved: (v: SavedSizing[]) => void;
-  /** The engine the bundle asks for. Written here because the sizing is for
-   *  that engine and not for a second one held beside it. */
+  /** Writes the bundle's engine size, which the sizing is for. */
   setEngine: (cpu: string | null, mem: string | null) => void;
   setPerNode: (v: string) => void;
 }) {
   const { ask, inputs, models } = props;
-  // Open/closed, and what the request block is showing: the card's own, like
-  // every other disclosure on this page. Nothing downstream reads them.
+  // View state; nothing downstream reads it.
   const [open, setOpen] = useState(false);
   const [showDoc, setShowDoc] = useState(false);
   const [copied, setCopied] = useState(false);
-  // The clipboard's own failure, which is not the plan's: the hook owns whether
-  // the plan could be worked out, and a browser refusing the clipboard says
-  // nothing about that.
+  // The clipboard's own failure, separate from the plan's.
   const [copyErr, setCopyErr] = useState<string | null>(null);
 
-  // No `agents`: the card sizes the run, and how many agents will serve it is a
-  // fact about a location, not about the load. Each location row re-asks with
-  // its own count -- see usePlan.
+  // No `agents`: the card sizes the run; each location re-asks with its own count.
   const { plan, err, busy } = useCapacityPlan(ask, props.api);
 
-  // What a saved sizing would be called. The card's own, like every other
-  // disclosure here: nothing downstream reads a half-typed name.
+  // A saved sizing's name, as typed.
   const [name, setName] = useState("");
 
   const setTarget = (fid: string, v: string) => props.setInputs(
     { ...inputs, targets: { ...inputs.targets, [fid]: v } });
   const setFigure = (fid: string, v: string) => props.setInputs(
     { ...inputs, figures: { ...inputs.figures, [fid]: v } });
-  // Ticking a functionality on and off. The target it was given is kept while
-  // it is off: unticking is "not this run", and coming back to a box somebody
-  // has to fill in again reads as the page having lost it.
+  // Unticking keeps the target, so ticking again does not lose it.
   const toggle = (fid: string, on: boolean) => props.setInputs({
     ...inputs,
     functionalities: on
@@ -94,38 +55,25 @@ export function Sizing(props: {
   });
   const sized = (m: SizingModel) => inputs.functionalities.includes(
     m.functionality);
-  // What the plan said about a model, where it said anything: the three-valued
-  // answer lives on the server and this only renders it.
+  // What the plan said about a model, if anything.
   const answer = (fid: string) =>
     plan?.sizings.find((s) => s.functionality === fid) ?? null;
 
-  // Blank is the standard engine, which is what both sides assume when no size
-  // is named (plan.py, and generate.ENGINE_DEFAULT_CPU / _MEM) -- so a card that
-  // had not been touched showed "Custom" and two empty boxes for a size it was
-  // in fact planning against.
-  //
-  // Which is why "Custom…" has to be remembered rather than derived: it clears
-  // both limits, and cleared limits read back as Standard, so choosing it
-  // snapped the select straight back and the two fields never appeared. It is a
-  // view's state -- which fields are on screen -- and not a value anything
-  // downstream reads.
+  // Blank limits are the standard engine. "Custom…" is remembered rather than
+  // derived: it clears both limits, which would read back as Standard.
   const [custom, setCustom] = useState(false);
   const preset = custom ? "custom" : (ENGINE_SIZES.find(
     (s) => s.cpu === ask.engineCpu && s.mem === ask.engineMem)?.id
     ?? (ask.engineCpu || ask.engineMem ? "custom" : "standard"));
   const size = ENGINE_SIZES.find((s) => s.id === preset);
-  // What the chosen size is rated for, per model, whether or not a target has
-  // been typed: the figure is most use *before* one is, since that is when the
-  // size is being chosen. Keyed by funcId, so each row reads its own -- the
-  // card asks nothing about which model it is drawing.
+  // What the chosen size is rated for, per model, before any target is typed.
   const rated = useEngineRating(ask.engineCpu || size?.cpu,
                                 ask.engineMem || size?.mem, props.api);
   const ratedFor = (fid: string) => rated?.[fid] ?? null;
 
   const download = () => {
     if (!plan) return;
-    // Built here rather than fetched: the document is already in the answer,
-    // and a second round trip could only disagree with what is on screen.
+    // The document is already in the answer; no second request.
     const url = URL.createObjectURL(
       new Blob([plan.document], { type: "text/markdown" }));
     const a = document.createElement("a");
@@ -145,9 +93,7 @@ export function Sizing(props: {
 
   return (
     <section className="border border-slate-200 rounded-lg overflow-hidden bg-white">
-      {/* The summary and the one control. A card that opened on its form would
-          make every visit to step 1 begin with a calculator, and most of them
-          are about the agent below it. */}
+      {/* The summary and the Edit control; the form starts folded. */}
       <div className="flex items-center gap-3 px-3 py-2.5 bg-slate-50
                       border-b border-slate-200">
         <div className="grow min-w-0">
@@ -156,19 +102,11 @@ export function Sizing(props: {
           </p>
           <p className={"text-sm mt-0.5 " + (busy ? "opacity-50" : "")}>
             {plan ? (
-              // The whole chain, because the total is node capacity and no two
-              // adjacent figures multiply into it: 10 engines at 2 CPU is 20,
-              // and the answer is 30, the difference being the CPU and memory
-              // a node spends on itself before any pod sees any (one per node,
-              // so it scales with nodes rather than with engines). Stated as
-              // "10 engines × 2 CPU / 8Gi · 30 vCPU total" it read as
-              // arithmetic that does not work, and a summary a reader has to
-              // distrust is worse than one that is longer.
+              // The whole chain: the total is node capacity, which includes
+              // what each node spends on itself, so no two adjacent figures
+              // multiply into it.
               <span className="text-slate-800 tabular-nums">
-                {/* Every sizing in its own unit, because two of the three are
-                    not virtual users and a summary that said VUs about a
-                    browser suite would be a figure about somebody else's
-                    workload. */}
+                {/* Every sizing in its own unit. */}
                 {plan.sizings.map((s) => (
                   `${s.target.toLocaleString()} ${s.unit}`)).join(" + ")}
                 {" · "}{plan.engines} engine
@@ -188,8 +126,6 @@ export function Sizing(props: {
         </Button>
       </div>
 
-      {/* Downward, inside the card, on the same 0fr -> 1fr grid as every other
-          disclosure here. */}
       <Collapse open={open}>
         <div className="p-3 space-y-3">
           <p className="text-xs text-slate-500">
@@ -203,13 +139,8 @@ export function Sizing(props: {
             setSaved={props.setSaved} inputs={inputs}
             setInputs={props.setInputs} />
 
-          {/* One block per model, each asked for in its own unit. A location
-              that runs several is sized for the largest of them, which is the
-              server's rule and is stated below rather than worked out here.
-              Rendered from the served table: a fourth model arrives by being
-              added to plan.py, and until the table lands there is nothing to
-              render, because a unit invented here to fill the gap would put a
-              figure on screen this tool never measured. */}
+          {/* One block per served model, in its own unit. A location running
+              several is sized for the largest; the server says which. */}
           {models.map((m) => (
             <div key={m.functionality}
               className="border border-slate-200 rounded-md p-3 space-y-2">
@@ -224,12 +155,8 @@ export function Sizing(props: {
                       value={inputs.targets[m.functionality] ?? ""}
                       onChange={(v) => setTarget(m.functionality, v)} />
                   </Field>
-                  {/* A model with no measured figure gets no box. Blank there
-                      would be a figure nobody supplied, which is the state
-                      this whole card has to keep apart from a figure this
-                      tool chose -- and the explanation is the server's
-                      sentence, which arrives as a warning below or as the
-                      refusal in its place. */}
+                  {/* No box for an unmeasured model; the server's warning or
+                      refusal explains it. */}
                   {m.measured ? (
                     <Field label={_cap(m.figure_unit)}
                       hint={_figureHint(ratedFor(m.functionality))}>
@@ -252,8 +179,7 @@ export function Sizing(props: {
           ))}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {/* The bundle's own engine size, edited here as well as in the
-                Configure step's Sizing group: one option, two views of it. */}
+            {/* The bundle's own engine size, also edited on the configure step. */}
             <EngineSizeSelect preset={preset} custom
               hint="the pod limits every engine runs at — the bundle asks for these"
               onPreset={(cpu, mem) => {
@@ -282,8 +208,7 @@ export function Sizing(props: {
 
           <div className={"space-y-3 transition-opacity " + (busy ? "opacity-50" : "")}>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              {/* Em-dashes rather than zeroes: nothing has been worked out
-                  yet, and "0 engines" is an answer. */}
+              {/* Em-dashes, not zeroes: nothing has been worked out yet. */}
               <Figure big n={plan ? plan.engines : "—"}
                 unit={plan && plan.engines === 1 ? "engine" : "engines"}
                 sub={plan ? `${plan.engine.cpu} CPU / ${plan.engine.memory} each` : " "} />
@@ -295,11 +220,8 @@ export function Sizing(props: {
               <Figure big n={plan ? 0 : "—"} unit="when idle"
                 sub="the pool exists only during a run" />
             </div>
-            {/* Which sizing the pod count came from. Only where there is more
-                than one, because with one it is the only answer there could
-                be -- and it is the server's `driven_by` rather than the
-                largest of what is on screen, which would be this page
-                deciding it a second time. */}
+            {/* Which sizing drove the pod count (the server's `driven_by`),
+                only where there are several. */}
             {plan && plan.sizings.length > 1 && (
               <p className="text-xs text-slate-500">
                 Sized for the{" "}
@@ -318,9 +240,7 @@ export function Sizing(props: {
                 {" "}{plan.engine.tmp_gb}GB of it under <code>/tmp</code>.
               </p>
             ) : !err && (
-              // Only where nothing has been asked. With a refusal on screen
-              // the reason is the refusal, and telling somebody to give a
-              // target they have just given reads as the page not listening.
+              // Only where nothing has been asked; a refusal explains itself.
               <p className="text-xs text-amber-700">
                 tick a functionality and give it a target to size this run
               </p>
@@ -329,9 +249,8 @@ export function Sizing(props: {
               warnings={plan?.warnings ?? []} />
           </div>
 
-          {/* The request document, inside the editor: it is the same numbers
-              written for a platform team, so it belongs beside the fields
-              that decide them rather than in a card of its own. */}
+          {/* The request document, written for a platform team, beside the
+              fields that decide it. */}
           <div className={cardCls}>
             <div>
               <h3 className="text-sm font-semibold text-slate-800">
@@ -373,23 +292,13 @@ export function Sizing(props: {
 }
 
 
-/** The unit as a field label. Served lower-case, because it is prose in the
- *  request document first ("of up to 5,000 virtual users") and a label
- *  second. */
+/** The unit as a field label (served lower-case, as prose). */
 function _cap(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** What blank does in this model's figure box.
- *
- *  One sentence with the number in it wherever the number is known, which since
- *  the rating is served per model is every model with a measured figure. It was
- *  two wordings and a branch on `functionality === "performance"`: the route
- *  answered in virtual users alone, so a browser field could only say what
- *  blank *meant* about a figure the server could already have given it.
- *
- *  Null is still a real answer -- the rating has not arrived, or the size does
- *  not parse -- and the general sentence is what it says. */
+/** What leaving this model's figure blank means, with the rated number where
+ *  it is known; a general sentence while it is not. */
 function _figureHint(rated: number | null) {
   return rated
     ? `blank uses ${rated.toLocaleString()}, what this engine size is rated for`
@@ -397,13 +306,8 @@ function _figureHint(rated: number | null) {
 }
 
 
-/** Sizings saved under a name: pick one to fill the fields, or name what is in
- *  them now.
- *
- *  Picking is the only thing on this card that could be called "apply", and it
- *  is not one: it writes the fields, and the fields *are* the sizing. There is
- *  still nothing to apply them to -- the location panels below read them where
- *  they stand, and the engine size is the bundle's own option. */
+/** Saved sizings: pick one to fill the fields, or save what is in them now
+ *  under a name. Picking writes the fields and nothing else. */
 function SavedSizings(props: {
   name: string; setName: (v: string) => void;
   saved: SavedSizing[]; setSaved: (v: SavedSizing[]) => void;
@@ -413,10 +317,7 @@ function SavedSizings(props: {
   const exists = saved.some((s) => s.name === name.trim());
   return (
     <div className="space-y-1">
-      {/* The hint sits under the whole row rather than under the picker: a
-          `Field` renders its hint below its own control, so a hint on one of two
-          side-by-side fields pushes that one taller and `items-end` then lands
-          the select a line above the input beside it. */}
+      {/* The hint sits under the whole row, so the two controls stay aligned. */}
       <div className="flex flex-wrap items-end gap-2">
         <Field label="Saved sizings">
           <select className={inputCls} value=""

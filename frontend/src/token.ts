@@ -1,99 +1,39 @@
-// What the download button is about to do to the agent's credential, and what
-// this app still holds of one it minted.
-//
-// Two questions about one value, so one module: what a click will cost, and
-// what a refresh left behind (#123). Both are answers *about* a credential and
-// neither is one -- nothing here holds a token, and the second half deals only
-// in which of four things the server said.
-//
-// Which of four ways a bundle's token arrived is core's rule and arrives on the
-// answer (TokenReport) -- nothing here re-decides one. What is left is what to
-// say about it *before* the click, which is the only moment that helps: a
-// credential problem announced afterwards is a post-mortem, and the pod is
-// already broken (#64).
-//
-// It took a rotate choice too, because the download step had a box that minted
-// one. That box is gone -- minting is step 1's, on the agent the credential
-// belongs to, where what it kills is on screen -- so the page never asks for a
-// rotation and this never describes one. `rotate_token: false` is still *sent*
-// rather than assumed: it is the request, and #104 is about that being one
-// value rather than a flag each caller converts.
-//
-// Plain data in, data out, and tested, because the places this used to be
-// decided -- the hint beside the button and whether the request rotates at all
-// -- are exactly the ones that can disagree.
-//
-// What it hands back for the third of those is the *request*, not a flag (#104).
-// A boolean is advice: the two buttons each turned it into a `rotate_token`
-// argument, and the conversion sat outside everything this module's tests can
-// reach -- so the one failure the module exists to prevent lived in the two
-// lines it did not own. A TokenRequest is spread into the body as it stands,
-// which leaves nothing to convert and no second place to convert it differently.
+// What the download button will do to the agent's credential, and what the
+// server still holds of a token this app minted. Nothing here holds a token.
+// How a bundle's token arrived is core's rule (TokenReport); this only says it
+// before the click, and produces the request so no caller converts a flag.
 import { TokenBranch, TokenReport, TokenRequest } from "./api";
 
-/** What a rotation will do, named against the agent it will do it to.
- *
- *  The server says this too (core.rotation_warning, before it mints), and this
- *  copy is not that one: it is said while the box is being ticked, which is the
- *  only moment at which anybody can still decide not to. */
+/** What a rotation does, named against the agent it does it to. Shown before
+ *  the click, the one moment it can still be reconsidered. */
 export const rotateHazard = (shipId: string | null) =>
   `A new AUTH_TOKEN${shipId ? ` for agent ${shipId}` : ""} kills the current one `
   + "at once: anything already running on it answers 404 and sits at 0/1 "
   + "Running until this bundle is re-applied, Secret included.";
 
 export interface DownloadPlan {
-  /** What the next bundle request carries about the credential. Handed to
-   *  api.downloadZip whole -- it is the request, so the button decides nothing
-   *  about it. */
+  /** What the next bundle request carries about the credential, sent as it stands. */
   request: TokenRequest;
   /** Beside the button: what the bundle will carry. */
   hint: string;
-  /** Whether the bundle leaves the AUTH_TOKEN as a marker -- and the third
-   *  answer is what the field is for.
-   *
-   *  It was a boolean, defaulting to true before the first preview landed, on
-   *  the reading that claiming a token the bundle may not carry is the worse
-   *  mistake. That is right about the *hint*, which says what the bundle
-   *  carries and has to say something. It is wrong about a row in a list of
-   *  fields left blank: `report` is null for the moment before the preview
-   *  answers, so every bundle grew an AUTH_TOKEN row on arrival and lost it a
-   *  moment later -- unread rendering as a gap, which is this codebase's oldest
-   *  rule in the one place a boolean could not express it.
-   *
-   *  `"unread"` is a string for `ui_build.UNRECORDED`'s reason: `=== true` and
-   *  `=== false` both miss it, so a caller that folds it into either has to say
-   *  so. The panel drops the row; the hint keeps the cautious sentence. */
+  /** Whether the bundle leaves the AUTH_TOKEN as a marker, or "unread" before
+   *  the first preview. A string so `=== true` and `=== false` both miss it:
+   *  the panel shows no row for it, and the hint stays cautious. */
   incomplete: boolean | "unread";
 }
 
 const CARRIES: Record<TokenBranch, string> = {
   given: "the generated AUTH_TOKEN",
   rotated: "a NEW AUTH_TOKEN, issued now",
-  // No request from this page produces `reused` any more -- Save to folder went
-  // to the CLI, so `out_dir` is a constant null. The sentence stays because the
-  // branch is the server's to send and the header it arrives in is cast without
-  // validation: dropping it here would not stop it arriving, only leave the
-  // line beside the button blank when it did.
+  // No request from this page produces `reused`, but the server may still send
+  // it, and a missing sentence would leave the line blank.
   reused: "the AUTH_TOKEN already in that folder",
   placeholder: "AUTH_TOKEN left as a placeholder — fill it in before applying",
 };
 
-/** What the next download will do, from the preview's own report.
- *
- *  `report` is null only before the first preview lands, and the two fields
- *  answer that differently on purpose. The **hint** reads it as the
- *  placeholder: it is one line beside the button and it has to say something,
- *  and a bundle claimed to carry a token it may not have is the failure worth
- *  avoiding. `incomplete` answers `"unread"`, because a *row* naming a field
- *  left blank is a claim about the bundle rather than a caution about it, and
- *  making that claim before anything has been read is the failure worth
- *  avoiding there.
- *
- *  Every branch sends the same request now. That is not the same as sending
- *  nothing -- `given` and `placeholder` are still distinct answers about what this
- *  bundle carries, and the hint says which -- and it is why the report is still
- *  read rather than the branch being assumed.
- */
+/** What the next download will do, from the preview's own report. Before the
+ *  first preview (`report` null) the hint assumes a placeholder and
+ *  `incomplete` is "unread". */
 export function downloadPlan(report: TokenReport | null): DownloadPlan {
   const branch = report?.branch ?? "placeholder";
   return { request: { rotate_token: false }, hint: CARRIES[branch],
@@ -101,45 +41,19 @@ export function downloadPlan(report: TokenReport | null): DownloadPlan {
 }
 
 
-/** What the server said it still holds for the selected agent (#123).
- *
- *  Four states, because the question is asked over a request and a request has
- *  a before as well as three afters:
- *
- *    asking  -- the answer is outstanding. Not "none": for the moment before it
- *               lands the field is empty for a reason that has nothing to do
- *               with the agent, and the sentence for `none` would be a claim
- *               made without having asked.
- *    held    -- there is one, and it is already in the field. Silently, on
- *               purpose: a token claims nothing about the world, so there is
- *               nothing to caveat.
- *    none    -- this process holds no token for that ship. A ship this app never
- *               minted for, one whose credential was typed over, and a server
- *               that has restarted since, are all honestly this -- so the
- *               sentence is about what is held, never about what was minted.
- *    unread  -- the server could not be asked. **Not `none`.** This is the
- *               distinction this codebase keeps everywhere: an agent nobody
- *               minted for and an agent nobody could ask about are different
- *               answers, and only one of them is entitled to say a credential
- *               cannot be read back. */
+/** What the server said it holds for the selected agent: `asking` (answer
+ *  outstanding), `held` (in the field), `none` (it holds none) or `unread` (it
+ *  could not be asked). Only `none` may say a token cannot be read back. */
 export type Recall = "asking" | "held" | "none" | "unread";
 
-/** How the store's answer reads. `auth_token` is null for "holds none"; a
- *  failed request never reaches here, because it is not an answer. */
+/** How the lookup's answer reads; a failed request never gets here. */
 export const recalled = (answer: { auth_token: string | null }): Recall =>
   (answer.auth_token ? "held" : "none");
 
-/** What to say beside an agent with no credential in hand, or null for nothing.
- *
- *  Only reached where the field is empty -- a token in it explains itself. Kept
- *  here rather than as a ternary at the field because the two sentences it
- *  chooses between are the two states that must never be confused, and one of
- *  them was the only one that existed before there was a store to ask. */
+/** What to say beside an agent whose token field is empty, or null. */
 export function recallNote(recall: Recall): string | null {
   if (recall === "unread") {
-    // No claim about the agent: the app may well be holding this one's token
-    // and simply be unable to say so. What it offers instead is the way on,
-    // which is the same way on an agent it never created has.
+    // No claim about the agent; the app may hold its token and be unable to say.
     return "could not ask this app what it still holds for this agent — "
       + "paste the token, or try again";
   }

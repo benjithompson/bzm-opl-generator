@@ -1,27 +1,15 @@
-// Which row of a list is open, for the two lists that open one.
-//
-// Open is not selected, and that is the whole point of the separation: the
-// agent list had it already -- closing a row must not un-choose the agent the
-// bundle is for -- and the location list did not, so its rows could only be
-// folded by choosing a *different* location, which changes what is being
-// generated in order to hide some text.
-//
-// The second thing it carries is the row on its way out. A row that unmounts
-// the moment it closes collapses in one frame while its replacement animates
-// open, which is the jump the animation exists to remove; so the one that is
-// going stays on screen for as long as the transition takes.
+// Which row of a list is open, separate from which is selected: folding a row
+// must not change what the bundle is for. A closing row stays mounted until its
+// animation ends.
 import { useEffect, useRef, useState } from "react";
 
-/** How long a closing row stays mounted. The rows animate at 180ms; this is
- *  that plus a frame, and it is a ceiling rather than a schedule -- nothing is
- *  timed against it, the row is simply gone by the time it fires. */
+/** How long a closing row stays mounted: the 180ms animation plus a frame. */
 const EXIT_MS = 200;
 
 interface OpenRow {
   /** The row that is open, or null. */
   open: string | null;
-  /** Open one, or none. Used where something other than a click decides --
-   *  picking a location, or the lone-agent auto-pick. */
+  /** Open one, or none, where something other than a click decides. */
   setOpen: (id: string | null) => void;
   /** Open `id`, or close it if it is the one already open. */
   toggle: (id: string) => void;

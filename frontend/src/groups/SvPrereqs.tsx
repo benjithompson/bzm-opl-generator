@@ -2,18 +2,13 @@ import { ReactNode } from "react";
 import { SvBackend } from "../api";
 import { SvCtx } from "../sv";
 
-// Who owns each thing a virtual service needs. "you" is the one that bites: the
-// bundle *names* these objects and never creates them, and a missing one fails
-// silently -- the manifests apply, the agent goes idle, the mock pod runs 1/1,
-// and the endpoint simply never answers.
+// Who owns each thing a virtual service needs. "you": the bundle names the
+// object and never creates it, and a missing one fails silently.
 type SvOwner = "you" | "bundle" | "none";
 type SvPrereq = { own: SvOwner; text: (c: SvCtx) => ReactNode };
 
-/** Everything said about one backend, in one place. The hints are here rather
- *  than beside the fields they annotate because they are the same kind of claim
- *  as the rows below -- and split across two files, a backend added to one and
- *  forgotten in the other inherits whatever the fallback says, which for these
- *  fields was nginx's advice. */
+/** Everything said about one backend, including the hints for its fields, so a
+ *  new backend cannot inherit another's advice. */
 type SvBackendProse = {
   controller: SvPrereq;
   tls: SvPrereq;
@@ -28,15 +23,9 @@ type SvBackendProse = {
   takesGateway?: boolean;
 };
 
-// Per-backend prerequisites, from README "Which one to pick" -- every row of
-// that table was measured on a live cluster. Editorial, and so kept here: what
-// a controller demands of *you* is not in generate.py to be served. The Role
-// row is the opposite -- mechanical -- and comes from /api/sv-constants rather
-// than a copy here, which is why it is absent below.
-//
-// A backend added on the Python side and not here renders no prose at all
-// rather than nginx's advice, which would be wrong in the direction that costs
-// an afternoon.
+// Per-backend prerequisites, each measured on a live cluster. Editorial, so
+// kept here; the Role row is mechanical and served instead. A backend without
+// an entry renders no prose rather than another backend's.
 const SV_PREREQS: Record<string, SvBackendProse> = {
   nginx: {
     controller: { own: "you", text: () => (
@@ -76,8 +65,7 @@ const SV_PREREQS: Record<string, SvBackendProse> = {
       name stays mandatory (crane crash-loops without it), and an HTTPS virtual
       service terminates TLS in the mock pod itself.</>
     ) },
-    // The gateway row, keyed by the backend that reads the env var rather than
-    // by an `ingress === "istio"` test further down the render.
+    // Keyed by the backend that reads the gateway variable.
     extra: { own: "you", text: (c) => (
       c.gateway
         ? <>Gateway <code>{c.gateway}</code> must already exist — the bundle only
@@ -112,16 +100,13 @@ const SV_PREREQS: Record<string, SvBackendProse> = {
       <code>Allow</code> at the router, so nothing reads <code>{c.secret}</code>.
       The name stays mandatory; crane validates it at startup.</>
     ) },
-    // Telling an OpenShift user to install a controller would contradict the
-    // prerequisite row directly above it.
+    // The router already serves it; installing a controller would be wrong advice.
     controllerHint: "the cluster router already serves the wildcard domain below",
     tlsHint: "in the agent namespace; required even for HTTP virtual services",
   },
 };
 
-/** The prose for one backend, for the fields App renders outside this panel.
- *  Undefined for a backend nobody has written up yet -- callers fall back
- *  rather than inheriting another backend's claims. */
+/** The prose for one backend, or undefined for one nobody has written up. */
 export function svProse(ingress: string): SvBackendProse | undefined {
   return SV_PREREQS[ingress];
 }
@@ -144,15 +129,9 @@ function PrereqItem({ own, children }: { own: SvOwner; children: ReactNode }) {
   );
 }
 
-/** Everything an SV bundle needs that it does not itself create, per backend,
- *  plus the endpoint host to check afterwards. The bundle *names* these objects
- *  and a cluster missing one gives no error at all, so both sides are spelled
- *  out while there is still time to fix it.
- *
- *  Its own file because none of it is App's business: it is prose keyed by the
- *  chosen backend. `rbac` arrives from /api/sv-constants rather than being
- *  restated here -- see the Role row.
- */
+/** Everything an SV bundle needs but does not create, per backend, and the
+ *  endpoint host to check afterwards. A missing one gives no error, so it is
+ *  spelled out beforehand. `rbac` is served. */
 export function SvPrereqs(
     { ingress, ctx, rbac }:
     { ingress: string; ctx: SvCtx; rbac?: SvBackend }) {
@@ -178,11 +157,7 @@ export function SvPrereqs(
             {backend.extra.text(ctx)}
           </PrereqItem>
         )}
-        {/* The one row that is mechanical rather than editorial,
-            so it is read off generate.SV_INGRESS_BACKENDS via
-            /api/sv-constants. A Role restated by hand here would
-            go stale silently -- a wrong one reads as plausible
-            right up until the virtual service stalls. */}
+        {/* The Role, from the served backend table rather than restated. */}
         {rbac && (
           <PrereqItem own="bundle">
             a Role on <code>{rbac.group}</code>{" "}
@@ -206,9 +181,7 @@ export function SvPrereqs(
         the manifests apply, the agent reports idle, the mock pod runs
         1/1, and the endpoint never answers.
       </p>
-      {/* A backend's caveat belongs to the endpoint above, not to the select
-          that chose it -- that is where someone is deciding whether the host
-          they were just given will actually answer. */}
+      {/* The caveat sits by the endpoint, where it matters. */}
       {backend?.caveat && (
         <p className="text-2xs text-amber-700">{backend.caveat}</p>
       )}

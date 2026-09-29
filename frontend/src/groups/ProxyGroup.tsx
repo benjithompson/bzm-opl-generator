@@ -1,8 +1,6 @@
 import { Field, TextInput } from "../components";
 
-/** HTTP(S) proxy. The whole group is one option -- a `proxy` object -- so it
- *  takes that object and a setter for one field of it, rather than five props
- *  that would have to be reassembled on the way back out. */
+/** HTTP(S) proxy: the whole group is one `proxy` object, set a field at a time. */
 export function ProxyGroup(props: {
   proxy: Record<string, string | undefined>;
   onField: (k: string, v: string) => void;

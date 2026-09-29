@@ -9,21 +9,11 @@ import {
   tolerationField, tolerationsToRows, withTolerationField,
 } from "../sched";
 
-/** Scheduling: a prescribed choice up front, tables a layer deeper (#127).
- *
- *  The radio answers the only question most deployments have -- where should
- *  engines run -- and writes all four options at once; the fold underneath is
- *  for the cluster whose pool names and taints already exist. The choice is
- *  derived from the options (sched.placementOf), never stored, so the radio
- *  and the tables cannot disagree: a hand edit that fits no choice shows as
- *  none of them, with a sentence saying so, rather than snapping the nearest
- *  choice onto values it does not describe.
- *
- *  The editors keep what is being typed (a selector row without its key yet is
- *  local state, not an option), so when *this component* rewrites the options
- *  under them -- the radio, the override toggles -- it bumps `epoch` to
- *  remount them from the new values. Nobody types JSON here.
- */
+/** Scheduling: a placement choice up front, the tables a fold deeper. The
+ *  choice is derived from the options (sched.placementOf), so an edit that fits
+ *  none shows as "custom" rather than being rewritten. The editors keep typed
+ *  rows locally; when this component rewrites the options under them it bumps
+ *  `epoch` to remount them. */
 export function SchedGroup(props: {
   tolerations: unknown;
   nodeSelector: unknown;
@@ -124,9 +114,8 @@ export function SchedGroup(props: {
   );
 }
 
-/** A node selector as a label/value table. Rows are local state and the
- *  option is what the non-blank rows add up to, so a key mid-typing does not
- *  flicker out of existence on every keystroke. */
+/** A node selector as a label/value table. Rows are local, so a key being
+ *  typed does not vanish; the option is what the named rows add up to. */
 function KvRows(props: {
   label: string; hint?: string; value: unknown;
   onChange: (v: Record<string, string>) => void;
@@ -158,9 +147,8 @@ function KvRows(props: {
   );
 }
 
-/** Tolerations as rows of the four fields generate reads. The row object is
- *  the toleration itself and edits spread over it, so fields this editor does
- *  not know (tolerationSeconds, ...) ride through untouched. */
+/** Tolerations as rows of the four fields generate reads. Edits spread over
+ *  the toleration, so fields this editor does not show survive. */
 function TolRows(props: {
   label: string; hint?: string; value: unknown;
   onChange: (v: TolerationRow[]) => void;

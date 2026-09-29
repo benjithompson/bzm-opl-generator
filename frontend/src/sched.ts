@@ -1,22 +1,13 @@
-// Where engines run, as data. The Scheduling group's radio prescribes the
-// two-pool shape docs/preflight.md recommends; this module is the mapping
-// between that choice and the four scheduling options, plus the row shapes the
-// structured editors work in -- nobody types JSON (#127).
-//
-// The choice is derived from the options, never stored, the same rule as
-// caModeOf: a mode kept beside the values it summarises is a mode that can
-// disagree with them. Deriving from value *shape* rather than from equality
-// with the prefill keeps the radio meaningful after a hand edit -- a renamed
-// pool label is still "separate nodes".
+// Where engines run, as data: the Scheduling group's placement choice mapped to
+// the four scheduling options, and the row shapes its editors use. The choice
+// is derived from the options' shape, never stored.
 
 import { Options } from "./api";
 import { OptionPatch } from "./optionGroups";
 
 export type Placement = "crane" | "separate" | "anywhere" | "custom";
 
-/** The pool name the "separate nodes" choice prescribes. One word, used as
- *  both the label value and the taint value so the capacity request's
- *  node-pools recipe names a single vocabulary for the platform team. */
+/** The pool name "separate nodes" prescribes, as both label and taint value. */
 export const ENGINE_POOL = "bzm-engines";
 
 const SEPARATE_PATCH: OptionPatch = {
@@ -30,15 +21,9 @@ function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** Which radio state the engine options currently are.
- *
- *  null-vs-empty is the whole grammar here (docs/preflight.md): unset means
- *  "engines go wherever crane goes", `{}`/`[]` means "no selector or
- *  toleration of their own". So: both unset = with crane; both set and empty =
- *  anywhere; a non-empty selector = a pool of their own, whatever it is named
- *  and however it is tainted. Anything else -- one side unset, or a selector
- *  emptied while tolerations remain -- fits no choice, and saying "custom"
- *  beats silently rewriting the half that does not fit. */
+/** Which placement the engine options describe. Unset means follow crane,
+ *  `{}`/`[]` means none of their own, a non-empty selector is a pool of their
+ *  own; anything else is "custom" rather than being rewritten. */
 export function placementOf(o: Options): Placement {
   const sel = o.engine_node_selector;
   const tol = o.engine_tolerations;
@@ -49,8 +34,7 @@ export function placementOf(o: Options): Placement {
   return "custom";
 }
 
-/** What picking a radio choice writes. "custom" is not a choice -- it is the
- *  name of every state the other three do not produce -- so it has no patch. */
+/** What picking a choice writes. "custom" is not a choice, so it has no patch. */
 export function placementPatch(p: Exclude<Placement, "custom">): OptionPatch {
   if (p === "crane") return { engine_node_selector: null, engine_tolerations: null };
   if (p === "anywhere") return { engine_node_selector: {}, engine_tolerations: [] };
@@ -59,9 +43,7 @@ export function placementPatch(p: Exclude<Placement, "custom">): OptionPatch {
 
 // -- the editors' row shapes ---------------------------------------------------
 
-/** A node selector as rows the key/value table edits. Order is the object's
- *  own; a row whose key is blank is still being typed and stays out of the
- *  option until it has one (rowsToSelector). */
+/** A node selector as rows; a row with a blank key stays out (rowsToSelector). */
 export function selectorToRows(sel: unknown): { key: string; value: string }[] {
   if (!isObj(sel)) return [];
   return Object.entries(sel).map(([key, value]) => ({ key, value: String(value) }));
@@ -74,12 +56,8 @@ export function rowsToSelector(rows: { key: string; value: string }[]):
   return out;
 }
 
-/** One toleration, as the editor sees it. The row *is* the underlying object:
- *  the editor reads the four fields generate reads (key, operator, value,
- *  effect) and writes by spreading over the original, so a field it does not
- *  know -- tolerationSeconds, say -- survives a round trip through the table.
- *  generate passes the whole list into the podspec and the engines' env, so
- *  dropping unknown fields here would be the UI quietly rewriting a bundle. */
+/** One toleration as the editor sees it: the object itself, edited by
+ *  spreading, so fields the editor does not show survive a round trip. */
 export type TolerationRow = Record<string, unknown>;
 
 export const TOLERATION_OPERATORS = ["Equal", "Exists"] as const;
@@ -91,17 +69,14 @@ export function tolerationField(row: TolerationRow, field: string): string {
   return typeof v === "string" ? v : "";
 }
 
-/** Set one field, dropping it entirely when blanked: `effect: ""` and no
- *  effect mean the same thing to Kubernetes, but only one of them is what a
- *  hand-written bundle carries, and a diff between the two is noise. */
+/** Set one field, dropping it when blanked (no `effect: ""` in the bundle). */
 export function withTolerationField(
   row: TolerationRow, field: string, value: string,
 ): TolerationRow {
   const out = { ...row };
   if (value === "") delete out[field];
   else out[field] = value;
-  // An Exists toleration matches on the key alone; a value left behind from
-  // the Equal days would be sent, and Kubernetes rejects the combination.
+  // An Exists toleration may not carry a value.
   if (field === "operator" && value === "Exists") delete out.value;
   return out;
 }
@@ -111,17 +86,12 @@ export function tolerationsToRows(tol: unknown): TolerationRow[] {
   return tol.filter(isObj);
 }
 
-/** A just-added row with nothing typed yet stays out of the option, exactly
- *  like a selector row still missing its key: an empty toleration object is
- *  not "nothing" to Kubernetes, it tolerates every taint. */
+/** Drops rows with nothing typed: an empty toleration tolerates every taint. */
 export function rowsToTolerations(rows: TolerationRow[]): TolerationRow[] {
   return rows.filter((r) => Object.keys(r).length > 0);
 }
 
-/** What switching an engine field to Custom starts from: crane's own value,
- *  so "custom" begins as "what you would have inherited" rather than as the
- *  quietly load-bearing empty ("no selector at all"). Cloned -- the two must
- *  stop being the same object the moment they stop being the same setting. */
+/** What switching to an engine override starts from: a copy of crane's value. */
 export function customSeed(craneValue: unknown, empty: object): unknown {
   return craneValue == null ? empty : structuredClone(craneValue);
 }

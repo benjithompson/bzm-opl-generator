@@ -1,17 +1,6 @@
-// The manifests, in a drawer on the right that behaves like the one on the
-// left: it pushes the page over rather than covering it, and it stays open
-// until you close it.
-//
-// This is the fourth shape for the same thing, and the first three each failed
-// the same way. A sticky right-hand column cost the form half its width for the
-// whole session. "Configure | Preview" tabs gave each of them the page, and made
-// it one thing at a time. A modal slide-over kept both alive but dimmed the form
-// and closed on any click outside, so reading a manifest while editing the field
-// it came from meant re-opening it every time.
-//
-// In the flex row, closed is a rail rather than nothing, so the way back in is
-// always in the same place -- and the file count on it is what says a bundle
-// exists while it is out of sight.
+// The manifests, in a drawer on the right that pushes the page over rather than
+// covering it and stays open until closed. Closed, it is a rail carrying the
+// file count.
 import { useCallback, useEffect, useRef } from "react";
 import { GeneratedFile } from "../api";
 
@@ -37,10 +26,8 @@ export function PreviewDrawer(props: {
     props.setActiveFile(files[(idx + d + files.length) % files.length].name);
   }, [files, idx, props]);
 
-  // Arrow keys cycle files only while the focus is inside this panel. Bound to
-  // the window while it is merely *open*, they would take the arrow keys off
-  // the form beside it -- which is the cost of a drawer that no longer covers
-  // what it sits next to.
+  // Arrow keys cycle files only while focus is inside this panel, so the form
+  // beside it keeps them.
   useEffect(() => {
     if (!open) return;
     const h = (e: KeyboardEvent) => {
@@ -71,7 +58,7 @@ export function PreviewDrawer(props: {
               title="Collapse"
               className="rounded-md border border-slate-300 text-slate-500 hover:text-slate-900
                          hover:bg-slate-100 flex items-center justify-center w-8 h-8">
-              {/* Points at the edge it collapses towards, like the left one. */}
+              {/* Points at the edge it collapses towards. */}
               <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none"
                 stroke="currentColor" strokeWidth={1.75}
                 strokeLinecap="round" strokeLinejoin="round">
@@ -120,8 +107,7 @@ export function PreviewDrawer(props: {
           </div>
         </>
       ) : (
-        // The rail. Vertical, so the label fits the width the closed drawer has,
-        // and the whole strip is the control rather than a button floating on it.
+        // The rail: vertical, and the whole strip is the control.
         <button type="button"
           onClick={() => props.setOpen(true)}
           aria-expanded={false}
