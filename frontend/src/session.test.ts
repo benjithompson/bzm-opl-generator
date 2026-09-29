@@ -75,6 +75,9 @@ describe("what is remembered", () => {
     // A saved sizing survives whole.
     expect(back?.sizings?.[0].name).toBe("Black Friday");
     expect(back?.sizings?.[0].inputs.targets.performance).toBe("40000");
+    // Every view, the images one included.
+    save({ ...BASE, view: "images" });
+    expect(load()?.view).toBe("images");
   });
 
   it("drops a snapshot from a build that shaped it differently", () => {

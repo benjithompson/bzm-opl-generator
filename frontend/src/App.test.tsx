@@ -15,7 +15,9 @@ import {
   AgentStatus, Api, Capacity, CapacityPlan, Facts, FuncIdChoice,
   FuncIdVocabulary, Functionality, Location, Options, Ship, TokenRequest,
 } from "./api";
-import { deferred, fakeApi } from "./fakeApi";
+import {
+  catalogueImages, deferred, fakeApi, locationImages,
+} from "./fakeApi";
 // The served ignored-options table, from the one copy of it.
 import {
   AGENT_ENV, IGNORED_BY_FORMAT, RESERVED_ENV, SIZING_MODELS, SLOT_MINIMUMS,
@@ -2974,3 +2976,49 @@ test("says nothing about a page that was compared and matches", async () => {
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.queryByRole("status")).toBeNull();
 });
+
+test("with no key, the images view is open and reads the catalogue", async () => {
+  const asked: [string | null, boolean][] = [];
+  render(<App api={unconnected({
+    images: async (harborId, all) => { asked.push([harborId, all]); return catalogueImages(); },
+  })} />);
+
+  const tab = await screen.findByRole<HTMLButtonElement>("button", { name: /Images/ });
+  expect(tab.disabled).toBe(false);
+  fireEvent.click(tab);
+
+  expect(await screen.findByRole("heading", { name: "BlazeMeter's image catalogue" }))
+    .toBeTruthy();
+  expect(asked).toEqual([[null, false]]);
+  // The open view is what a refresh comes back to.
+  await waitFor(() => expect(session.load()?.view).toBe("images"));
+});
+
+test("connected, the images view reads the location selected for the bundle",
+  async () => {
+    const asked: (string | null)[] = [];
+    render(<App api={accountOf(
+      [loc("h-dublin", "Dublin"), loc("h-berlin", "Berlin")], {
+        images: async (harborId) => {
+          asked.push(harborId);
+          const name = harborId === "h-berlin" ? "Berlin" : "Dublin";
+          return harborId
+            ? locationImages({ location: { harbor_id: harborId, name, func_ids: [] } })
+            : catalogueImages();
+        },
+      })} />);
+
+    fireEvent.click(await screen.findByText("Dublin"));
+    fireEvent.click(screen.getByRole("button", { name: /Images/ }));
+    expect(await screen.findByRole("heading",
+      { name: "Images for location Dublin (read from your account)" })).toBeTruthy();
+    expect(asked[asked.length - 1]).toBe("h-dublin");
+
+    // Another location, chosen under Generate, is read on coming back.
+    fireEvent.click(screen.getByRole("button", { name: /Generate/ }));
+    fireEvent.click(await screen.findByText("Berlin"));
+    fireEvent.click(screen.getByRole("button", { name: /Images/ }));
+    expect(await screen.findByRole("heading",
+      { name: "Images for location Berlin (read from your account)" })).toBeTruthy();
+    expect(asked[asked.length - 1]).toBe("h-berlin");
+  });

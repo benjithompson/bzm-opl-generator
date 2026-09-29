@@ -13,6 +13,15 @@ anything that breaks.
 
 ### Added
 
+- **An Images view in the web UI** lists the container images to mirror into
+  your own registry: each reference, what it is for, which functionality pulls
+  it and when, its size and digest, and whether a newer tag exists. Connected
+  with a location chosen, it shows the versions that location uses; otherwise
+  it shows BlazeMeter's catalogue. **Copy** takes every reference, and **CSV** /
+  **Markdown** download the list. A value the page could not read says
+  "not read" rather than showing blank. See
+  [docs/web-ui.md](docs/web-ui.md#images).
+
 - **Engines request what they are limited to.** Manifests and the Helm chart
   now set `KUBERNETES_RESOURCES_DEFAULT_CPU` / `KUBERNETES_RESOURCES_DEFAULT_MEM`
   beside the engine limits, so each engine requests 2 CPU / 8Gi by default

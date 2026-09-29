@@ -23,6 +23,7 @@ import { buildNotice } from "./build";
 import { shipOnline } from "./heartbeat";
 import { blankManualIds, manualComplete } from "./manualIds";
 import { CapacityView } from "./CapacityView";
+import { CatalogueReason, ImagesView } from "./ImagesView";
 import { EMPTY_PLAN_INPUTS, PlanAsk, PlanInputs } from "./usePlan";
 import { defaultSizings, SavedSizing } from "./sizings";
 import { AgentPanel } from "./steps/AgentPanel";
@@ -44,6 +45,7 @@ import { StepFlow } from "./layout/StepFlow";
 import { useServedTables } from "./useServedTables";
 import { useResource } from "./useResource";
 import { useCapacity } from "./useCapacity";
+import { useImages } from "./useImages";
 import { useAgentWatch } from "./useAgentWatch";
 import { usePreview } from "./usePreview";
 import { useBundleOptions } from "./useBundleOptions";
@@ -168,6 +170,12 @@ export default function App({ api }: { api: Api }) {
   const [navOpen, setNavOpen] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
   const capacity = useCapacity(api, view === "capacity", accountId);
+  // The images of the location selected for the bundle, read from the account;
+  // the catalogue (null) when nothing connected is selected. Manual entry reads
+  // nothing from an account, so it is the catalogue too.
+  const imagesHarbor = sourceMode === "connect" && who ? harborId : null;
+  const [imagesAll, setImagesAll] = useState(false);
+  const images = useImages(api, view === "images", imagesHarbor, imagesAll);
   const [planInputs, setPlanInputs] = useState<PlanInputs>(EMPTY_PLAN_INPUTS);
   const [sizingModels, setSizingModels] = useState<SizingModel[]>([]);
   // Null until decided: the defaults are one per served model and are seeded
@@ -274,7 +282,8 @@ export default function App({ api }: { api: Api }) {
     evicted.current.clear();
     session.clear();
     setHeld(null);
-    setView("flow");
+    // The images view works with no key, as the catalogue.
+    setView((v) => (v === "images" ? v : "flow"));
     setStep(0);
     setSourceMode("manual");
   };
@@ -778,8 +787,24 @@ export default function App({ api }: { api: Api }) {
     enginesPerNode: raw("engines_per_node"),
   };
 
+  // BlazeMeter's name for a funcId: the account's vocabulary, then the served
+  // functionalities, then the funcId itself.
+  const funcLabel = useCallback((id: string) =>
+    funcIds.choices.find((c) => c.id === id)?.label
+      ?? functionalities.find((f) => f.id === id)?.label ?? id,
+  [funcIds.choices, functionalities]);
+  const catalogueReason: CatalogueReason = sourceMode === "manual" ? "manual"
+    : who ? "no-location" : "disconnected";
+
   const { cap, capErr, capRefreshing, refreshCapacity } = capacity;
-  const body = view === "capacity" ? (
+  const body = view === "images" ? (
+    <main className="max-w-screen-xl mx-auto p-4 sm:p-6">
+      <ImagesView answer={images.answer} busy={images.busy} error={images.error}
+        all={imagesAll} setAll={setImagesAll} labelOf={funcLabel}
+        registry={txt("private_registry") || null}
+        catalogueReason={catalogueReason} />
+    </main>
+  ) : view === "capacity" ? (
     <main className="max-w-screen-xl mx-auto p-6">
       {!accountId && <p className="text-sm text-slate-500">Connect first.</p>}
       <ErrorMsg msg={capErr} className="text-sm" />
