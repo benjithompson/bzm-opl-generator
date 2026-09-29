@@ -10,7 +10,6 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
-from bzm_opl_gen import cert  # noqa: E402
 from bzm_opl_gen import facts as facts_mod  # noqa: E402
 from bzm_opl_gen import generate as gen  # noqa: E402
 from bzm_opl_gen import (bundle_env, bundle_names, bundle_options,  # noqa: E402

@@ -45,7 +45,7 @@ interface SizeStatement {
 }
 
 // The smallest overrideMemory (MB) taken as an engine size, as
-// generate.ENGINE_MIN_DERIVED_MEM_MB: the field's unit is unreliable, and a
+// footprint.ENGINE_MIN_DERIVED_MEM_MB: the field's unit is unreliable, and a
 // 4Mi limit is an engine killed at startup. Below it, it is ignored and said so.
 const MIN_DERIVED_MEM_MB = 1024;
 
@@ -68,7 +68,7 @@ export function sizeStatement(
       + "its unit in Location settings."
     : "";
   const locSet = locCpu !== null || locMem !== null;
-  // Each half falls to the default, as generate.resolve_engine_limits does.
+  // Each half falls to the default, as bundle_options.resolve_engine_limits does.
   const fromLoc = {
     cpu: locCpu === null ? STANDARD_SIZE.cpu : cpuQuantity(locCpu),
     mem: locMem === null ? STANDARD_SIZE.mem : memQuantity(locMem),

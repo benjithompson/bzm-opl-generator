@@ -282,7 +282,7 @@ def sv_expose(mocks, namespace, publish):
     exposes 80, so the advertised endpoint answers 503. This pair sets port ==
     targetPort and selects on the pod's identity labels, leaving crane's
     objects alone. `mocks` are {name, port, harbor, ship}, read off the running
-    pods (livetest.sv_mocks).
+    pods (sv_read.sv_mocks).
     """
     ns, docs = namespace, []
     for m in mocks:
