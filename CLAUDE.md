@@ -12,10 +12,10 @@ needs). Read it before naming anything new.
 
 | Layer | Command | Notes |
 |---|---|---|
-| Offline | `.venv/bin/python -m pytest tests -q` | ~3s. Must end **`N passed`, nothing skipped** — install `pip install -e ".[dev]"`; `test_server`/`test_mcp` skip without fastapi/mcp and CI asserts the extras import. |
+| Offline | `.venv/bin/python -m pytest tests -q` | ~15s. Must end **`N passed`, nothing skipped** — install `pip install -e ".[dev]"`; `test_server`/`test_mcp` skip without fastapi/mcp and CI asserts the extras import. |
 | Helm parity | `python tests/helm_parity.py` | Renders option sets as manifests and as the chart and requires the same objects. Not pytest on purpose (needs the `helm` binary). Offline counterpart: `tests/test_helm.py`. Touch the chart or the manifests → add to both. |
 | Frontend | `cd frontend && npx vitest run && npx tsc --noEmit && npm run lint` | Then `npm run build` — it rewrites `bzm_opl_gen/ui_dist` and its source fingerprint, which `tests/test_ui_build.py` checks. Commit the rebuilt `ui_dist` with any `frontend/` change. |
-| Live rig | see below | 12–20 min, needs a cluster and an account. |
+| Live rig | `livetest` — see `LIVE_RIG.md` | 12–20 min, needs a cluster and an account. |
 
 Every live-rig check has an offline counterpart that fakes the cluster/API; add
 one with any new live check. `tests/conftest.py` fails any offline test that
@@ -24,18 +24,10 @@ runs a real kubectl/oc/docker/minikube/kind/helm.
 **Worktrees:** `.venv` is an editable install of the checkout it was built in.
 In a git worktree, build a venv inside the worktree or you test the wrong code.
 
-```
-.venv/bin/python -m bzm_opl_gen livetest --api-key api-key.json \
-    --namespace bzm-livetest --cluster minikube \
-    --local-registry 5001 --local-proxy --contain-egress \
-    --run-test <test-id> --timeout 420
-```
-
-Run it with `run_in_background: true` and poll with
-`until grep -qE "LIVE TEST|Traceback"`. stdout is buffered when redirected, so
-the log is empty until exit; `kubectl get pods` is the live view. Run
-`bzm-opl-gen toolcheck --cluster minikube --local-registry 5001 --local-proxy`
-first.
+**`LIVE_RIG.md`** — read it before running `livetest`, verifying a virtual
+service by hand, releasing an agent, or freeing local disk for a cluster. It
+holds the run command, what each flag proves, how to read an engine run, the
+post-run checks, and the local-environment gotchas.
 
 ## The account — real writes, shared fixtures
 
@@ -46,96 +38,23 @@ first.
   (gitignored). `cat` it at the start of a session that touches the account.
   If it is absent you are not on that machine: gather your own account
   (`bzm-opl-gen locations --api-key api-key.json --account-name "<name>"`) and
-  create scratch fixtures. Never reconstruct ids from an earlier session.
+  create scratch fixtures. Read every id from the account in this session; an
+  id from an earlier session may name a deleted object.
 - `api-key.json` in the repo root (gitignored) is the key.
-- `--run-test` only proves something with a test whose samplers hit the network.
 
 Standing fixtures are reused, so leave them as found:
 
-- **Never delete a Service, Route or Deployment crane created** (including a
-  mock Deployment at 0 replicas): crane holds a pool and deleting one
-  desynchronises the agent. Exception: a teardown you have decided to finish.
+- **Leave every Service, Route and Deployment crane created in place**
+  (including a mock Deployment at 0 replicas): crane holds a pool, and deleting
+  one desynchronises the agent. Exception: a teardown you have decided to
+  finish.
 - **One run at a time per agent.** Two cranes on one agent identity make
   BlazeMeter report duplicated results, not an error.
-- **Don't regenerate an AUTH_TOKEN casually** — minting revokes the one any
-  deployed agent runs on.
-- If the rig repoints a test it restores `executions` in a `finally`. After any
-  live run verify:
-  ```
-  python -c "from bzm_opl_gen import core; print(core.client_from_key('api-key.json').test(<id>).get('executions'))"
-  kubectl get ns | grep bzm-livetest ; docker ps -a | grep bzm-opl ; minikube status -p bzm-opl-test
-  ```
-  A deleted location does **not** stop its agent; a stray crane keeps running
-  and reporting and nothing on the BlazeMeter side shows it.
-- **Releasing a ship BlazeMeter won't delete** (`Cannot remove ship with active
-  containers`): let a *running* crane report zero. On Kubernetes delete the
-  stopped virtual service's mock Deployment with crane still up, wait for
-  `idle`, then remove crane, the ship and the location in that order. On docker,
-  start any crane on that harbor/ship id with its token; it clears in ~30s.
-  Deleting crane first wedges it.
-
-## Live rig — what each flag proves
-
-- `--local-registry` mirrors the location's images into a `registry:2` and (on
-  minikube only) blackholes public registries, so a missing `IMAGE_OVERRIDES`
-  key fails. Pair it with `--run-test`: a crane-only run pulls no engine image
-  (the rig warns). The mirror reads the generator's destinations
-  (`image_registry.cluster_composed_targets`), never a rule of its own.
-- `--local-proxy` runs mitmproxy on the cluster's docker network, never on a
-  host port (something else may own it). A CONNECT probe must show in our own
-  log. The negative control deploys CA-stripped and requires
-  `CERTIFICATE_VERIFY_FAILED` (`--skip-negative-control` only while iterating).
-- `--contain-egress` needs calico — minikube's default CNI accepts
-  NetworkPolicies and enforces nothing. The API rule names the ClusterIP *and*
-  the endpoint (policy is evaluated after kube-proxy DNAT).
-- `--run-test` spawns a real engine. Engines mount the CA as a file
-  (`/var/cm/ca-bundle.crt`); crane mounts the directory. Engine traffic is SNAT'd
-  to the node address, so it is identified by `footprint.ENGINE_UPLOAD_HOSTS`.
-- JMeter ignores `HTTP(S)_PROXY` for sampler traffic, so engine→SUT fails under
-  `--contain-egress` while results still upload. Expected; the proxy belongs in
-  the test, not the generator.
-- The rig deploys the directory as it sits and re-renders only to inject the
-  proxy CA or engine sizing (it mints a token only then). `bundle_check`
-  refuses a bundle whose `HARBOR_ID`/`SHIP_ID` is not the agent under test, any
-  unknown `*.yaml`, a chart directory, `service_account_create: false`, a
-  placeholder token it won't re-render, and a `file`/`existing` CA mode without
-  `--local-proxy`. A re-render keeps the bundle's own CA mode
-  (`bundle_check.rig_ca_mode`).
-- Two rigs, chosen by the bundle (`bundle_check.bundle_platform`), never a
-  flag: `livetest.run` applies manifests; `run_compose` does
-  `docker compose up -d`, waits for the heartbeat, takes it down. Compose runs
-  never start an engine, so `-u 0` is still unproven there.
-- The rig deletes a cluster only if it created it (`ensure_cluster` says which).
-  Existence is read from `minikube profile list`; a stopped profile is started
-  but still not the run's. A surviving cluster keeps the namespace and the
-  node's `/etc/hosts` edits, so teardown removes those explicitly. Exception:
-  `--contain-egress` recreating a minikube profile with no policy enforcer
-  (announced) makes the profile the run's own.
-
-### Virtual services by hand
-
-`livetest` covers performance only; verify SV by deploying a real virtual
-service and curling the advertised endpoint.
-- One ingress controller can hold the node's :80/:443; scale the incumbent to 0.
-  Istio's gateway must carry label `istio: ingressgateway` (crane hardcodes it).
-- `CONFIGURING` after an interrupted deploy refuses both deploy and stop; it
-  drops to `FAILED` on its own after a few minutes.
-- A virtual service can only be created after its location's agent has been
-  online (`idle`), and the SV side lags the agent by a minute or two — retry.
-- `KUBERNETES_SERVICE_USE_TYPE` changes don't touch Services already in crane's
-  pool; `kubectl get svc` shows the old type.
-- After replacing crane, the first deploy fails on `CONTAINER_READY` while the
-  new crane cleans up; budget one.
-
-## Local environment
-
-- A full disk makes minikube fail with `RSRC_DOCKER_STORAGE`. `toolcheck` knows
-  which number binds (VM `df` for colima/Lima, host free space for Docker
-  Desktop).
-- `docker image prune --filter until=…` filters on *build* date and deletes
-  BlazeMeter images the day you pull them.
-- arm64: BlazeMeter images are amd64-only; size engines down
-  (`--engine-cpu 1 --engine-mem 4Gi`). Pin `mitmproxy:11.1.3` (12+ SIGILLs).
+- **Reuse the agent's AUTH_TOKEN** (`--auth-token`); minting a new one revokes
+  the one any deployed agent runs on.
+- **After any live run**, run the post-run checks in `LIVE_RIG.md`. A deleted
+  location does not stop its agent: a stray crane keeps running and reporting,
+  and nothing on the BlazeMeter side shows it.
 
 ## Architecture
 
@@ -147,7 +66,8 @@ cli.py  server.py  mcp_server.py      three front doors, thin
    generate.py → render_manifests / render_helm / render_docker
      bundle_options  bundle_names  bundle_env  ca_trust  service_virt
      image_registry  nodepools  readme_parts  markers  required_fields  quoting
-   footprint.py (leaf: sizes, hosts)   kube.py (kubectl primitives)
+   footprint.py (leaf: sizes, hosts)   quantity.py (leaf: k8s quantities)
+   kube.py (kubectl primitives)   agent_env.py (BlazeMeter's env-var reference)
    bundle_check.py  sv_read.py  verdict.py  evidence.py  cert.py  options.py
 frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
 ```
@@ -266,14 +186,17 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
 - CA bundles can exceed kubectl's last-applied annotation cap; manifests over
   200KB apply `--server-side`.
 - `PATCH /tests/{id}` silently drops `executions` for a taurus-script test.
-- **Engine requests are set by the bundle**: `KUBERNETES_RESOURCES_DEFAULT_CPU`
-  and `_MEM` (memory integer MiB), equal to the limits
-  (`bundle_options.engine_request`). They are missing from BlazeMeter's
-  environment-variable page but are what BlazeMeter's own `helm-crane` chart
-  writes for `resourcesExecutors.requests`. A location's
-  `overrideCPU/overrideMemory`, when set, replace them (measured: 1/4096 gave
-  requests {1, 4Gi}); unset everywhere, crane uses 250m/256Mi. Not yet verified
-  on a live engine: run `livetest --run-test` and read `ENGINE SIZING:`.
+- **Engines default to 2 CPU / 8Gi, requests equal to limits.** The default
+  lives in `footprint.ENGINE_DEFAULT_CPU/_MEM` and the chart's `_helpers.tpl`,
+  held equal by `test_helm`. Requests are the bundle's
+  `KUBERNETES_RESOURCES_DEFAULT_CPU` and `_MEM` (memory integer MiB;
+  `bundle_options.engine_request`) — missing from BlazeMeter's
+  environment-variable page, but what BlazeMeter's own `helm-crane` chart writes
+  for `resourcesExecutors.requests`. Measured on live engines: 1/4Gi and 2/8Gi
+  bundles gave requests equal to limits (QoS `Guaranteed`). A location's
+  `overrideCPU/overrideMemory`, when set, become the limits
+  (`resolve_engine_limits`) and replace the requests (measured: 1/4096 gave
+  requests {1, 4Gi}); unset everywhere, crane uses 250m/256Mi.
 - No LimitRange is emitted: crane sets requests explicitly, so a LimitRange
   only hits crane's `test-job-*` pods. `doctor` still reads an existing one.
 - Crane requests 250m/512Mi and limits 1 CPU/2Gi: the scheduler places on the
@@ -293,6 +216,6 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
   narrated history — that belongs in git and the issues.
 - Button labels are one word where possible (`Apply`, `Save`, `Download`); the
   cost goes in the sentence beside it.
-- Never push to `main`; branch, push, open a PR.
+- Every change reaches `main` through a PR: branch, push, open one.
 - Warnings shown in both Markdown and plain text (plan warnings,
   `PLACEHOLDER_SOURCE`) are plain prose: no backticks, `--`, emphasis or `->`.
