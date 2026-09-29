@@ -41,6 +41,7 @@ import { marker, placeholderWarning } from "../placeholder";
 // different questions: manual entry is *deciding* what to build and applies it,
 // where a location that already exists can only be described.
 import { SV_ALONE, SV_MIXED, svMixedWithEngines } from "../sv";
+import { plural } from "../text";
 
 export interface ConfigurePanelProps {
   functionalities: Functionality[];
@@ -549,7 +550,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
             const names = [
               ...set.map((g) => g.title),
               ...(s.id === "shared" && envCount
-                ? [`${envCount} environment variable${envCount === 1 ? "" : "s"}`]
+                ? [plural(envCount, "environment variable")]
                 : []),
             ];
             // Two unfinished states, and they are not the same claim. A group
@@ -728,11 +729,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
               )}
               {/* Advanced is not a group either -- it is the SCC posture and
                   the UID a pod runs as -- so it asks the predicate for the
-                  keys it writes rather than appearing in `shared`.
-                  crane-hook used to sit beside it and is on the download step
-                  now (#130): it shapes nothing about the agent, and what it
-                  is about is the cluster the bundle is going to, which is the
-                  question that step asks. */}
+                  keys it writes rather than appearing in `shared`. */}
               {keysApply(ADVANCED_KEYS, p.applies) && <AdvancedRow {...p} />}
             </div>
           </section>

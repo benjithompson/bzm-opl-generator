@@ -59,9 +59,6 @@ BOTH = (KUBERNETES, DOCKER)
 # use.
 TYPES = ("string", "bool", "int", "json_object", "pem")
 
-DOC_URL = ("https://help.blazemeter.com/docs/guide/"
-           "private-locations-blazemeter-agent-environment-variables.html")
-
 
 def _v(name, type_, platforms, summary, default=None, example=None,
        functionalities=()):

@@ -496,7 +496,7 @@ def test_suggest_says_why_it_has_nothing_to_say(monkeypatch, capsys):
     code = _run(monkeypatch, "suggest", "--cluster-evidence", DEGRADED)
     out = capsys.readouterr().out
     assert code == 0
-    assert "serverVersion" in out and doctor.EVIDENCE_SCRIPT in out
+    assert "serverVersion" in out and evidence.SCRIPT in out
     assert "DECISIVE" not in out and "SUGGESTIVE" not in out
 
 
@@ -521,7 +521,7 @@ def test_suggest_refuses_a_file_that_is_not_cluster_evidence(monkeypatch):
     """The likeliest wrong file is facts.json, and the refusal is doctor's own
     -- one reading of what a well-formed evidence file is, not two."""
     code = _run(monkeypatch, "suggest", "--cluster-evidence", EXAMPLE_FACTS)
-    assert doctor.EVIDENCE_SCHEMA in str(code) and "no 'schema' field" in str(code)
+    assert evidence.SCHEMA in str(code) and "no 'schema' field" in str(code)
 
 
 def test_suggest_says_where_to_get_an_evidence_file_it_cannot_find(monkeypatch,

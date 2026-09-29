@@ -9,8 +9,7 @@ import textwrap
 from string import Template
 from urllib.parse import quote
 
-from .facts import (image_category, image_refs, key_base, needed_categories,
-                    runs_engine, select_images)
+from .facts import image_refs, key_base, runs_engine, select_images
 from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -1398,9 +1397,11 @@ ENV_OWNER = {
     "KUBERNETES_RESOURCES_LIMITS_MEMORY": "engine_mem_limit",
     "KUBERNETES_REQUESTS_EPHEMERAL_STORAGE": "engine_ephemeral_request_mb",
     "KUBERNETES_LIMITS_EPHEMERAL_STORAGE": "engine_ephemeral_limit_mb",
-    "REQUESTS_CA_BUNDLE": "ca_bundle | ca_existing_configmap",
-    "AWS_CA_BUNDLE": "ca_bundle | ca_existing_configmap",
-    "KUBERNETES_CA_BUNDLE_MOUNT": "ca_bundle | ca_existing_configmap",
+    # Every CA mode writes these three, so every mode owns them -- read off
+    # CA_MODES rather than listed, which is how the slot and inject modes went
+    # missing from a hand-written pair.
+    **{name: " | ".join(CA_MODES) for name in
+       ("REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "KUBERNETES_CA_BUNDLE_MOUNT")},
 }
 
 
@@ -1421,6 +1422,9 @@ def _image_overrides(facts, o):
 
 
 def _configmap(facts, o):
+    # Every data value goes through _yq. A hand-quoted or bare value is valid
+    # YAML only for the values somebody thought of: `*.corp.example` in
+    # NO_PROXY is an alias to YAML, and the bundle did not parse.
     lines = [
         "kind: ConfigMap",
         "apiVersion: v1",
@@ -1428,14 +1432,14 @@ def _configmap(facts, o):
         "  name: blazemeter-configmap",
         f"  namespace: {o['namespace']}",
         "data:",
-        f"  HARBOR_ID: \"{facts['harbor_id']}\"",
-        f"  SHIP_ID: \"{o['ship_id']}\"",
+        f"  HARBOR_ID: {_yq(facts['harbor_id'])}",
+        f"  SHIP_ID: {_yq(o['ship_id'])}",
     ]
     if not o["use_secret"]:
         lines += [
             "  # Simplified: AUTH_TOKEN in ConfigMap. Hardened option: move to a Secret",
             "  # (regenerate with use_secret=true).",
-            f"  AUTH_TOKEN: \"{o['auth_token']}\"",
+            f"  AUTH_TOKEN: {_yq(o['auth_token'])}",
         ]
     lines += ["  CONTAINER_MANAGER_TYPE: KUBERNETES"]
     if o["restrict_engines"]:
@@ -1466,7 +1470,7 @@ def _configmap(facts, o):
             "  KUBERNETES_SECURITY_CONTEXT_CAP_JSON: '{\"drop\": [\"ALL\"]}'",
         ]
     lines += [
-        f"  KUBERNETES_SERVICE_USE_TYPE: {o['service_type']}",
+        f"  KUBERNETES_SERVICE_USE_TYPE: {_yq(o['service_type'])}",
         "  RUN_HEALTH_WEB_SERVICE: 'true'",
     ]
     sv = _sv_cfg(facts, o)
@@ -1475,15 +1479,15 @@ def _configmap(facts, o):
             "  # Service virtualization ingress. The endpoint crane advertises is",
             "  # <virtual-service>-<port>-<namespace>.<subdomain>, so the subdomain",
             "  # must be the wildcard domain your ingress controller already serves.",
-            f"  KUBERNETES_WEB_EXPOSE_TYPE: {sv['type'].upper()}",
-            f"  KUBERNETES_WEB_EXPOSE_SUB_DOMAIN: {sv['subdomain']}",
+            f"  KUBERNETES_WEB_EXPOSE_TYPE: {_yq(sv['type'].upper())}",
+            f"  KUBERNETES_WEB_EXPOSE_SUB_DOMAIN: {_yq(sv['subdomain'])}",
             "  # Required even for HTTP virtual services -- crane validates it at",
             "  # startup and crash-loops when it is empty.",
-            f"  KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME: {sv['tls_secret']}",
+            f"  KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME: {_yq(sv['tls_secret'])}",
         ]
         if sv["type"] == "istio":
             lines.append(
-                f"  KUBERNETES_ISTIO_GATEWAY_NAME: {sv['istio_gateway']}"
+                f"  KUBERNETES_ISTIO_GATEWAY_NAME: {_yq(sv['istio_gateway'])}"
                 if sv["istio_gateway"] else
                 "  # KUBERNETES_ISTIO_GATEWAY_NAME unset: crane creates a"
                 " Gateway per virtual service."
@@ -1493,8 +1497,8 @@ def _configmap(facts, o):
         lines += [
             "  # Private registry: images resolved from the account, not from a",
             f"  # table here ({facts.get('images_source', 'unknown')}).",
-            f"  DOCKER_REGISTRY: {o['private_registry']}",
-            f"  IMAGE_OVERRIDES: '{json.dumps(overrides)}'",
+            f"  DOCKER_REGISTRY: {_yq(o['private_registry'])}",
+            f"  IMAGE_OVERRIDES: {_yq(json.dumps(overrides))}",
         ]
         if o["registry_auth"]:
             lines += [
@@ -1504,7 +1508,7 @@ def _configmap(facts, o):
                 "  # DOCKER_REGISTRY_EMAIL: <email>",
             ]
     else:
-        lines.append(f"  DOCKER_REGISTRY: {PUBLIC_REGISTRY}")
+        lines.append(f"  DOCKER_REGISTRY: {_yq(PUBLIC_REGISTRY)}")
     # Emitted after the registry either way: what a self-update would pull from
     # is the registry above, so the two read together. See auto_update() for
     # why off is the default here and true in BlazeMeter's own manifest.
@@ -1535,21 +1539,21 @@ def _configmap(facts, o):
             if _proxy_has_creds(o):
                 lines.append("  # WARNING: proxy credentials below are plaintext -- anyone who can")
                 lines.append("  # read ConfigMaps sees them. Regenerate with use_secret=true.")
-            lines += [f"  {k}: \"{v}\"" for k, v in proxy_env(o).items()
+            lines += [f"  {k}: {_yq(v)}" for k, v in proxy_env(o).items()
                       if k != "NO_PROXY"]
-        lines.append(f"  NO_PROXY: {proxy_env(o)['NO_PROXY']}")
+        lines.append(f"  NO_PROXY: {_yq(proxy_env(o)['NO_PROXY'])}")
     eng_sel, eng_tol = engine_scheduling(o)
     split = separate_pools(o)
     if eng_tol:
         lines += [
             "  # Tolerations crane stamps on the engines it spawns." if split else
             "  # Engines inherit the crane pod's tolerations via this env.",
-            f"  KUBERNETES_TOLERATIONS_JSON: '{json.dumps(eng_tol)}'",
+            f"  KUBERNETES_TOLERATIONS_JSON: {_yq(json.dumps(eng_tol))}",
         ]
     if eng_sel:
         if split:
             lines.append("  # Engines are pinned to their own node pool, separate from crane's.")
-        lines.append(f"  KUBERNETES_NODE_SELECTOR_JSON: '{json.dumps(eng_sel)}'")
+        lines.append(f"  KUBERNETES_NODE_SELECTOR_JSON: {_yq(json.dumps(eng_sel))}")
     # Always emitted, defaults included. doctor and the planner certify
     # engine_size(), which falls back to ENGINE_DEFAULT_CPU/MEM -- a ConfigMap
     # that omitted these when the options were unset shipped engines with no
@@ -1557,13 +1561,13 @@ def _configmap(facts, o):
     # one OOMKilled 4s after start (#132). Unset means the documented default,
     # never "whatever crane does with no env".
     lines.append(f"  KUBERNETES_RESOURCES_LIMITS_CPU: "
-                 f"\"{o['engine_cpu_limit'] or ENGINE_DEFAULT_CPU}\"")
+                 f"{_yq(o['engine_cpu_limit'] or ENGINE_DEFAULT_CPU)}")
     lines.append(f"  KUBERNETES_RESOURCES_LIMITS_MEMORY: "
-                 f"\"{o['engine_mem_limit'] or ENGINE_DEFAULT_MEM}\"")
+                 f"{_yq(o['engine_mem_limit'] or ENGINE_DEFAULT_MEM)}")
     if o["engine_ephemeral_request_mb"]:
-        lines.append(f"  KUBERNETES_REQUESTS_EPHEMERAL_STORAGE: \"{o['engine_ephemeral_request_mb']}\"")
+        lines.append(f"  KUBERNETES_REQUESTS_EPHEMERAL_STORAGE: {_yq(o['engine_ephemeral_request_mb'])}")
     if o["engine_ephemeral_limit_mb"]:
-        lines.append(f"  KUBERNETES_LIMITS_EPHEMERAL_STORAGE: \"{o['engine_ephemeral_limit_mb']}\"")
+        lines.append(f"  KUBERNETES_LIMITS_EPHEMERAL_STORAGE: {_yq(o['engine_ephemeral_limit_mb'])}")
     ca = _ca_cfg(o)
     if ca:
         ca_comment = {
@@ -1581,9 +1585,11 @@ def _configmap(facts, o):
         lines += [
             "  # Mounted into crane; engines get the same ConfigMap mounted via",
             "  # KUBERNETES_CA_BUNDLE_MOUNT (ENV=configmapName=fileKey).",
-            f"  REQUESTS_CA_BUNDLE: {path}",
-            f"  AWS_CA_BUNDLE: {path}",
-            f"  KUBERNETES_CA_BUNDLE_MOUNT: \"REQUESTS_CA_BUNDLE={ca['cm']}={ca['key']}:AWS_CA_BUNDLE={ca['cm']}={ca['key']}\"",
+            f"  REQUESTS_CA_BUNDLE: {_yq(path)}",
+            f"  AWS_CA_BUNDLE: {_yq(path)}",
+            "  KUBERNETES_CA_BUNDLE_MOUNT: " + _yq(
+                f"REQUESTS_CA_BUNDLE={ca['cm']}={ca['key']}:"
+                f"AWS_CA_BUNDLE={ca['cm']}={ca['key']}"),
         ]
     env = extra_env(o)
     if env:
@@ -1616,7 +1622,7 @@ def _scheduling_block(o):
         out += "      tolerations:\n" + _indent_yaml(tol, 8) + "\n"
     if sel:
         out += "      nodeSelector:\n" + "\n".join(
-            f"        {k}: \"{v}\"" for k, v in sel.items()) + "\n"
+            f"        {json.dumps(str(k))}: {_yq(v)}" for k, v in sel.items()) + "\n"
     return out
 
 
@@ -1637,7 +1643,7 @@ metadata:
     # Only `inline` reaches here now: the file mode emits no ConfigMap at all,
     # because the file is what it is built from and this generator has not read
     # it (see `generate`, and the README's `kubectl create configmap` line).
-    pem = "\n".join("    " + line for line in ca_pem(o).strip().splitlines())
+    pem = "\n".join("    " + line for line in o["ca_bundle"].strip().splitlines())
     return f"""kind: ConfigMap
 apiVersion: v1
 metadata:
@@ -1649,21 +1655,11 @@ data:
 """
 
 
-def ca_pem(o):
-    """The certificate the bundle writes, where there is one to write.
-
-    One helper because both platforms write it -- a ConfigMap entry here, a file
-    beside the script on docker. It is no longer ever a marker: the file mode
-    names a file rather than holding a slot, so a bundle with no certificate in
-    it writes no certificate anywhere."""
-    return o["ca_bundle"]
-
-
 def _proxy_secret_block(o):
     if not (_proxy_has_creds(o) and o["use_secret"]):
         return ""
     lines = ["  # Proxy URLs embed credentials (user:pass@host) -> kept out of the ConfigMap."]
-    lines += [f"  {k}: \"{v}\"" for k, v in proxy_env(o).items() if k != "NO_PROXY"]
+    lines += [f"  {k}: {_yq(v)}" for k, v in proxy_env(o).items() if k != "NO_PROXY"]
     return "\n".join(lines) + "\n"
 
 
@@ -1775,7 +1771,7 @@ def _nodepools_md(facts, o):
     """
     cpu, mem = engine_size(o)
     eng_sel, eng_tol = engine_scheduling(o)
-    crane_sel, crane_tol = crane_scheduling(o)
+    crane_sel, _ = crane_scheduling(o)
     slots = facts.get("slots")
     taints = _taints_from_tolerations(eng_tol)
     per_node = engines_per_node(o)
@@ -3995,7 +3991,7 @@ def docker_file_mounts(o):
 
     out = []
     if _ca_cfg(o):
-        out.append(mount("ca_bundle", ca_pem(o)))
+        out.append(mount("ca_bundle", o["ca_bundle"]))
     sv = _sv_docker_cfg(o)
     if sv and sv["cert"]:
         out += [mount("sv_tls_cert", sv["cert"]), mount("sv_tls_key", sv["key"])]
@@ -4912,7 +4908,7 @@ def generate(facts, options):
         # the chart then refuses the install naming the field, which is a better
         # answer than a file holding a marker that resolves and installs.
         if ca and ca["mode"] == "inline":
-            out[f"{CHART_DIR}/{ca['key']}"] = ca_pem(o).strip() + "\n"
+            out[f"{CHART_DIR}/{ca['key']}"] = o["ca_bundle"].strip() + "\n"
         if o["private_registry"]:
             out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
         if separate_pools(o):
@@ -4946,14 +4942,6 @@ def generate(facts, options):
             if o["use_secret"] else ""
         ),
         "SCHEDULING_BLOCK": _scheduling_block(o),
-        # Always empty now. It carried the `ca-slot-check` guard (#241), which
-        # existed only because the bundle shipped a ConfigMap holding a marker;
-        # the file mode ships no ConfigMap and no marker, so the kubelet refuses
-        # the pod by name instead. The substitution stays rather than the
-        # template losing the line: an initContainer is the natural place for
-        # the next guard that has to run before crane, and a Deployment with
-        # none renders exactly the bytes it rendered before.
-        "INIT_CONTAINERS_BLOCK": "",
         "VOLUME_MOUNTS_BLOCK": (
             "          volumeMounts:\n"
             f"            - name: cacerts\n"

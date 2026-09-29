@@ -286,7 +286,7 @@ def key_set(k: KeyIn):
     user = _answer(core.user, client)
     _state["client"] = client
     _forget()
-    _state["key_id"] = json.load(open(os.path.expanduser(k.path)))["id"] if k.path else k.id
+    _state["key_id"] = k.id or client.key_id
     return {
         "user": {"email": user.get("email"), "display_name": user.get("displayName")},
         "default_account_id": (user.get("defaultProject") or {}).get("accountId"),
@@ -426,16 +426,11 @@ class LocationSettingsIn(BaseModel):
 def location_update(s: LocationSettingsIn):
     """Change the selected location's concurrency settings.
 
-    The second and last write this page makes to a customer's account, and like
-    the other it is a call of its own rather than a flag on something else: a
-    change here reaches every agent in the location and every test that starts
-    on it, so it has to be the thing that was clicked.
-
-    There used to be a third -- POST /api/locations/func-id, which turned a
-    functionality on. It went with the affordance that was its only caller
-    (#113):
-    what funcIds a location carries is what the location *is*, where these two
-    change an agent's credential and a location's concurrency.
+    One of the four routes that write to the account, and like the others a
+    call of its own rather than a flag on something else: a change here reaches
+    every agent in the location and every test that starts on it, so it has to
+    be the thing that was clicked. Which funcIds a location carries is not
+    offered here -- that is what the location *is*, and BlazeMeter's own UI's.
     """
     # Over core's own closed set rather than four named kwargs: a fifth
     # setting is then one row in core.LOCATION_SETTINGS, not a row plus a field
@@ -651,7 +646,8 @@ def generate_zip(g: GenerateIn):
     stem = core.zip_stem(g.options)
     return Response(core.zip_bundle(files, stem), media_type="application/zip",
                     headers=_wire_safe({
-                        "Content-Disposition": f'attachment; filename="{stem}.zip"',
+                        "Content-Disposition":
+                            f'attachment; filename="{core.zip_filename(g.options)}"',
                         **_token_headers(source)}))
 
 
@@ -1025,14 +1021,13 @@ def main(port=8765, open_browser=True, api_key_path=None, dev=False,
         # Same construction as the route, for the same reason, plus one of its
         # own: the page this serves has a connect form on it, so a flag pointing
         # at an unreadable file is worth saying and not worth refusing to start
-        # over. The id is read only once the client proves the file parses.
+        # over.
         try:
             _state["client"] = core.client_from_key(api_key_path)
         except core.CoreError as e:
             print(f"!! --api-key ignored: {e}", flush=True)
         else:
-            with open(api_key_path) as fh:
-                _state["key_id"] = json.load(fh).get("id")
+            _state["key_id"] = _state["client"].key_id
     if open_browser:
         import threading
         import webbrowser

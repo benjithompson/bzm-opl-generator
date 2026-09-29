@@ -1040,6 +1040,43 @@ async function atDownloadStep() {
   return button;
 }
 
+test("a slow facts answer for the previous location never configures the next one",
+  async () => {
+    // Pick one location, then another before the first one's facts arrive. The
+    // first answer landing last used to set facts for a location nobody had
+    // selected any more, and the preview generated with its images.
+    const first = deferred<Facts>();
+    const second = deferred<Facts>();
+    const generatedFor: string[] = [];
+    const agent = { id: "s-1", name: "agent-1", state: "IDLE" };
+    render(<App api={perfAccount({
+      locations: async () => [
+        { id: "h-a", name: "Alpha loc", funcIds: ["performance"], slots: 1, ships: [agent] },
+        { id: "h-b", name: "Bravo loc", funcIds: ["performance"], slots: 1, ships: [agent] },
+      ],
+      facts: (harborId: string) => (harborId === "h-a" ? first : second).promise,
+      generate: async (facts: Facts) => {
+        generatedFor.push(facts.harbor_id);
+        return { files: [{ name: "crane.yaml", content: "kind: Deployment" }],
+                 token: { branch: "placeholder" as const, ship_id: "s-1",
+                          message: "placeholder" } };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Alpha loc"));
+    fireEvent.click(await screen.findByText("Bravo loc"));
+    const factsOf = (harbor_id: string) => ({
+      harbor_id, func_ids: ["performance"], ships: [agent], images: [],
+    }) as unknown as Facts;
+    await act(async () => { second.settle(factsOf("h-b")); });
+    await waitFor(() => expect(generatedFor).toContain("h-b"));
+    await act(async () => { first.settle(factsOf("h-a")); });
+    // Past the preview's debounce, so a generate for the stale facts would
+    // have been made by now.
+    await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
+    expect(generatedFor).not.toContain("h-a");
+  });
+
 test("downloading sends the configured bundle for the selected agent, and rotates nothing",
   async () => {
     const sent: Sent[] = [];

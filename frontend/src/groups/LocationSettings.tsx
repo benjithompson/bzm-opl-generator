@@ -32,6 +32,7 @@ import { PlanAsk, useCapacityPlan } from "../usePlan";
 // A location deleted since the list was read, told apart from a write the
 // account refused for any other reason.
 import { goneNotice } from "../stale";
+import { plural } from "../text";
 
 /** The form, as strings. Blank means "leave this one alone", which is also what
  *  the API takes: there is deliberately no way to *clear* a setting here, since
@@ -264,7 +265,7 @@ export function LocationSettings(props: {
 
       <p className="text-[11px] text-slate-500">
         <b>Engines per agent</b> multiplies: this location&apos;s concurrency is
-        agents × that figure, so {agents} agent{agents === 1 ? "" : "s"}
+        agents × that figure, so {plural(agents, "agent")}
         {" "}at {draft.slots || "?"} each is{" "}
         {Number(draft.slots) > 0
           ? `${agents * Number(draft.slots)} engines at once`
@@ -300,7 +301,7 @@ export function LocationSettings(props: {
           + (edited.length ? "text-amber-700" : "text-slate-500")}>
           {edited.length === 0
             ? "nothing to save — Confirm moves on to the agent"
-            : `${edited.length} setting${edited.length === 1 ? "" : "s"}: `
+            : `${plural(edited.length, "setting")}: `
               + edited.map((k) => LABELS[k].toLowerCase()).join(", ")
               + " — saving changes this location for every agent in it, and "
               + "every test that starts on it, including anyone else's"}
@@ -352,10 +353,10 @@ function ProfileLine({ plan, agents, busy, touched }: {
         The sizing — <b>{plan.sizings.map(
           (s) => `${s.target.toLocaleString()} ${s.unit}`).join(", ")}</b>
         {" "}— needs{" "}
-        <b>{plan.engines} engine{plan.engines === 1 ? "" : "s"}</b>, which is{" "}
+        <b>{plural(plan.engines, "engine")}</b>, which is{" "}
         <b>{plan.engines_per_agent} per agent</b> across this location&apos;s{" "}
-        {agents} agent{agents === 1 ? "" : "s"}, on{" "}
-        {plan.nodes_per_agent} node{plan.nodes_per_agent === 1 ? "" : "s"} each.
+        {plural(agents, "agent")}, on{" "}
+        {plural(plan.nodes_per_agent, "node")} each.
         {touched && " The fields below were edited by hand and no longer follow it."}
       </p>
       <PlanCaveats compact sizings={plan.sizings} warnings={plan.warnings} />

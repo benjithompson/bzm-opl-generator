@@ -965,7 +965,7 @@ describe("reservedWhere", () => {
   it("follows a one-of pair to the group that holds both", () => {
     // The CA trio names a pair, which is what the option table itself calls
     // them. Splitting on the served separator rather than looking the whole
-    // string up: `ca_bundle | ca_existing_configmap` is no option's name.
+    // string up: the joined CA modes are no option's name.
     expect(reservedWhere("REQUESTS_CA_BUNDLE", RESERVED_ENV)?.where)
       .toBe("Custom CA trust");
   });

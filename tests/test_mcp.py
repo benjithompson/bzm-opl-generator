@@ -20,7 +20,7 @@ import anyio
 import mcp
 import pytest
 
-from bzm_opl_gen import core, generate as gen_mod, mcp_server, plan
+from bzm_opl_gen import core, evidence, generate as gen_mod, mcp_server, plan
 from test_core import FakeClient, RefusingClient
 from test_generate import FACTS
 
@@ -570,6 +570,16 @@ def test_a_location_a_test_cannot_start_on_says_so_here_too(fake_account):
     assert "Not enough available resources" in body["warning"]
 
 
+def test_an_explicit_null_slots_still_gets_the_default(fake_account):
+    """Same rule as `limit`: null is a client saying "unset", and `.get(key,
+    default)` fills in only an absent key -- so `slots: null` reached core as
+    None and created a location with it unset."""
+    body = ok("opl_location", "create", {"name": "scratch", "account_id": 7,
+                                         "workspace_id": 99, "slots": None,
+                                         "threads_per_engine": None})
+    assert body["location"]["slots"] == 1
+
+
 def test_a_gui_functional_location_is_refused_at_the_default_slots(
         fake_account):
     """#159. `slots` defaults to 1 here as it does everywhere, and BlazeMeter
@@ -940,11 +950,11 @@ def test_asking_for_evidence_names_a_collector_that_exists():
     against doctor's own constant and the invented flag against its absence."""
     from test_doctor import FACTS as LOC_FACTS
     text = err("opl_preflight", "doctor", {"facts": LOC_FACTS})
-    assert core.doctor.EVIDENCE_SCRIPT in text
+    assert evidence.SCRIPT in text
     assert "--collect" not in text
     assert "path" in text, "and it should say the file may be named, not pasted"
     assert os.path.isfile(os.path.join(os.path.dirname(__file__), "..",
-                                       core.doctor.EVIDENCE_SCRIPT))
+                                       evidence.SCRIPT))
 
 
 def test_the_preflight_description_offers_both_forms():

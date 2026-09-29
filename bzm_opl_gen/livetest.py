@@ -45,6 +45,10 @@ import tempfile
 import time
 
 from . import generate
+from .facts import image_refs, select_images
+from .generate import (CA_CONFIGMAP, CA_MOUNT_PATH, cluster_composed_targets,
+                       engine_scheduling, engine_size, separate_pools)
+from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 # Which hosts an engine uploads to is a fact about BlazeMeter, not about this
 # rig -- doctor probes them and the planner names them as required egress, and
 # neither should have to import the deploy rig to find out.
@@ -253,8 +257,6 @@ def mirror_images(facts, port, arch="linux/amd64"):
     Crane's own image falls through to the short form, which is the reference
     `generate._crane_image` writes into the Deployment and the chart.
     """
-    from .facts import image_refs
-    from .generate import cluster_composed_targets
     refs = image_refs(facts)
     reg = f"localhost:{port}"
     composed = cluster_composed_targets(facts, {"private_registry": reg})
@@ -620,7 +622,6 @@ def blackhole_public_registries(facts, cluster, private_registry):
     if cluster != "minikube":
         print("note: registry blackhole needs minikube; skipping")
         return []
-    from .facts import image_refs
     refs = image_refs(facts)
     private_host = (private_registry or "").split("/")[0]
     hosts = sorted({r.split("/")[0] for r in refs
@@ -958,7 +959,6 @@ def assert_engine_config(pod, opts):
     invisible to a crane-only live test: the image override for the engine (a
     different IMAGE_OVERRIDES key from crane's own), the CA bundle propagated
     via KUBERNETES_CA_BUNDLE_MOUNT, and the proxy env."""
-    from .generate import CA_MOUNT_PATH
     fails = []
     containers = pod["spec"].get("containers", [])
     env = {e["name"]: e.get("value") for c in containers for e in c.get("env", [])}
@@ -1000,8 +1000,6 @@ def assert_engine_size(pod, opts):
     reads the numbers it produced. (The requests are crane's own and are
     reported by engine_request_gap, not asserted.)
     """
-    from .generate import engine_size
-    from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
     want_cpu, want_mem = engine_size(opts)
     fails = []
     for c in pod["spec"].get("containers", []):
@@ -1054,7 +1052,6 @@ def engine_heap_note(pod):
     test that stopped, and a heap far under it is capacity the node reserved
     and nothing used.
     """
-    from .quantity import format_memory, parse_memory
     heap = engine_heap_bytes(pod)
     limits = [(c.get("resources") or {}).get("limits", {}).get("memory")
               for c in pod["spec"].get("containers", [])]
@@ -1088,7 +1085,6 @@ def assert_engine_pool(pod, node, opts):
     which is not the same as a node that does not match -- an unread node says
     so and asserts nothing.
     """
-    from .generate import separate_pools, engine_scheduling
     if not separate_pools(opts):
         return []
     selector, _ = engine_scheduling(opts)
@@ -1170,14 +1166,32 @@ def wait_master_done(client, master_id, timeout=900, poll=20):
 def kget(cli, namespace, kind, name=None):
     """`get -o json` -> parsed object, {} when it is not there. Omit `name` for
     the whole kind (a list, under "items"); a namespace that does not exist yet
-    is the normal preflight case, not an error."""
+    is the normal preflight case, not an error.
+
+    {} is also every failure, which is fine for a list -- a list that was
+    served always has `items`, so {} can only mean nobody could ask -- and
+    wrong for one named object, where {} is also the answer "there is none".
+    A reader that has to tell those apart uses `kget_named`."""
+    return kget_named(cli, namespace, kind, name) or {}
+
+
+def kget_named(cli, namespace, kind, name=None):
+    """`kget`, keeping the one distinction it drops: {} when the API server
+    answered NotFound, None for every other failure (Forbidden, no cluster, no
+    binary) -- "could not read" and "there is nothing there" must not share a
+    representation."""
     cmd = [cli, "get", kind, "-o", "json"]
     if name:
         cmd.insert(3, name)
     if namespace:
         cmd[1:1] = ["-n", namespace]
-    out = subprocess.run(cmd, capture_output=True, text=True)
-    return json.loads(out.stdout) if out.returncode == 0 and out.stdout.strip() else {}
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError:
+        return None
+    if out.returncode == 0 and out.stdout.strip():
+        return json.loads(out.stdout)
+    return {} if "(NotFound)" in (out.stderr or "") else None
 
 
 
@@ -1185,7 +1199,6 @@ def assert_live_config(cli, namespace, facts, opts):
     """Read the deployed objects back and check what the generator claims about
     them. A manifest that renders, and even one whose agent comes online, is not
     the same as one that is configured correctly."""
-    from .facts import select_images
     fails = []
     cm = kget(cli, namespace, "configmap", "blazemeter-configmap").get("data", {})
     if not cm:
@@ -1291,7 +1304,6 @@ def negative_control(regenerate, overlay, manifest_dir, namespace, cluster,
     wanted is an agent that runs and cannot verify, which is the bundle with no
     CA configured at all -- listing the keys is how the slot was missed for a
     whole mode's lifetime (#250)."""
-    from .generate import CA_CONFIGMAP
     print("negative control: deploying without the CA bundle, expecting TLS failure")
     regenerate({**overlay, **generate.no_ca()})
     stale = os.path.join(manifest_dir, "bzm_cacerts.yaml")
@@ -1947,9 +1959,9 @@ def teardown(manifest_dir, namespace, cluster="current", owned=None):
 # here: each of those is cluster-shaped (a registry blackholed on a node, a
 # NetworkPolicy an unenforced CNI silently ignores), and reimplementing them for
 # one container is another afternoon each. What this does not reach is stated in
-# docs/live-test.md rather than left to be discovered -- most of all `-u 0` and
-# DOCKER_PORT_RANGE, which only matter once crane starts something, and which
-# #184 covers by starting a virtual service rather than an engine.
+# docs/live-test.md rather than left to be discovered -- most of all `-u 0`,
+# which only matters once crane starts an engine and which no compose run has
+# yet proven (#214).
 
 COMPOSE_TOOL = ["docker", "compose"]
 # What a failed run prints of the container's own account of itself. `up -d`

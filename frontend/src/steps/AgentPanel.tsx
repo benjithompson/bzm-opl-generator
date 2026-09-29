@@ -51,6 +51,7 @@ import { rotateHazard } from "../token";
 // What the profile card above this panel is sizing, on its way to the one
 // location panel that measures itself against it.
 import { PlanAsk } from "../usePlan";
+import { plural } from "../text";
 
 /** The two ids typed by hand, for an account nobody here can reach. */
 export interface ManualIds { harbor_id: string; ship_id: string }
@@ -305,13 +306,11 @@ export function AgentPanel({
   // so a row closed by hand stays closed.
   useEffect(() => {
     setArm("idle"); setIssueErr(null); agentRow.setOpen(agents.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents.id]);
   // The same, one list up: choosing a location opens it, including when the
   // choice was a session restore rather than a click.
   useEffect(() => {
     locRow.setOpen(locations.selectedId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locations.selectedId]);
 
   const toggle = (id: string) => {
@@ -524,7 +523,7 @@ export function AgentPanel({
                         </span>
                         <span className="grow" />
                         <span className={"text-[11px] " + (n ? "text-slate-500" : "text-amber-700")}>
-                          {n ? `${n} agent${n === 1 ? "" : "s"}${up ? ` · ${up} online` : ""}`
+                          {n ? `${plural(n, "agent")}${up ? ` · ${up} online` : ""}`
                              : "no agents yet"}
                         </span>
                         {/* The chevron follows the body, not the selection:

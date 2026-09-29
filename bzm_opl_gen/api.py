@@ -100,27 +100,52 @@ class BzmClient:
         surface already knows how to report.
         """
         key_id, secret = credentials
+        # Public, and the one half of the pair that is: the page names the key
+        # it is connected with, and re-reading the file for it was three more
+        # reads of a file this construction already parsed.
+        self.key_id = key_id
         self._auth = base64.b64encode(f"{key_id}:{secret}".encode()).decode()
+
+    def _send(self, req, label, timeout):
+        """One round trip, every failure a BzmApiError.
+
+        Not only HTTPError: a DNS failure, a refused connection, a timeout and
+        a body that is not the API's JSON envelope (a proxy's HTML page) are
+        all BlazeMeter not answering, and anything escaping as its own type
+        goes past `core._upstream` into a 500 on the page and a withheld
+        message in an MCP session. `status` stays None for those -- there was
+        no status to judge.
+        """
+        req.add_header("Authorization", "Basic " + self._auth)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                raw = r.read()
+        except urllib.error.HTTPError as e:
+            raise BzmApiError(
+                f"{label} -> HTTP {e.code}: "
+                f"{e.read().decode(errors='replace')[:300]}", status=e.code) from e
+        except (urllib.error.URLError, OSError) as e:
+            reason = getattr(e, "reason", e)
+            raise BzmApiError(f"{label} -> could not reach BlazeMeter: {reason}") from e
+        if not raw:
+            return None  # e.g. DELETE returns an empty body
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            raise BzmApiError(f"{label} -> answer was not JSON: "
+                              f"{raw[:120].decode(errors='replace')!r}") from e
+        if not isinstance(parsed, dict):
+            raise BzmApiError(f"{label} -> unexpected answer: {str(parsed)[:120]}")
+        if parsed.get("error"):
+            raise BzmApiError(f"{label} -> API error: {parsed['error']}")
+        return parsed.get("result")
 
     def _request(self, method, path, body=None):
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(API_BASE + path, data=data, method=method)
-        req.add_header("Authorization", "Basic " + self._auth)
         if data is not None:
             req.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                raw = r.read()
-        except urllib.error.HTTPError as e:
-            raise BzmApiError(
-                f"{method} {path} -> HTTP {e.code}: "
-                f"{e.read().decode(errors='replace')[:300]}", status=e.code) from e
-        if not raw:
-            return None  # e.g. DELETE returns an empty body
-        parsed = json.loads(raw)
-        if parsed.get("error"):
-            raise BzmApiError(f"{method} {path} -> API error: {parsed['error']}")
-        return parsed["result"]
+        return self._send(req, f"{method} {path}", timeout=30)
 
     def _upload(self, path, filename, content):
         """multipart/form-data POST -- the file endpoints do not take JSON."""
@@ -131,18 +156,8 @@ class BzmClient:
             f"Content-Type: application/octet-stream\r\n\r\n"
         ).encode() + content.encode() + f"\r\n--{boundary}--\r\n".encode()
         req = urllib.request.Request(API_BASE + path, data=body, method="POST")
-        req.add_header("Authorization", "Basic " + self._auth)
         req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-        try:
-            with urllib.request.urlopen(req, timeout=60) as r:
-                parsed = json.loads(r.read() or b"{}")
-        except urllib.error.HTTPError as e:
-            raise BzmApiError(f"POST {path} -> HTTP {e.code}: "
-                              f"{e.read().decode(errors='replace')[:300]}",
-                              status=e.code) from e
-        if parsed.get("error"):
-            raise BzmApiError(f"POST {path} -> API error: {parsed['error']}")
-        return parsed.get("result")
+        return self._send(req, f"POST {path}", timeout=60)
 
     def get(self, path):
         return self._request("GET", path)
@@ -161,7 +176,7 @@ class BzmClient:
         return self.get("/user")
 
     def accounts(self):
-        return self.get("/accounts?limit=100")
+        return self.get("/accounts?limit=1000")
 
     def workspaces(self, account_id):
         """The account's workspaces, asked for in one big page.
@@ -378,9 +393,6 @@ scenarios:
 
     def master_status(self, master_id):
         return self.get(f"/masters/{master_id}/status")
-
-    def master(self, master_id):
-        return self.get(f"/masters/{master_id}")
 
     def stop_master(self, master_id):
         return self.post(f"/masters/{master_id}/stop")

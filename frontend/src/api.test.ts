@@ -11,7 +11,7 @@
 // deployed agent's credential survives. A rename on either side would otherwise
 // lose the sentence, or the refusal to rotate, without failing anything.
 import { afterEach, expect, test, vi } from "vitest";
-import { api, Facts, TokenRequest } from "./api";
+import { api, ApiError, Facts, TokenRequest } from "./api";
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -103,3 +103,25 @@ test("a download with no name header still saves under one", async () => {
 
   expect(saved).toEqual(["bzm-opl-bzm.zip"]);
 });
+
+test("a refused download keeps its status, as every other route does", async () => {
+  // A 404 on the bundle is the agent or location being gone, and stale.ts can
+  // only say so from the status -- the download's own error branch dropped it.
+  stubFetch(() => new Response(JSON.stringify({ detail: "no such ship" }),
+                               { status: 404 }));
+  const err = await api.downloadZip(facts, {}, { rotate_token: false })
+    .catch((e) => e);
+  expect(err).toBeInstanceOf(ApiError);
+  expect(err.status).toBe(404);
+  expect(err.message).toBe("no such ship");
+});
+
+test("a download refused by the static mount says the page is newer than the server",
+  async () => {
+    // A 405 with no JSON body: reading it as JSON used to surface as a parse
+    // error rather than the sentence every other route gives this case.
+    stubFetch(() => new Response("Method Not Allowed", { status: 405 }));
+    const err = await api.downloadZip(facts, {}, { rotate_token: false })
+      .catch((e) => e);
+    expect(String(err.message)).toMatch(/newer than the server/);
+  });

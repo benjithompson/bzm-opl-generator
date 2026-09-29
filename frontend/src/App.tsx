@@ -1,10 +1,9 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Api, Account, AgentEnvVar, AgentStatus, BuildState, Capacity, Facts,
-  Functionality,
-  GeneratedFile, ManualFactsOut, PlaceholderSource, TokenReport,
+  Api, Account, AgentEnvVar, AgentStatus, Capacity, Facts,
+  GeneratedFile, ManualFactsOut, TokenReport,
   FuncIdVocabulary, Location, Options, Ship, SvCheckOut,
-  SizingModel, SlotMinimum, SvConstants, SvMocksOut, Workspace,
+  SizingModel, SvMocksOut, Workspace,
 } from "./api";
 // What the last download or save did, as one record with one owner -- see
 // attempt.ts for why the four it replaced could not stay four.
@@ -36,7 +35,7 @@ import { blankRequired, gaps, withPlaceholders } from "./placeholder";
 // table of what a docker bundle drops is the generator's and is fetched, never
 // restated here.
 import {
-  IgnoredByFormat, isDocker, optionApplies, whyIgnored as why,
+  isDocker, optionApplies, whyIgnored as why,
 } from "./formats";
 // The engine size the bundle will carry, and where the figure came from
 // (#132): generate derives it from the location's engine requests, so the
@@ -99,6 +98,7 @@ import { NavDrawer, ViewId } from "./layout/NavDrawer";
 // the drawer rather than inside step 1. See AccountMenu.
 import { AccountMenu } from "./layout/AccountMenu";
 import { StepFlow } from "./layout/StepFlow";
+import { useServedTables } from "./useServedTables";
 
 
 // The one thing this page does not own: the caller of the local routes. It
@@ -188,41 +188,16 @@ export default function App({ api }: { api: Api }) {
 
   // -- options / preview -----------------------------------------------------
   const [defaults, setDefaults] = useState<Options>({});
-  const [svConst, setSvConst] = useState<SvConstants>(
-    { func_ids: [], ingress_types: [], backends: {} });
-  // What each format drops, from the generator (see formats.ts). No entry for a
-  // format is nothing having been read for it -- which is every format until
-  // this lands -- and a format whose entry is `{}` drops nothing, which is an
-  // answer. Both show every option: the configure step shows a field too many
-  // rather than hiding a required one on a guess.
-  const [ignored, setIgnored] = useState<IgnoredByFormat>({});
-  // ...and which environment variables the bundle writes for itself, which the
-  // env area refuses. Empty the same way, and meaning the same thing: nothing
-  // is refused until the table lands, because generate() refuses
-  // authoritatively either way and a name rejected on a guess is the worse
-  // half of being wrong.
-  const [reservedEnv, setReservedEnv] = useState<Record<string, string | null>>({});
-  // ...and what BlazeMeter requires of a new location's `slots` before it will
-  // make one at all (#159). Empty the same way and meaning the same thing:
-  // until it lands the form states no rule and refuses nothing, because
-  // core.create_location refuses authoritatively either way and a create held
-  // back on a guess is the worse half of being wrong.
-  const [slotMinimums, setSlotMinimums] =
-    useState<Record<string, SlotMinimum>>({});
   // ...and the other half of it: the documented variables that are left, which
   // the env area offers as a list. Empty again means "not read yet" -- the area
   // falls back to naming a variable by hand, which is a field too many rather
   // than an option nobody can reach.
   const [agentEnv, setAgentEnv] = useState<AgentEnvVar[]>([]);
-  // ...and where the value for each marked field comes from, which the download
-  // step's list prints under each row. `null` rather than `{}` here, and it is
-  // the difference between the tables above and this one: they are *consulted*,
-  // so an empty one honestly means "nothing is refused yet", while this one is
-  // *displayed*, and a row with no sentence has to be a row whose sentence
-  // nobody read rather than one the generator declined to give. Nothing waits
-  // for it -- a row is complete without it.
-  const [placeholderSources, setPlaceholderSources] =
-    useState<Record<string, PlaceholderSource> | null>(null);
+  // The generator's vocabulary, fetched once and only read (useServedTables.ts).
+  const {
+    svConst, ignored, reservedEnv, slotMinimums, placeholderSources,
+    functionalities, build,
+  } = useServedTables(api);
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
   // The functionalities in play, and the vocabulary they are chosen from.
   //
@@ -234,10 +209,8 @@ export default function App({ api }: { api: Api }) {
   // functional together, and a bundle that could be declared for one of them
   // was a location nobody would create (#151).
   //
-  // The vocabulary is served (/api/functionalities) so that adding a
-  // functionality is a backend entry plus a tag on the groups it owns; empty
-  // until it lands, which hides nothing.
-  const [functionalities, setFunctionalities] = useState<Functionality[]>([]);
+  // The vocabulary is served (/api/functionalities, useServedTables) so that
+  // adding a functionality is a backend entry plus a tag on the groups it owns.
   // ...and which of them run a taurus engine, off the served `runs_engine`.
   // Read once here with the rest of the domain state rather than by each of the
   // three consumers, and empty until the vocabulary lands -- which is the same
@@ -347,11 +320,6 @@ export default function App({ api }: { api: Api }) {
   // an agent is chosen.
   const [navOpen, setNavOpen] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
-  // Null until the read lands, and a wheel answers `stale: null` -- two ways of
-  // having nothing to say, which is why `buildNotice` is what decides and not a
-  // truthiness test here. Absent means unasked, which is exactly the state this
-  // whole thing exists to stop being invisible.
-  const [build, setBuild] = useState<BuildState | null>(null);
   const [cap, setCap] = useState<Capacity | null>(null);
   const [capErr, setCapErr] = useState<string | null>(null);
   useEffect(() => {
@@ -429,9 +397,6 @@ export default function App({ api }: { api: Api }) {
   // download would carry. Read rather than re-derived here -- the rule has four
   // branches and one of them revokes a running agent's token.
   const [previewToken, setPreviewToken] = useState<TokenReport | null>(null);
-  // Whether the next download/save should issue a new credential. Off, always,
-  // until asked: it is the one action here that breaks a deployment that is
-  // currently working, and it used to be what the download button did by itself.
   // What the last download or save actually did -- the credential report in
   // core's own words, where a save landed, and why either was refused. One
   // piece of state because it is one fact: the four it replaced were reset in
@@ -439,9 +404,6 @@ export default function App({ api }: { api: Api }) {
   // before last. The download step reports the next one; nothing else writes it
   // but forgetToken, which drops the lot when the agent changes.
   const [attempt, setAttempt] = useState<Attempt>(NO_ATTEMPT);
-  // Where a save writes. Not part of the attempt: it is what was typed rather
-  // than what happened, and the preview reads it too -- a folder already
-  // holding this ship's bundle supplies the token the save would reuse.
 
   useEffect(() => {
     api.keyDetect().then((r) => {
@@ -453,21 +415,7 @@ export default function App({ api }: { api: Api }) {
       setDefaults(d);
       setOptions((o) => ({ ...d, ...o }));
     }).catch(() => {});
-    api.svConstants().then(setSvConst).catch(() => {});
-    api.ignoredOptions().then(setIgnored).catch(() => {});
-    // Asked beside the other served tables, and for their sake: a page built
-    // before the code behind it makes every one of them answer 404, which this
-    // page correctly reads as "not read yet" and responds to by showing fields
-    // the format hides. That looked like four generator defects once (#224).
-    api.build?.().then(setBuild).catch(() => {});
-    api.reservedEnv().then(setReservedEnv).catch(() => {});
-    // Left null on a refusal, which is what the state means: the download
-    // step's rows print the field and its marker either way, and the sentence
-    // is simply not there.
-    api.placeholders().then(setPlaceholderSources).catch(() => {});
-    api.slotMinimums().then(setSlotMinimums).catch(() => {});
     api.funcIdVocabulary().then(setFuncIds).catch(() => {});
-    api.functionalities().then(setFunctionalities).catch(() => {});
     api.sizingModels().then((ms) => {
       setSizingModels(ms);
       // ...and the sizings to offer before anybody has saved one, which are one
@@ -699,7 +647,9 @@ export default function App({ api }: { api: Api }) {
     setWorkspaces([]); setWorkspaceId(null);
     if (!accountId || !who) return;
     setWorkspacesBusy(true);
+    let live = true;
     api.workspaces(accountId).then((ws) => {
+      if (!live) return;
       setWorkspaces(ws);
       const want = pendingWorkspace.current;
       pendingWorkspace.current = null;
@@ -707,8 +657,9 @@ export default function App({ api }: { api: Api }) {
       // The list is what answers for a held workspace id -- including when the
       // account has none, which is the empty answer rather than no answer.
       release("workspaceId");
-    }).catch((e) => setLocErr(e.message))
-      .finally(() => setWorkspacesBusy(false));
+    }).catch((e) => { if (live) setLocErr(e.message); })
+      .finally(() => { if (live) setWorkspacesBusy(false); });
+    return () => { live = false; };
   }, [accountId, who]);
 
   // The funcId vocabulary again, now that there is an account to ask. The mount
@@ -722,7 +673,10 @@ export default function App({ api }: { api: Api }) {
   // all cannot even name what a location runs.
   useEffect(() => {
     if (!accountId || !who) return;
-    api.funcIdVocabulary(accountId).then(setFuncIds).catch(() => {});
+    let live = true;
+    api.funcIdVocabulary(accountId)
+      .then((f) => { if (live) setFuncIds(f); }).catch(() => {});
+    return () => { live = false; };
   }, [accountId, who]);
 
   // The agent variables that are left, scoped to what this location runs
@@ -743,8 +697,10 @@ export default function App({ api }: { api: Api }) {
   // name/value editor alone with it.
   const enabledKey = enabled === null ? null : enabled.join(",");
   useEffect(() => {
+    let live = true;
     api.agentEnv(enabledKey === null ? null : enabledKey.split(",").filter(Boolean))
-      .then(setAgentEnv).catch(() => {});
+      .then((e) => { if (live) setAgentEnv(e); }).catch(() => {});
+    return () => { live = false; };
   }, [enabledKey, api]);
 
   useEffect(() => {
@@ -754,7 +710,9 @@ export default function App({ api }: { api: Api }) {
     // An empty workspace and an unfetched one look identical, so the list says
     // which it is rather than showing nothing and meaning two things.
     setLocBusy(true);
+    let live = true;
     api.locations(workspaceId).then((ls) => {
+      if (!live) return;
       setLocations(ls);
       const want = pendingHarbor.current;
       pendingHarbor.current = null;
@@ -771,8 +729,9 @@ export default function App({ api }: { api: Api }) {
       } else {
         release("harborId", "shipId");
       }
-    }).catch((e) => setLocErr(e.message))
-      .finally(() => setLocBusy(false));
+    }).catch((e) => { if (live) setLocErr(e.message); })
+      .finally(() => { if (live) setLocBusy(false); });
+    return () => { live = false; };
   }, [workspaceId]);
 
   // What is currently being fetched. Two flags rather than one: they are two
@@ -805,11 +764,15 @@ export default function App({ api }: { api: Api }) {
     forgetToken();
     if (!harborId) return;
     setFactsBusy(true);
-    api.facts(harborId).then(setFacts)
+    // Guarded like every fetch keyed on a selection: pick A then B, and A's
+    // facts arriving last would configure B's bundle with A's images.
+    let live = true;
+    api.facts(harborId).then((f) => { if (live) setFacts(f); })
       // A 404 here is the location itself, and it says so rather than relaying
       // BlazeMeter's sentence about a harbor id nobody typed.
-      .catch((e) => setShipErr(goneNotice(e, "location") ?? e.message))
-      .finally(() => setFactsBusy(false));
+      .catch((e) => { if (live) setShipErr(goneNotice(e, "location") ?? e.message); })
+      .finally(() => { if (live) setFactsBusy(false); });
+    return () => { live = false; };
   }, [harborId]);
 
   useEffect(() => {
@@ -947,11 +910,6 @@ export default function App({ api }: { api: Api }) {
     }
   };
 
-  // The debounced live preview is further down, with the rest of what depends
-  // on `sentOptions` -- it has to send what the download sends, and the blank
-  // fields that go into that are not known until the group switches are.
-  const previewTimer = useRef<number | undefined>(undefined);
-
   // agent status polling. An SV deployment also reads the namespace on the same
   // tick: the agent reports idle whether or not its virtual services ever
   // became reachable, so the heartbeat alone stays green through a deploy
@@ -1032,17 +990,6 @@ export default function App({ api }: { api: Api }) {
     enginesPerNode: raw("engines_per_node"),
   };
 
-  // Settled means: an agent is chosen and its facts are in. Collapsing then
-  // keeps three steps of pickers from sitting above the configuration for the
-  // rest of the session; "Change" reopens it.
-  //
-  // ...and it no longer collapses. The pickers are a step of their own with
-  // nothing stacked below them, so folding them away buys nothing and costs the
-  // thing you came back for: picking a location auto-selects its lone offline
-  // agent, which used to swap the panel for a summary and take the agent list
-  // with it. `sourceOpen` stays because the summary is still the right thing to
-  // show in the one case that sets it -- see switchMode.
-
   // What manual mode declares the typed identity runs: the declared
   // functionalities, which *are* the funcIds (#149) -- so the declaration
   // reaches `manualFacts` with nothing in between and nothing to wait for.
@@ -1066,7 +1013,6 @@ export default function App({ api }: { api: Api }) {
   // Manual facts are rebuilt from the typed values rather than held separately,
   // so there is one `facts` for the rest of the page whichever mode is on.
   // Debounced for the same reason the preview is: this runs on every keystroke.
-  const manualTimer = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (sourceMode !== "manual") return;
     // Nothing is built from a value that is not the shape an id comes in. The
@@ -1079,17 +1025,22 @@ export default function App({ api }: { api: Api }) {
                         String(options.auth_token ?? ""))) {
       setFacts(null); setShipId(null); return;
     }
-    window.clearTimeout(manualTimer.current);
-    manualTimer.current = window.setTimeout(() => {
+    // The timer and the answer both belong to this run of the effect: an edit
+    // that lands inside the debounce, or while the request is out, must not let
+    // the previous id's facts arrive after it.
+    let live = true;
+    const timer = window.setTimeout(() => {
       api.manualFacts({
         harbor_id: manual.harbor_id.trim(),
         ship_id: manual.ship_id.trim(),
         func_ids: manualFuncIds,
       }).then((r: ManualFactsOut) => {
+        if (!live) return;
         setFacts(r.facts);
         setShipId(r.facts.ships[0].id);
-      }).catch((e) => setGenErr(String(e.message)));
+      }).catch((e) => { if (live) setGenErr(String(e.message)); });
     }, 250);
+    return () => { live = false; window.clearTimeout(timer); };
   }, [sourceMode, manual, manualFuncIds, options.auth_token]);
 
   // Switching modes drops what the other one established. Leaving a connected
@@ -1440,11 +1391,15 @@ export default function App({ api }: { api: Api }) {
     // used to spend a 400 on saying so. The preview waits for the agent
     // instead; the empty preview reads as "not yet", which is what it is.
     if (!shipId) { setFiles([]); setPreviewToken(null); setGenErr(null); return; }
-    window.clearTimeout(previewTimer.current);
-    previewTimer.current = window.setTimeout(async () => {
+    // Per run, like the manual-facts effect: a timer left pending after the
+    // agent changed, or an older generate resolving after a newer one, would
+    // put the previous bundle -- and its token report -- back on screen.
+    let live = true;
+    const timer = window.setTimeout(async () => {
       try {
         const opts = { ...sentOptions, ship_id: shipId ?? undefined };
         const r = await api.generate(facts, opts);
+        if (!live) return;
         setFiles(r.files);
         setPreviewToken(r.token);
         setGenErr(null);
@@ -1453,13 +1408,9 @@ export default function App({ api }: { api: Api }) {
         // stops being generated at all.
         setActiveFile((a) => (a && r.files.some((f) => f.name === a)
           ? a : r.files[0]?.name ?? null));
-      } catch (e) { setGenErr(String((e as Error).message)); }
+      } catch (e) { if (live) setGenErr(String((e as Error).message)); }
     }, 250);
-    // No save folder in the dependencies any more: the page used to send one, so
-    // that a directory already holding this ship's bundle made the token branch
-    // `reused`, and the preview said so. Saving to a folder is the CLI's and the
-    // MCP server's now (`bzm-opl-gen generate -o`, `opl_bundle`), so from here
-    // the branch is unreachable and there is nothing to debounce it against.
+    return () => { live = false; window.clearTimeout(timer); };
   }, [facts, sentOptions, shipId]);
 
   // -- is the published endpoint answering? ----------------------------------

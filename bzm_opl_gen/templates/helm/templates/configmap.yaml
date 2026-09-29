@@ -23,20 +23,20 @@ data:
   INHERIT_RUNNING_USER_AND_GROUP: 'true'
   KUBERNETES_SECURITY_CONTEXT_CAP_JSON: '{"drop": ["ALL"]}'
   {{- end }}
-  KUBERNETES_SERVICE_USE_TYPE: {{ .Values.serviceType }}
+  KUBERNETES_SERVICE_USE_TYPE: {{ .Values.serviceType | quote }}
   RUN_HEALTH_WEB_SERVICE: 'true'
   {{- if include "bzm-opl.svEnabled" . }}
   # Service virtualization ingress. The endpoint crane advertises is
   # <virtual-service>-<port>-<namespace>.<subdomain>, so the subdomain must be
   # the wildcard domain your ingress controller already serves.
-  KUBERNETES_WEB_EXPOSE_TYPE: {{ .Values.sv.ingress | upper }}
-  KUBERNETES_WEB_EXPOSE_SUB_DOMAIN: {{ .Values.sv.subdomain }}
+  KUBERNETES_WEB_EXPOSE_TYPE: {{ .Values.sv.ingress | upper | quote }}
+  KUBERNETES_WEB_EXPOSE_SUB_DOMAIN: {{ .Values.sv.subdomain | quote }}
   # Required even for HTTP virtual services -- crane validates it at startup and
   # crash-loops when it is empty.
-  KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME: {{ .Values.sv.tlsSecret }}
+  KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME: {{ .Values.sv.tlsSecret | quote }}
   {{- if eq .Values.sv.ingress "istio" }}
   {{- with .Values.sv.istioGateway }}
-  KUBERNETES_ISTIO_GATEWAY_NAME: {{ . }}
+  KUBERNETES_ISTIO_GATEWAY_NAME: {{ . | quote }}
   {{- else }}
   # KUBERNETES_ISTIO_GATEWAY_NAME unset: crane creates a Gateway per virtual service.
   {{- end }}
@@ -47,7 +47,7 @@ data:
     project, so this line is the same either way. Only the overrides below
     depend on privateRegistry.
   */}}
-  DOCKER_REGISTRY: {{ include "bzm-opl.dockerRegistry" . }}
+  DOCKER_REGISTRY: {{ include "bzm-opl.dockerRegistry" . | quote }}
   {{- if .Values.privateRegistry }}
   IMAGE_OVERRIDES: {{ .Values.imageOverrides | toJson | squote }}
   {{- if .Values.registryAuth }}
@@ -132,8 +132,8 @@ data:
   {{- end }}
   # Mounted into crane as a directory; engines get the same ConfigMap mounted as
   # a file via KUBERNETES_CA_BUNDLE_MOUNT (ENV=configmapName=fileKey).
-  REQUESTS_CA_BUNDLE: {{ $path }}
-  AWS_CA_BUNDLE: {{ $path }}
+  REQUESTS_CA_BUNDLE: {{ $path | quote }}
+  AWS_CA_BUNDLE: {{ $path | quote }}
   KUBERNETES_CA_BUNDLE_MOUNT: {{ printf "REQUESTS_CA_BUNDLE=%s=%s:AWS_CA_BUNDLE=%s=%s" $cm $key $cm $key | quote }}
   {{- end }}
   {{- /*

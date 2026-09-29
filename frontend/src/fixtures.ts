@@ -11,7 +11,7 @@
 // answer lets a test pass while proving nothing). This is a payload, and it is
 // only ever handed to a route a test chose to stub.
 import {
-  AgentEnvVar, PlaceholderSource, SizingModel, SlotMinimum,
+  AgentEnvVar, SizingModel, SlotMinimum,
 } from "./api";
 
 /** core.SLOT_MINIMUMS as the page receives it from /api/slot-minimums — the
@@ -137,7 +137,7 @@ export const RESERVED_ENV: Record<string, string | null> = {
   AUTH_TOKEN: "auth_token",
   AUTO_KUBERNETES_UPDATE: "auto_update",
   AUTO_UPDATE: "auto_update",
-  AWS_CA_BUNDLE: "ca_bundle | ca_existing_configmap",
+  AWS_CA_BUNDLE: "ca_existing_configmap | ca_bundle | ca_bundle_slot | ca_openshift_inject",
   CONTAINER_MANAGER_TYPE: null,
   DOCKER_PORT_RANGE: null,
   DOCKER_REGISTRY: "private_registry",
@@ -150,7 +150,7 @@ export const RESERVED_ENV: Record<string, string | null> = {
   HTTP_PROXY: "proxy",
   IMAGE_OVERRIDES: "private_registry",
   INHERIT_RUNNING_USER_AND_GROUP: "restrict_engines",
-  KUBERNETES_CA_BUNDLE_MOUNT: "ca_bundle | ca_existing_configmap",
+  KUBERNETES_CA_BUNDLE_MOUNT: "ca_existing_configmap | ca_bundle | ca_bundle_slot | ca_openshift_inject",
   KUBERNETES_ISTIO_GATEWAY_NAME: "sv_istio_gateway",
   KUBERNETES_LIMITS_EPHEMERAL_STORAGE: "engine_ephemeral_limit_mb",
   KUBERNETES_NODE_SELECTOR_JSON: "engine_node_selector",
@@ -164,57 +164,11 @@ export const RESERVED_ENV: Record<string, string | null> = {
   KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME: "sv_tls_secret",
   KUBERNETES_WEB_EXPOSE_TYPE: "sv_ingress",
   NO_PROXY: "proxy",
-  REQUESTS_CA_BUNDLE: "ca_bundle | ca_existing_configmap",
+  REQUESTS_CA_BUNDLE: "ca_existing_configmap | ca_bundle | ca_bundle_slot | ca_openshift_inject",
   RUN_HEALTH_WEB_SERVICE: null,
   SHIP_ID: null,
   TLS_CERT: "sv_tls_cert",
   TLS_KEY: "sv_tls_key",
-};
-
-/** A few of the entries /api/placeholders answers with, for the fields the
- *  download step's tests leave blank.
- *
- *  A **sample**, like AGENT_ENV below and unlike the two copies above, and the
- *  reason is the same: nothing on the page has to agree with it. The panel
- *  renders a row for every blank field it holds and looks the sentence up; a
- *  key with no entry renders the marker and the field and no sentence, which is
- *  the honest rendering of a source nobody has read. So a fixture kept equal to
- *  `generate.PLACEHOLDER_SOURCE` would be fifteen paragraphs maintained to
- *  prove something no rendering depends on.
- *
- *  The sentences are the generator's own, shortened. The **markers are exact**,
- *  because those are not prose: a row shows the marker the bundle will carry,
- *  and `tests/test_server.py::test_the_served_marker_is_the_generators_own`
- *  holds the served half to `generate.marker`. */
-export const PLACEHOLDER_SOURCES: Record<string, PlaceholderSource> = {
-  harbor_id: {
-    marker: "<HARBOR_ID>",
-    source: "the private location: BlazeMeter → Settings → Private Locations",
-  },
-  ship_id: {
-    marker: "<SHIP_ID>",
-    source: "the agent inside that location, from the same page",
-  },
-  auth_token: {
-    marker: "<AUTH_TOKEN>",
-    source: "the agent's own token, from its Docker Command",
-  },
-  namespace: {
-    marker: "<NAMESPACE>",
-    source: "the namespace the agent is being deployed into",
-  },
-  service_account_name: {
-    marker: "<SERVICE_ACCOUNT_NAME>",
-    source: "the account crane runs as",
-  },
-  sv_subdomain: {
-    marker: "<SV_SUBDOMAIN>",
-    source: "the DNS suffix virtual-service endpoints are published under",
-  },
-  sv_tls_secret: {
-    marker: "<SV_TLS_SECRET>",
-    source: "a wildcard TLS secret in the agent's namespace",
-  },
 };
 
 /** A few of the variables /api/agent-env offers, one per control the area can
