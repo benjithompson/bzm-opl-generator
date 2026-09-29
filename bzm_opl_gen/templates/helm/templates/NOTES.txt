@@ -14,31 +14,29 @@ BlazeMeter agent "{{ include "bzm-opl.fullname" . }}" installed into namespace {
 2. Confirm the agent shows *online* in BlazeMeter under
    Settings -> Private Locations, then run a test against the location.
 
-Engines need {{ include "bzm-opl.engineCpuLimit" . }} CPU + {{ include "bzm-opl.engineMemoryLimit" . }} RAM + ~60GB disk (40GB of it /tmp) per concurrent
-engine, and egress to *.blazemeter.com{{ if .Values.privateRegistry }} and {{ .Values.privateRegistry }}{{ else }} and gcr.io{{ end }}.
-Check a cluster against that before a real run: bzm-opl-gen doctor
+Each concurrent engine needs {{ include "bzm-opl.engineCpuLimit" . }} CPU + {{ include "bzm-opl.engineMemoryLimit" . }} RAM + ~60GB disk (40GB of it /tmp),
+and egress to *.blazemeter.com{{ if .Values.privateRegistry }} and {{ .Values.privateRegistry }}{{ else }} and gcr.io{{ end }}.
 {{- if include "bzm-opl.svEnabled" . }}
 {{- $backend := index (include "bzm-opl.svBackends" . | fromYaml) .Values.sv.ingress }}
 
 Virtual services are published as one {{ $backend.creates }} each, at
-<virtual-service>-<port>-{{ .Release.Namespace }}.{{ .Values.sv.subdomain }} -- so *.{{ .Values.sv.subdomain }} needs a
+<virtual-service>-<port>-{{ .Release.Namespace }}.{{ .Values.sv.subdomain }}, so *.{{ .Values.sv.subdomain }} needs a
 DNS record pointing at your ingress controller.
 {{- if $backend.tlsSecretRead }}
-The TLS secret {{ .Values.sv.tlsSecret }} has to exist in {{ .Release.Namespace }} and cover that domain;
-nothing here creates it, and without it the endpoint still answers over the
-controller's own certificate, so only a client that verifies finds out:
+The TLS secret {{ .Values.sv.tlsSecret }} must exist in {{ .Release.Namespace }} and cover that domain.
+Without it the endpoint is served with the controller's default certificate:
 
    {{ $cli }} -n {{ .Release.Namespace }} create secret tls {{ .Values.sv.tlsSecret }} --cert=<file> --key=<file>
 {{- end }}
 {{- end }}
 {{- if and (not .Values.privateRegistry) (not .Values.proxy.enabled) }}
 
-Note: with no privateRegistry and no proxy, the nodes pull images from the
-public internet directly. In a locked-down cluster that is the first thing to
-fail, and it fails as ImagePullBackOff on the *engine* pod mid-test, not here.
+Note: with no privateRegistry and no proxy, nodes pull images directly from the
+internet. If that is blocked, engine pods fail with ImagePullBackOff when a test
+starts.
 {{- end }}
 {{- if not .Values.useSecret }}
 
 WARNING: AUTH_TOKEN is in a ConfigMap, readable by anyone with get on
-ConfigMaps in {{ .Release.Namespace }}. Reinstall with useSecret=true to move it.
+ConfigMaps in {{ .Release.Namespace }}. Set useSecret=true to move it.
 {{- end }}

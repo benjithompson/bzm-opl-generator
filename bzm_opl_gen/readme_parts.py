@@ -77,38 +77,28 @@ def placeholder_block(facts, o, where=()):
     # refuses a marker only in a name or label value, the chart's validation
     # refuses the rest, and on docker the script and compose refuse it.
     if o["output_format"] == "docker":
-        stops = (f"Both routes refuse to start it: `{DOCKER_RUN_FILE}` checks "
-                 "the files as they stand, the mounted ones included, and "
-                 "`docker compose up` is stopped by compose's own "
-                 "required-variable check on the same value. Nothing else "
-                 "would -- an environment variable is a string to docker and a "
-                 "mounted file is bytes, so an agent started with either comes "
-                 "up and fails later: `404` and `Sleeping for 300` on a blank "
-                 "credential, a rejected handshake on a blank certificate.")
+        stops = (f"Both `{DOCKER_RUN_FILE}` and `docker compose up` refuse "
+                 "to start until it is filled in.")
     elif all(k in PLACEHOLDER_REFUSED_BY_API for k in found):
         markers = " and ".join(f"`{marker(k)}`" for k in found)
         stops = (f"Applying it fails -- {markers} "
                  + ("are not legal Kubernetes names or label values" if n > 1
                     else "is not a legal Kubernetes name or label value")
                  + ", so the API server rejects the object and names the "
-                   "field. That is the intended behaviour, not a fault in this "
-                   "bundle.")
+                   "field.")
     elif o["output_format"] == "helm":
-        stops = ("`helm install` refuses it and names the field, including for "
-                 "the values the API server never sees as names.")
+        stops = "`helm install` refuses it and names the field."
     else:
-        stops = (f"Applying it does not always fail: the API server rejects a "
-                 f"marker used as a name and accepts one used as a value, so "
-                 f"an agent can deploy and fail after. Check with "
-                 f"`grep -rl '{MARKER_PATTERN}' *.yaml`.")
+        stops = (f"Some markers apply without error and fail only once the "
+                 f"agent runs, so check with "
+                 f"`grep -rl '{MARKER_PATTERN}' *.yaml` before applying.")
     # A chart's absent token is in no row and carries no marker, so it is said
     # here or the count reads as complete.
     also = ""
     if o["output_format"] == "helm" and helm_token_at_install(o):
         also = (" The AUTH_TOKEN is not among them and not in this bundle at "
-                "all: a chart takes it at install time, which is what "
-                "`--set-string authToken=...` in the Deploy command below is "
-                "for.")
+                "all: pass it with "
+                "`--set-string authToken=...` in the Deploy command below.")
     quote = textwrap.fill(
         f"**This bundle is not finished.** {subject} instead of a value. "
         f"{stops} Fill {'them' if n > 1 else 'it'} in, or re-generate "
@@ -140,32 +130,25 @@ def ca_slot_block(o):
         lead = (f"**This bundle names a certificate it does not carry.** Put it "
                 f"beside `./{DOCKER_RUN_FILE}` as `{DOCKER_CA_FILE}`, or point "
                 f"`CA_BUNDLE` at one the host already has. The script refuses "
-                f"to start without it, so nothing deploys trusting nothing.")
+                f"to start without it.")
         cmd = ""
     elif o["output_format"] == "helm":
         lead = (f"**This bundle names a certificate it does not carry.** Put "
-                f"the PEM in `{CHART_DIR}/` as `{name}` -- beside `Chart.yaml`, "
-                f"which is the only place `helm` reads a file from -- and "
-                f"install as normal. The chart builds the `{CA_CONFIGMAP}` "
-                f"ConfigMap from it and refuses the install while it is "
-                f"missing, naming the field.")
+                f"the PEM in `{CHART_DIR}/` as `{name}`, beside `Chart.yaml`, "
+                f"and install as normal. The chart builds the `{CA_CONFIGMAP}` "
+                f"ConfigMap from it and refuses to install without it.")
         cmd = ""
     else:
         lead = (f"**This bundle names a certificate it does not carry.** The "
-                f"manifests reference the `{CA_CONFIGMAP}` ConfigMap and do not "
-                f"create it, which is the shape BlazeMeter's own example and "
-                f"the Kubernetes ConfigMap-volume documentation both use. "
-                f"Create it from your certificate first, then apply:")
+                f"manifests mount the `{CA_CONFIGMAP}` ConfigMap but do not "
+                f"create it. Create it from your certificate first, then apply:")
         cmd = (f"\n>\n> ```\n"
                f"> kubectl create configmap {CA_CONFIGMAP} \\\n"
                f">     --from-file={name}=./{name} -n {o['namespace']}\n"
                f"> kubectl apply -f .\n> ```\n>\n"
                + "\n".join("> " + line for line in textwrap.fill(
-                   "Until that ConfigMap exists the crane pod sits at "
-                   "`ContainerCreating` and names it, which is the kubelet "
-                   "refusing the mount. That is the whole reason the "
-                   "certificate is a file: an agent cannot reach this state "
-                   "and report itself online.",
+                   "Until that ConfigMap exists the crane pod stays in "
+                   "`ContainerCreating`, naming it.",
                    width=76, break_on_hyphens=False).splitlines()))
     body = textwrap.fill(lead, width=76, break_on_hyphens=False)
     return "\n> " + "\n> ".join(body.splitlines()) + cmd + "\n\n"
@@ -220,9 +203,8 @@ def sizing_bullet(facts, o):
                 f"{format_memory(engine_size(o)[1])} RAM + {ENGINE_DISK_GB}GB disk** "
                 f"({ENGINE_TMP_GB}GB of it /tmp),\n  and {egress}")
     if "engine_cpu_limit" in ignored_options(o):
-        return (f"- What this location's {m['runs']} need on this host has not "
-                f"been measured, and\n  this format carries no limits pair to cap "
-                f"them with. The agent needs {egress}")
+        return (f"- This format sets no CPU or memory limits on this location's "
+                f"{m['runs']}.\n  The agent needs {egress}")
     return (f"- Each concurrent {m['pod']} is capped at **{format_cpu(engine_size(o)[0])} CPU + "
             f"{format_memory(engine_size(o)[1])} RAM** -- crane applies\n  one limits "
             f"pair to every pod it creates -- and the agent needs {egress}")
@@ -234,10 +216,9 @@ def requests_bullet(facts, o):
     """
     m = sizing_vocab(facts, o)
     if m is None or m["engine"]:
-        return (f"- Engine *requests* come from the location, not this bundle: `overrideCPU` and\n"
-                f"  `overrideMemory` under Settings -> Private Locations, defaulting to\n"
-                f"  {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. The scheduler places pods on requests, so unless you set\n"
-                f"  them to match the limits above, a run competes for CPU it never reserved.")
+        return (f"- Engine *requests* come from the location's `overrideCPU` / `overrideMemory`\n"
+                f"  (Settings -> Private Locations), default {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. Set them to match\n"
+                f"  the limits above, or engines share nodes and compete for CPU.")
     return (f"- *Requests* come from the location too -- `overrideCPU` and `overrideMemory`\n"
             f"  under Settings -> Private Locations, defaulting to "
             f"{ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. Those were\n"
@@ -289,9 +270,8 @@ def sa_bullet(o):
     if o["service_account_create"]:
         return ""
     return (f"\n- ServiceAccount **`{service_account(o)}`** must already exist in "
-            f"`{o['namespace']}` -- this bundle\n  references it and does not "
-            f"create it. Nothing fails at apply time if it is\n  missing; the "
-            f"agent pod is simply never created.")
+            f"`{o['namespace']}` -- this bundle\n  does not create it. If it is "
+            f"missing, apply succeeds but the agent pod is\n  never created.")
 
 
 def sv_bullet(facts, o):
@@ -308,17 +288,14 @@ def sv_bullet(facts, o):
         f"\n- **The wildcard TLS secret `{cfg['tls_secret']}` has to be in "
         f"`{o['namespace']}`, and this\n  bundle does not create it.** Crane "
         f"creates its {SV_INGRESS_BACKENDS[cfg['type']].creates} in the agent's "
-        f"own namespace and\n  resolves the secret name there; nothing reads one "
-        f"from another namespace.\n  BlazeMeter's *Bring your own certificate* "
-        f"page says `default` -- that is where\n  their walkthrough happens to "
-        f"install the agent, not a rule. It has to cover\n  `*.{cfg['subdomain']}`.\n"
+        f"namespace and\n  looks the secret up there. It has to cover "
+        f"`*.{cfg['subdomain']}`.\n"
         f"  ```\n"
         f"  {cli(o)} -n {o['namespace']} create secret tls {cfg['tls_secret']} "
         f"--cert=<file> --key=<file>\n"
         f"  ```\n"
-        f"  Leave it out and nothing fails: the endpoint answers `200` over the "
-        f"ingress\n  controller's own certificate, and only a client that "
-        f"verifies ever finds out.")
+        f"  Without it, endpoints are served with the ingress controller's "
+        f"default\n  certificate, which verifying clients reject.")
 
 
 def create_namespace_cmd(o):
@@ -344,9 +321,8 @@ def deploy_steps(o, verb):
     if separate_pools(o):
         steps.append(
             f"**{{n}}. Create the node pools** -- see [{NODEPOOLS_FILE}]"
-            f"({NODEPOOLS_FILE}). This bundle pins engines to\nnodes that must "
-            f"exist first; without them the agent comes online and every test "
-            f"stays\nPending.\n\n")
+            f"({NODEPOOLS_FILE}). Engines are pinned to nodes\nthat must exist "
+            f"first, or every test stays Pending.\n\n")
     if o["private_registry"]:
         steps.append(
             "**{n}. Mirror the images** (needs push access to the registry; "
@@ -358,17 +334,15 @@ def deploy_steps(o, verb):
         # path: a key the manifests do not mount gives crane an empty bundle
         # rather than an error. The namespace command is repeated because this
         # step comes before the one that creates it.
-        make_ns = (f"# the namespace has to exist first, and step "
-                   f"{len(steps) + 2} is too late\n{create_namespace_cmd(o)}\n")
+        make_ns = f"{create_namespace_cmd(o)}\n"
         steps.append(
             f"**{{n}}. Create the trust-bundle ConfigMap**, if your platform "
             f"team has not\nalready -- this bundle references `{ca['cm']}`\nin "
             f"`{o['namespace']}` and does not create it:\n\n"
             f"```\n{make_ns}{cli(o)} -n {o['namespace']} create configmap "
             f"{ca['cm']} --from-file={ca['key']}=/path/to/your-ca.pem\n```\n\n"
-            f"Keep the `{ca['key']}=` in front of the path. Without it the key "
-            f"is the file's own\nname, and a key these manifests do not mount "
-            f"gives crane an empty bundle rather\nthan an error.\n\n")
+            f"Keep the `{ca['key']}=` in front of the path: it sets the key "
+            f"these manifests mount.\n\n")
     if not steps:
         return ""
     body = "".join(s.format(n=i) for i, s in enumerate(steps, 1))
@@ -393,10 +367,8 @@ def ignored_block(o):
     return f"""
 ## Set here, but not carried
 
-These were configured for this bundle and this format has nowhere to put them.
-Nothing is silently applied -- they are in `{PROFILE_FILE}` and are named here,
-so a bundle generated one way and handed over is never believed to have applied
-something it did not.
+These were set, but this format has nowhere to put them, so this bundle does
+not apply them. They are recorded in `{PROFILE_FILE}`.
 
 | option | why |
 |---|---|

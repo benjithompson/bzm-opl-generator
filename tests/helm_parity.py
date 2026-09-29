@@ -1,23 +1,12 @@
 #!/usr/bin/env python3
-"""Render every option combination both ways and require the same objects.
+"""Render every option combination as manifests and as a helm chart, and
+require the same objects.
 
     python tests/helm_parity.py
 
-Not a pytest module -- it shells out to `helm`, which the offline suite must not
-depend on (a suite that skips when a binary is missing reports a clean pass
-having tested nothing). Named so pytest does not collect it, and run as its own
-CI job where helm is installed.
-
-The point it defends: `--format helm` and `--format manifests` are two ways of
-writing one deployment. Every judgement in templates/*.yaml -- the CA mount
-being a directory, which proxy URLs reach the ConfigMap, the RBAC the agent
-actually needs -- had to be restated in Go templates, and nothing but this check
-would notice one of them being restated slightly differently.
-
-Three ConfigMap values are compared as JSON rather than as bytes: they are JSON
-documents in a string field, and Go's toJson sorts keys and omits the spaces
-Python's json.dumps writes. Crane parses them, so the encoding is not the
-contract; the structure is.
+Not a pytest module: it needs the helm binary, and runs as its own CI job.
+JSON-valued ConfigMap entries are compared parsed, since Go and Python encode
+them differently.
 """
 
 import json
@@ -49,30 +38,23 @@ CASES = {
                      "engine_mem_limit": "1Gi"},
     "token-in-configmap": {"platform": "k8s", "use_secret": False},
     "nodeport": {"platform": "k8s", "service_type": "NODEPORT", "cluster_rbac": True},
-    # The pairing only one format used to accept. Manifests rendered it, the
-    # chart refused it, and neither direction was covered here -- which is how
-    # the disagreement survived a live run that proved the manifests right.
+    # NODEPORT with namespaced RBAC only: both formats render it.
     "nodeport-namespaced-rbac": {"platform": "k8s", "service_type": "NODEPORT"},
     "private-registry": {"platform": "k8s", "private_registry": "reg.example.com/bzm"},
     "registry-auth": {"platform": "k8s", "private_registry": "reg.example.com/bzm",
                       "registry_auth": True, "pull_secret": "regcred"},
-    # Both sides RESOLVE auto-update rather than pass it through -- the
-    # ConfigMap carries a boolean and the option is a tri-state -- so each
-    # format has its own copy of "unset follows the registry" and the two can
-    # disagree in either direction. The unset case is covered by every other
-    # entry here; these two are the ones where the customer overruled it.
+    # Auto-update set explicitly; unset is covered by every other case.
     "auto-update-off": {"platform": "k8s", "auto_update": False},
     "auto-update-on-private-registry": {"platform": "k8s", "auto_update": True,
                                         "private_registry": "reg.example.com/bzm"},
     "proxy": {"platform": "k8s", "proxy": {"http": "http://px:3128"}},
-    # A leading `*` is an alias to YAML: a bare NO_PROXY of this shape made
-    # the manifests ConfigMap unparseable while the chart quoted it.
+    # A leading `*` must be quoted, or YAML reads an alias.
     "proxy-wildcard-no-proxy": {"platform": "k8s", "proxy": {
         "http": "http://px:3128", "no_proxy": "*.corp.example,10.0.0.0/8"}},
-    # Credentials must reach the Secret, not the ConfigMap...
+    # Proxy credentials go to the Secret...
     "proxy-creds": {"platform": "k8s", "proxy": {"http": "http://px:3128",
                     "https": "http://px:3128", "username": "u", "password": "p"}},
-    # ...unless there is no Secret, where both formats warn instead.
+    # ...or, with no Secret, to the ConfigMap.
     "proxy-creds-no-secret": {"platform": "k8s", "use_secret": False,
                               "proxy": {"http": "http://px:3128", "username": "u",
                                         "password": "p"}},
@@ -84,20 +66,14 @@ CASES = {
     "scheduling": {"platform": "k8s", "node_selector": {"workload": "perf"},
                    "tolerations": [{"key": "lifecycle", "operator": "Equal",
                                     "value": "spot", "effect": "NoSchedule"}]},
-    # Two node pools: crane's placement is the podspec, the engines' is the
-    # KUBERNETES_*_JSON env, and the chart has to keep them apart exactly as the
-    # manifests do. A chart that derived the engine env from .Values.nodeSelector
-    # -- which is what it used to do -- puts every engine back on crane's pool
-    # and renders a Deployment that still looks right.
+    # Two node pools: crane's placement in the pod spec, the engines' in the
+    # KUBERNETES_*_JSON env.
     "scheduling-split-pools": {
         "platform": "k8s", "node_selector": {"pool": "crane"},
         "engine_node_selector": {"pool": "bzm-engines"},
         "engine_tolerations": [{"key": "bzm.io/engines", "operator": "Equal",
                                 "value": "true", "effect": "NoSchedule"}]},
-    # The distinction the chart cannot re-derive: crane is tainted and pinned,
-    # the engines are explicitly given neither. Rendered from a values file
-    # alone, "empty" and "absent" have to already be resolved -- so an engine
-    # env appearing here at all is the regression.
+    # Crane pinned and tainted, engines explicitly unpinned: no engine env.
     "scheduling-engines-unpinned": {
         "platform": "k8s", "node_selector": {"pool": "infra"},
         "tolerations": [{"key": "infra", "operator": "Exists",
@@ -105,39 +81,25 @@ CASES = {
         "engine_node_selector": {}, "engine_tolerations": []},
     "ephemeral": {"platform": "k8s", "engine_ephemeral_request_mb": 1024,
                   "engine_ephemeral_limit_mb": 61440},
-    # Crane's own pod, which the engine case above does not touch. The chart
-    # keeps its own copy of the default and the overlay only names an override,
-    # so the two sides can disagree here without either looking wrong alone.
+    # Crane's own ephemeral storage override.
     "crane-ephemeral": {"platform": "k8s", "crane_ephemeral_storage": "4Gi"},
-    # The escape hatch, not the default -- the default is covered by every other
-    # case here. Off is the side that can drift: the chart gates on its own
-    # value and the overlay only speaks when it is false.
+    # restrict_engines off; on is covered by every other case.
     "unrestricted-engines": {"platform": "k8s", "restrict_engines": False},
-    # The name has to reach the Deployment and both binding subjects, and
-    # `create` has to remove the object from one format exactly when it removes
-    # it from the other -- a chart still rendering it would adopt an account the
-    # customer's platform team owns.
+    # The ServiceAccount name reaches the Deployment and both bindings, and
+    # create: false removes the object in both formats.
     "service-account-named": {"platform": "k8s", "cluster_rbac": True,
                               "service_account_name": "bzm-agent"},
     "service-account-existing": {"platform": "k8s", "cluster_rbac": True,
                                  "service_account_name": "platform-sa",
                                  "service_account_create": False},
-    # crane-hook: three more objects on both sides, and every value in them is
-    # one the bundle already decided -- the namespace, the account it runs as,
-    # the registry its image comes from, the UID rule that differs by platform.
+    # crane-hook: three more objects on both sides.
     "crane-hook": {"platform": "k8s", "crane_hook": True},
     "crane-hook-openshift": {"platform": "openshift", "crane_hook": True},
     "crane-hook-private-registry": {"platform": "k8s", "crane_hook": True,
                                     "private_registry": "reg.example.com/bzm",
                                     "service_account_name": "bzm-agent"},
-    # Service virtualization: the ConfigMap's KUBERNETES_WEB_EXPOSE_* trio and
-    # the one API group the Role grants for it. Every backend is here because
-    # the group and the resources are per backend, and the chart restates that
-    # table in Go -- one entry transcribed wrongly is a Role that renders and
-    # publishes nothing, which is the failure the whole SV validation exists to
-    # catch. `none` is the third state and renders as a performance bundle on
-    # both sides; the istio pair is the one option that is read by a single
-    # backend.
+    # Service virtualization: the KUBERNETES_WEB_EXPOSE_* env and the Role's
+    # API group, per backend; `none` renders as a performance bundle.
     "sv-nginx": {"platform": "k8s", "sv_ingress": "nginx",
                  "sv_subdomain": "mocks.example.com",
                  "sv_tls_secret": "wildcard-mocks"},
@@ -155,12 +117,7 @@ CASES = {
     "sv-contour": {"platform": "k8s", "sv_ingress": "contour",
                    "sv_subdomain": "mocks.example.com",
                    "sv_tls_secret": "wildcard-mocks"},
-    # `openshift_cluster` as well as the platform: the posture installs on
-    # vanilla Kubernetes, and only the cluster being OpenShift itself serves a
-    # route.openshift.io Route. The chart has no such value -- `platform` is
-    # the only signal a hand-written values file carries -- so this is the one
-    # SV case where the two sides judge from different inputs and have to
-    # agree anyway.
+    # The chart reads only `platform`; the generator also `openshift_cluster`.
     "sv-openshift": {"platform": "openshift", "openshift_cluster": True,
                      "sv_ingress": "openshift",
                      "sv_subdomain": "apps.example.com",
@@ -170,10 +127,7 @@ CASES = {
                             "sv_ingress": "nginx",
                             "sv_subdomain": "mocks.example.com",
                             "sv_tls_secret": "wildcard-mocks"},
-    # Free-form agent env. The one place a *value* crosses the overlay as
-    # arbitrary text, so the quoting is the thing at risk: an unquoted `8080` or
-    # `true` is a ConfigMap value Kubernetes refuses, and the two sides quote in
-    # different languages.
+    # extra_env: numbers and booleans must be quoted on both sides.
     "extra-env": {"platform": "k8s", "extra_env": {
         "PREFERRED_INTERFACE": "eth1", "DODUO_PORT": 8080,
         "KUBERNETES_USE_PRE_PULLING": True}},
@@ -190,11 +144,8 @@ CONTAINER_FIELDS = ("name", "image", "imagePullPolicy", "resources", "envFrom",
                     "readinessProbe")
 
 
-# crane-hook's objects, which are keyed by kind like everything else and would
-# collide with the agent's Role, RoleBinding and (in helm) nothing at all. They
-# are compared separately, by name, because they are not the deployment: they
-# are a check that runs beside it, and on the chart side they are a `helm test`
-# hook rather than an installed object.
+# crane-hook's objects, compared by name so they do not collide with the
+# agent's Role and RoleBinding.
 HOOK_NAMES = ("bzm-cranehook", "bzm-cranehook-binding", "cranehook")
 
 
@@ -235,8 +186,7 @@ def compare(name, opts):
         shutil.rmtree(outdir, ignore_errors=True)
     helm = _by_kind(helm_docs)
 
-    # safe_load_all, not safe_load: a file may hold several documents --
-    # bzm_cranehook.yaml holds three.
+    # bzm_cranehook.yaml holds several documents.
     flat = [d
             for n, c in gen.generate(
                 FACTS, {**opts, "output_format": "manifests"}).items()
@@ -270,14 +220,9 @@ def compare(name, opts):
                     diffs.append(f"container.{f}: {mp['containers'][0].get(f)!r} "
                                  f"!= {hp['containers'][0].get(f)!r}")
         elif kind in ("RoleBinding", "ClusterRoleBinding"):
-            # Not covered by the kind set alone: a binding that grants to the
-            # wrong account renders fine and gives crane no permissions at all.
             if m["subjects"] != h["subjects"]:
                 diffs.append(f"{kind}.subjects: {m['subjects']} != {h['subjects']}")
-            # roleRef is only compared for the namespaced binding. The chart's
-            # cluster-scoped names carry the namespace on purpose, so that two
-            # locations in two namespaces do not collide over one
-            # cluster-role-binding-crane -- see bzm-opl.clusterRoleName.
+            # The chart's cluster-scoped names include the namespace.
             if kind == "RoleBinding" and m["roleRef"] != h["roleRef"]:
                 diffs.append(f"{kind}.roleRef: {m['roleRef']} != {h['roleRef']}")
         elif kind == "ServiceAccount":
@@ -293,15 +238,8 @@ def compare(name, opts):
 
 
 def _hook_diffs(flat, helm):
-    """crane-hook, compared by name across the two formats.
-
-    Not by kind: its Role and RoleBinding sit beside the agent's, and a
-    kind-keyed map would silently compare one against the other. Its Pod exists
-    on both sides but is a `helm test` hook in the chart, so the annotations are
-    expected to differ and only what the hook *does* is compared -- the image it
-    runs, the account it runs as, and the environment that tells it what to
-    check. Everything there is a value the bundle decided twice.
-    """
+    """crane-hook's objects, compared by name; the Pod by what it runs, not by
+    its annotations (the chart's is a `helm test` hook)."""
     if set(flat) != set(helm):
         return [f"crane-hook objects: manifests={sorted(flat)} helm={sorted(helm)}"]
     diffs = []
@@ -326,29 +264,14 @@ def _hook_diffs(flat, helm):
                     diffs.append(f"{name}.container.{f}: {mc.get(f)!r} != {hc.get(f)!r}")
             me = {e["name"]: e["value"] for e in mc["env"]}
             he = {e["name"]: e["value"] for e in hc["env"]}
-            # The SV variables used to be dropped from this comparison, because
-            # --format helm refused a service-virtualization location outright
-            # and the chart had no ingress to tell the hook about. Both formats
-            # carry one now, and the hook is told the same thing by both -- or
-            # it checks an ingress named "" on one of them, which is the shape
-            # of failure this file exists to find.
             if me != he:
                 diffs.append(f"{name}.env: {me} != {he}")
     return diffs
 
 
 def overrides_stay_consistent():
-    """A generated bundle must survive `--set` on top of it.
-
-    The overlay is a file people edit and a base people override at install
-    time, so nothing in the chart may depend on a value the overlay froze. This
-    caught a real one: the overlay used to pin the LimitRange max computed at
-    generate time, and `--set engine.memoryLimit=6Gi` then rendered `default`
-    above `max`, which the API server rejects -- found by running a real
-    `helm upgrade`, which failed with the ConfigMap already applied. The
-    LimitRange is gone now; the check stays, because the next frozen value would
-    fail the same way.
-    """
+    """Engine limits set with `--set` on top of a generated overlay reach the
+    ConfigMap."""
     opts = {**COMMON, "platform": "k8s", "engine_cpu_limit": "1",
             "engine_mem_limit": "4Gi"}
     outdir = tempfile.mkdtemp(prefix="bzm-parity-override-")
@@ -380,15 +303,9 @@ def overrides_stay_consistent():
     return problems
 
 
-# The service-virtualization combinations the chart refuses, and the words it
-# has to refuse them in. They are `service_virt.sv_cfg`'s, restated in Go for a
-# chart somebody installs by hand -- and a restatement is exactly the thing that
-# rots quietly, because the cases above render only configurations that are
-# *accepted*. Each of these fails silently on a cluster: the objects apply, the
-# agent reports idle, the mock pod runs 1/1 and the endpoint does not serve.
-#
-# Values rather than a generated bundle, because the generator refuses these
-# first and so can produce no overlay carrying one.
+# Service virtualization values the chart refuses (as service_virt.sv_cfg
+# does), and a phrase each refusal must contain. Passed as --set, since the
+# generator refuses them before writing an overlay.
 SV_REFUSALS = {
     "contour-nodeport": (["--set", "sv.ingress=contour",
                           "--set", "serviceType=NODEPORT"],
@@ -429,8 +346,7 @@ def sv_refusals_still_refuse():
             problems.append(f"{name}: refused, but not for the stated reason "
                             f"-- wanted {expected!r}, got "
                             f"{(r.stderr or r.stdout).strip()[:160]!r}")
-    # ...and the same chart renders the pairing that only looks like the first
-    # two: nginx writes a constant port, so NODEPORT is fine there (#60).
+    # ...while nginx with NODEPORT renders.
     r = subprocess.run([HELM, "template", "crane", chart, "-n", "bzm-perf"]
                        + base + ["--set", "sv.ingress=nginx",
                                  "--set", "serviceType=NODEPORT"],

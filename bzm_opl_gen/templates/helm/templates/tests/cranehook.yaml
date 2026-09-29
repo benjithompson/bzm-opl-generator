@@ -1,12 +1,7 @@
 {{- if .Values.craneHook.enabled }}
 {{- /*
-crane-hook (github.com/Blazemeter/crane-hook): the cluster-readiness check, as
-the chart's own `helm test` hook -- which is how upstream helm-crane 1.4.0+
-ships the same image. The flat manifests emit the same three objects for
-`kubectl apply`; tests/helm_parity.py holds the two to each other.
-
-A test hook rather than a pre-install one: it reads the RBAC, the ingress and
-its TLS secret, which pre-install would be checking before they exist.
+crane-hook (github.com/Blazemeter/crane-hook), a cluster-readiness check run by
+`helm test <release>` after install.
 */ -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -88,10 +83,7 @@ spec:
         - name: DOCKER_REGISTRY
           value: {{ include "bzm-opl.dockerRegistry" . | quote }}
         {{- if include "bzm-opl.svEnabled" . }}
-        {{- /*
-        Only when there is an ingress to check. Passed empty, the hook looks for
-        an ingress named "" and a Secret named "" and reports on both.
-        */}}
+        {{- /* Only when service virtualization is enabled. */}}
         - name: KUBERNETES_WEB_EXPOSE_TYPE
           value: {{ .Values.sv.ingress | upper | quote }}
         - name: KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME

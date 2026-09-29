@@ -87,18 +87,15 @@ PLACEHOLDER_SOURCE = {
                   "with --auth-token",
     # The identity may not exist yet, so the answer is to create it.
     "harbor_id": "the private location: BlazeMeter → Settings → Private "
-                 "Locations → this location, or bzm-opl-gen locations. If it "
-                 "has not been created yet, create it — the id is BlazeMeter's "
-                 "to issue",
-    "ship_id": "the agent inside that location, from the same page. One "
-               "location holds several agents and this bundle is one of them, "
-               "so create the agent and take its id and its AUTH_TOKEN "
+                 "Locations → this location. If it does not exist yet, create "
+                 "it first; BlazeMeter issues the id",
+    "ship_id": "the agent inside that location, from the same page. Create "
+               "the agent if needed, and take its id and its AUTH_TOKEN "
                "together",
-    "namespace": "the namespace the agent is being deployed into — your "
-                 "platform team owns this if you do not",
-    "service_account_name": "the account crane runs as. It is not safe to "
-                            "leave to the namespace's default account, which "
-                            "is why this is not defaulted for you",
+    "namespace": "the namespace the agent is deployed into",
+    "service_account_name": "the account crane runs as. It has no default, "
+                            "because the namespace's default account would "
+                            "give every pod there crane's permissions",
     "sv_subdomain": "the DNS suffix virtual-service endpoints are published "
                     "under, e.g. apps.example.com — it must resolve to your "
                     "ingress",
@@ -108,7 +105,7 @@ PLACEHOLDER_SOURCE = {
                    "under — it has to resolve to this host, and to match the "
                    "certificate below",
     "sv_tls_cert": "the X509 certificate for that hostname, in PEM",
-    "sv_tls_key": "its private key, in PEM with PKCS#8 syntax. Never recorded "
+    "sv_tls_key": "its private key, in PEM with PKCS#8 syntax. Not stored "
                   "in profile.json, so a bundle regenerated from a profile "
                   "asks for it again",
     "private_registry": "the registry the BlazeMeter images were mirrored into",
