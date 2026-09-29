@@ -10,6 +10,7 @@ Subcommands:
   generate     render manifests from facts + customer parameters
   doctor       preflight a cluster: can it schedule the location's concurrency?
   suggest      what a cluster's evidence implies about the generate options
+  ca-check     does a CA bundle verify the chain this network presents?
   sv-expose    emit a working Service+Ingress per deployed virtual service
   images       list / explain / pull / mirror / verify the images the location
                actually needs
@@ -18,13 +19,14 @@ Subcommands:
 """
 
 import argparse
+import collections
 import json
 import os
 import sys
 
-from . import (api, bundle_check, core, doctor, facts as facts_mod,
+from . import (api, bundle_check, ca_check, core, doctor, facts as facts_mod,
                generate as gen_mod, kube, livetest, plan, suggest as suggest_mod,
-               sv_read, workstation)
+               sv_read, verdict, workstation)
 from . import bundle_names, bundle_options, ca_trust, footprint, service_virt
 
 
@@ -178,8 +180,8 @@ def cmd_generate(a):
     if a.engine_node_selector is not None:
         opts["engine_node_selector"] = json.loads(a.engine_node_selector)
     if a.ca_bundle:
-        with open(a.ca_bundle) as fh:
-            opts["ca_bundle"] = fh.read()
+        # DER and PKCS#7 exports arrive as PEM; the lint below says the rest.
+        opts["ca_bundle"] = core.ca_bundle_pem(core.read_ca_bundle(a.ca_bundle))
     # PEM flags take a file; the option carries its content. The key is never
     # written to profile.json, so a replay must pass --sv-tls-key again.
     for flag, key in (("sv_tls_cert", "sv_tls_cert"),
@@ -240,8 +242,82 @@ def cmd_generate(a):
     notice = ca_trust.ca_slot_notice(opts)
     if notice:
         print(notice)
+    for warning in core.ca_bundle_warnings(opts):
+        print(warning, file=sys.stderr)
     print(f"wrote {len(built.written)} files to {a.output}/: "
           + ", ".join(sorted(w["name"] for w in built.written)))
+
+
+# More certificates than this and only the ones worth reading are listed.
+CA_LIST_LIMIT = 25
+
+
+def _ca_line(n, d):
+    role = d["role"] if d["role"] != "leaf" else "leaf (not a CA)"
+    return (f"  [{n}] {role:<16} {d['subject']}\n"
+            f"       issuer {d['issuer']}; expires {d['not_after'][:10]} "
+            f"({d['days_left']} days); SHA256 {d['sha256'][:23]}...")
+
+
+def print_ca_lint(lint, verbose=False):
+    """The lint as lines: the certificates, then each finding."""
+    certs = lint["certificates"]
+    form = {"pem": "PEM", "der": "a DER certificate",
+            "pkcs7": "a DER PKCS#7 bundle"}.get(lint["form"],
+                                                 "nothing recognisable")
+    print(f"CA bundle: {len(certs)} certificate(s), read as {form}")
+    flagged = {f["cert"] for f in lint["findings"]}
+    shown = [(n, d) for n, d in enumerate(certs, 1)
+             if verbose or len(certs) <= CA_LIST_LIMIT or n in flagged
+             or d["role"] != "root"]
+    for n, d in shown:
+        print(_ca_line(n, d))
+    if len(shown) < len(certs):
+        print(f"  ...and {len(certs) - len(shown)} more root(s) with no "
+              f"finding (--verbose lists them)")
+    for f in lint["findings"]:
+        print(f"  {f['severity']:<4}  {f['message']}")
+    if not lint["findings"]:
+        print("  no findings")
+
+
+def cmd_ca_check(a):
+    """Lint a CA bundle and verify the chain each host presents against it."""
+    data = core.read_ca_bundle(a.ca_bundle)
+    result = core.ca_check(data, hosts=a.host, proxy=a.proxy,
+                           registry=a.registry)
+    if a.json:
+        print(json.dumps(result, indent=2))
+        sys.exit(0 if result["ok"] else 1)
+    print_ca_lint(result["lint"], a.verbose)
+    for r in result["hosts"]:
+        via = f" via {r['proxy']}" if r["proxy"] else ""
+        print(f"\n{r['host']}:{r['port']}{via}: "
+              f"{r['status'].replace('_', ' ').upper()}"
+              + (f" ({r['detail']})" if r["detail"] else ""))
+        for i, d in enumerate(r["chain"]):
+            lead = "  presented" if i == 0 else "           "
+            print(f"{lead} {d['subject']}  <-  issued by {d['issuer']}"
+                  if d else f"{lead} (a certificate that does not parse)")
+        if r["missing_issuer"]:
+            print(f"  missing: {r['missing_issuer']}\n"
+                  f"  Ask your security team for this CA certificate, and "
+                  f"its own issuers up to the root, and add them to the "
+                  f"bundle.")
+    count = collections.Counter(r["status"] for r in result["hosts"])
+    fails = sum(f["severity"] == verdict.FAIL
+                for f in result["lint"]["findings"])
+    print(f"\n{count[ca_check.VERIFIED]} verified, "
+          f"{count[ca_check.NOT_VERIFIED]} not verified, "
+          f"{count[ca_check.UNREACHABLE]} unreachable, "
+          f"{fails} lint failure(s)")
+    if count[ca_check.NOT_VERIFIED]:
+        print("Crane and its engines would fail TLS to the hosts not "
+              "verified. Fix the bundle before deploying.")
+    if count[ca_check.UNREACHABLE]:
+        print("An unreachable host was not judged. Run this from a machine "
+              "on the agent's network, with the proxy the agent will use.")
+    sys.exit(0 if result["ok"] else 1)
 
 
 def cmd_sv_expose(a):
@@ -1179,6 +1255,29 @@ def main():
                    help="credentials the local proxy demands ('none' for an open "
                         "proxy); they get URL-encoded into HTTP(S)_PROXY")
     t.set_defaults(fn=cmd_livetest)
+
+    c = sub.add_parser("ca-check",
+                       help="check a CA bundle before deploying: lint the "
+                            "file, then verify the chain each BlazeMeter host "
+                            "presents on this network against it")
+    c.add_argument("--ca-bundle", required=True, metavar="FILE",
+                   help="the trust bundle: PEM, a DER .cer or a PKCS#7 .p7b")
+    c.add_argument("--proxy", metavar="URL",
+                   help="HTTP CONNECT proxy, http://[user:pass@]host:port. "
+                        "Default: HTTPS_PROXY, minus NO_PROXY. Credentials are "
+                        "never printed")
+    c.add_argument("--host", action="append", metavar="HOST[:PORT]",
+                   help="a host to verify, repeatable; replaces the default "
+                        "set (the BlazeMeter API and the engine upload hosts)")
+    c.add_argument("--registry", metavar="HOST",
+                   help="also verify this registry (a prefix such as "
+                        "reg.corp:5001/blazemeter is fine)")
+    c.add_argument("--verbose", action="store_true",
+                   help="list every certificate, not only the ones worth "
+                        "reading in a large bundle")
+    c.add_argument("--json", action="store_true",
+                   help="the result as data")
+    c.set_defaults(fn=cmd_ca_check)
 
     m = sub.add_parser("mcp", help="serve the MCP tools on stdio (for an AI "
                                    "session; see docs/mcp.md)")

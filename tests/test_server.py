@@ -40,6 +40,18 @@ def test_generate_preview_no_key_needed():
     assert "bzm_deployment.yaml" in names and "README.md" in names
 
 
+def test_generate_preview_carries_the_ca_bundle_lint():
+    """Warned beside the files, never refused: the preview still renders."""
+    from ca_fixtures import CHAIN_PEM, LEAF_PEM
+    r = client.post("/api/generate", json={
+        "facts": FACTS, "options": {"namespace": "ns1", "ca_bundle": LEAF_PEM}})
+    assert r.status_code == 200
+    assert r.json()["warnings"][0].startswith("CA bundle FAIL: ")
+    clean = client.post("/api/generate", json={
+        "facts": FACTS, "options": {"namespace": "ns1", "ca_bundle": CHAIN_PEM}})
+    assert clean.json()["warnings"] == []
+
+
 def test_generate_zip_mirror_script_executable():
     r = client.post("/api/generate/zip", json={
         "facts": FACTS,

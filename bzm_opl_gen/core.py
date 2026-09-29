@@ -16,16 +16,17 @@ import socket
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
 from . import (agent_env as agent_env_mod, api, bundle_env, bundle_names,
-               bundle_options, doctor, evidence as evidence_mod,
-               facts as facts_mod, footprint, generate as gen_mod,
-               image_catalog as image_catalog_mod, image_registry, markers,
-               options as options_mod, plan, quantity, registry_client,
-               required_fields, service_virt, suggest as suggest_mod,
-               sv_read, workstation)
+               bundle_options, ca_check as ca_check_mod, ca_trust, doctor,
+               evidence as evidence_mod, facts as facts_mod, footprint,
+               generate as gen_mod, image_catalog as image_catalog_mod,
+               image_registry, markers, options as options_mod, plan,
+               quantity, registry_client, required_fields, service_virt,
+               suggest as suggest_mod, sv_read, verdict, workstation)
 
 
 # -- failures ------------------------------------------------------------------
@@ -52,6 +53,12 @@ class NotConfigured(CoreError):
 class EvidenceUnreadable(CoreError):
     """A cluster-evidence file that could not be read at all -- distinct from
     one that was read and is not evidence (a BadRequest)."""
+    status = 400
+
+
+class CaBundleUnreadable(CoreError):
+    """A CA bundle file that could not be opened -- distinct from one that was
+    read and holds no certificate, which the lint reports as a FAIL."""
     status = 400
 
 
@@ -1305,6 +1312,102 @@ def sv_check(host, scheme="http"):
     return {"status": SV_CHECK_OK, "code": code, "url": url, "detail": detail,
             "message": SV_CHECK_503 if code == 503
             else f"HTTP {code} -- the endpoint answered."}
+
+
+# -- CA trust, checked before deploying -----------------------------------------
+
+def read_ca_bundle(path):
+    """The bytes of a CA bundle file. CaBundleUnreadable where it cannot be
+    opened; a file that opens and holds no certificate is the lint's FAIL."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError as e:
+        raise CaBundleUnreadable(
+            f"could not read the CA bundle {path}: {e.strerror or e}")
+
+
+def ca_bundle_pem(data):
+    """A CA bundle as the PEM text a bundle carries: DER and PKCS#7 converted,
+    CRLF made LF, comments kept."""
+    # cert imports cryptography, a compiled extension; only CA work loads it.
+    from . import cert
+    return cert.normalise(data)
+
+
+def ca_lint(data):
+    """What is wrong with a CA bundle, from the file alone (cert.lint)."""
+    from . import cert
+    return cert.lint(data)
+
+
+def ca_bundle_warnings(options):
+    """An inline CA bundle's lint findings, as sentences a generate reports.
+
+    Warned, never refused: an inline PEM has always been accepted as given,
+    and a FAIL here is a bundle that will not connect, not one that will not
+    apply. [] for every other CA mode, which carries no PEM to read.
+    """
+    ca = ca_trust.resolved_ca(options)
+    pem = (options or {}).get("ca_bundle")
+    if (ca is ca_trust.CA_UNRESOLVED or not ca or ca["mode"] != "inline"
+            or not pem or markers.is_placeholder(pem)):
+        return []
+    out = []
+    for f in ca_lint(pem)["findings"]:
+        tail = (" The bundle was written anyway. Fix the CA bundle before "
+                "deploying." if f["severity"] == verdict.FAIL else "")
+        out.append(f"CA bundle {f['severity']}: {f['message']}{tail}")
+    return out
+
+
+def ca_check_hosts():
+    """The hosts ca_check tries by default: the API crane registers with and
+    the hosts engines upload results to."""
+    return [urllib.parse.urlsplit(footprint.API_BASE).hostname,
+            *footprint.ENGINE_UPLOAD_HOSTS]
+
+
+def ca_check(data, hosts=None, proxy=None, registry=None, env=None,
+             timeout=ca_check_mod.TIMEOUT_S):
+    """Lint a CA bundle, then verify each host's presented chain with it alone.
+
+    `hosts` replaces ca_check_hosts(); `registry` (a host, or a registry
+    prefix like reg.corp:5001/blazemeter) is added to either. `proxy` is an
+    http:// URL; without one HTTPS_PROXY and NO_PROXY in `env` decide. Returns
+    {lint, hosts, ok}; `ok` is False on a lint FAIL or any not-verified host.
+    An unreachable host is no verdict and leaves `ok` alone.
+    """
+    from . import cert
+    targets = list(hosts or ca_check_hosts())
+    if registry:
+        targets.append(registry.split("/")[0])
+    # Every proxy is parsed before the first connection, so a bad URL is a
+    # refusal rather than a column of unreachable hosts.
+    proxies = []
+    for target in targets:
+        host, _ = ca_check_mod.split_host(target)
+        try:
+            proxies.append(ca_check_mod.proxy_for(host, proxy, env))
+        except ValueError as e:
+            raise BadRequest(str(e))
+    lint = cert.lint(data)
+    pem = cert.verify_pem(data)
+    results = []
+    for target, p in zip(targets, proxies):
+        r = ca_check_mod.check_host(target, pem, p, timeout)
+        results.append({
+            "host": r["host"], "port": r["port"], "status": r["status"],
+            "detail": r["detail"], "proxy": p.shown if p else None,
+            # None for a presented certificate that does not parse.
+            "chain": [cert.describe_der(der) for der in r["chain"]],
+            "missing_issuer": (cert.missing_issuer(r["chain"], data)
+                               if r["status"] == ca_check_mod.NOT_VERIFIED
+                               else None)})
+    ok = (not any(f["severity"] == verdict.FAIL for f in lint["findings"])
+          and not any(r["status"] == ca_check_mod.NOT_VERIFIED
+                      for r in results))
+    return {"lint": lint, "hosts": results, "ok": ok}
 
 
 # -- the vocabulary ------------------------------------------------------------

@@ -41,12 +41,15 @@ Every check below is named exactly as `doctor` prints it.
 | admission (SCC) | – | OpenShift namespace with no `sa.scc.uid-range` |
 | service account | `service_account_create: false` and no ServiceAccount of that name in the namespace — the Deployment applies and no pod is ever created, the reason being an event on the ReplicaSet | the namespace's ServiceAccounts could not be read, so the name is unverified |
 | sv ingress class | `sv_ingress: nginx` with no IngressClass named `nginx` — crane hardcodes that name, so nothing claims the Ingress and the published endpoint 503s while the virtual service is healthy ([details](service-virtualization.md#reaching-a-virtual-service-from-outside-sv-expose)) | the IngressClasses could not be read |
-| egress *(one check per target)* | any of `a.blazemeter.com`, `data.blazemeter.com`, `storage.blazemeter.com` — plus the private registry when one is set — unreachable from the namespace | that target could not be probed with the profile's proxy/CA honoured; or nothing was probed at all (an evidence file cannot carry a probe: it takes a pod in the namespace, and a collector must not create one) |
+| egress *(one check per target)* | any of `a.blazemeter.com`, `data.blazemeter.com`, `storage.blazemeter.com` — plus the private registry when one is set — unreachable from the namespace | that target could not be probed with the profile's proxy/CA honoured; the profile's CA could not be had yet, with the reason ([CA trust](ca-trust.md#the-doctors-egress-probe)); or nothing was probed at all (an evidence file cannot carry a probe: it takes a pod in the namespace, and a collector must not create one) |
 
 Exit status is non-zero on any FAIL. Egress is probed from the crane pod when
 it is deployed — the only place the profile's proxy env and CA bundle are
-actually in force — and from a one-shot curl pod otherwise; a probe that cannot
-honour a configured CA reports *unknown*, never a FAIL.
+actually in force — and from a one-shot curl pod otherwise, handed the
+profile's proxy env and CA. Where that CA does not exist yet (a certificate
+file not yet made into its ConfigMap, say) the probe reports *not probed* and
+why, never a FAIL. A chain the CA does not verify (curl exit 60) is a FAIL;
+`bzm-opl-gen ca-check` then names the missing issuer.
 
 Capacity is measured against node **allocatable**, which is an upper bound:
 other workloads already hold part of it. A doctor pass means "nothing here

@@ -45,7 +45,7 @@ with `"bzm-opl-gen[ui]==0.4.1"`.
 `[ui]` is the web page, `[mcp]` the MCP server ([docs/mcp.md](docs/mcp.md)),
 `[ui,mcp]` both. The bare CLI pulls in one package, `cryptography` — it reads
 the certificate a docker agent serves its virtual services with, to check the
-hostname against it.
+hostname against it, and the CA bundles `ca-check` lints.
 
 <details>
 <summary>Installing from git, or from a release wheel</summary>
@@ -113,14 +113,17 @@ bzm-opl-gen create-agent --api-key api-key.json --harbor-id <harbor-id> \
 # 2. gather the location's facts from the account
 bzm-opl-gen facts --api-key api-key.json --harbor-id <harbor-id>
 
-# 3. generate manifests. The token comes from you, not from the API: generate
+# 3. behind a TLS-inspecting proxy: check the CA on the agent's network first
+bzm-opl-gen ca-check --ca-bundle corp-ca.pem --proxy http://proxy.corp:3128
+
+# 4. generate manifests. The token comes from you, not from the API: generate
 #    never mints one, because minting revokes the token a running agent holds
 bzm-opl-gen generate --namespace my-project --auth-token <token> -o out/
 
-# 4. preflight the target cluster before anyone waits on a stuck run
+# 5. preflight the target cluster before anyone waits on a stuck run
 bzm-opl-gen doctor --facts facts.json --manifests out/ -n my-project
 
-# 5. deploy. No manifest in the bundle is the namespace -- one that was would
+# 6. deploy. No manifest in the bundle is the namespace -- one that was would
 #    let a later `delete -f` take the namespace too -- so create it here. It
 #    asks first, so it changes nothing about a namespace somebody already owns,
 #    and the bundle README prints the same line
@@ -221,6 +224,7 @@ option or only narrows it
 | [docs/service-virtualization.md](docs/service-virtualization.md) | ingress backends for `mockServices`, and `sv-expose` |
 | [docs/images.md](docs/images.md) | `images` — what each image does, mirroring, and checking a mirror |
 | [docs/preflight.md](docs/preflight.md) | `doctor`, `suggest`, `toolcheck`, engine sizing |
+| [docs/ca-trust.md](docs/ca-trust.md) | `ca-check` — a corporate CA, checked against the network before deploying |
 | [docs/live-test.md](docs/live-test.md) | the live rig: registry, proxy + CA, egress containment |
 | [docs/hardened-engines.md](docs/hardened-engines.md) | the security context crane stamps on the pods it spawns |
 | [docs/crane-nginx-ingress-port.md](docs/crane-nginx-ingress-port.md) | write-up of crane's nginx Ingress port defect |

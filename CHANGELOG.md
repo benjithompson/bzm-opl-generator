@@ -49,6 +49,28 @@ anything that breaks.
   `source` (`location-versions`, `agent-inventory` or `catalogue`), and the
   facts have a `crane_source`. Older facts files still work.
 
+- **`bzm-opl-gen ca-check` tests a corporate CA before you deploy.** Behind a
+  TLS-inspecting proxy the agent needs your CA, and a wrong one only shows up
+  as an agent that never comes online. Run it on the agent's network:
+
+  ```
+  bzm-opl-gen ca-check --ca-bundle corp-ca.pem --proxy http://proxy.corp:3128
+  ```
+
+  It lints the file (a server certificate where the CA belongs, an expired or
+  expiring CA, an intermediate without its root, duplicates, blocks that do not
+  parse), then opens TLS to the BlazeMeter API and upload hosts, prints the
+  chain your network presents, and verifies it against the bundle alone. A
+  host that does not verify names the CA the bundle is missing. It exits `1`
+  on a host not verified or a lint failure. See
+  [docs/ca-trust.md](docs/ca-trust.md).
+
+- **`generate --ca-bundle` lints the PEM and reads Windows exports.** A DER
+  `.cer` or a PKCS#7 `.p7b` no longer stops `generate` with a decode error; it
+  is written into the bundle as PEM. Lint findings are printed (and returned in
+  the MCP server's `warnings` and the web preview's `warnings`). A failure is
+  warned loudly; the bundle is still written, as before.
+
 - **Engines request what they are limited to.** Manifests and the Helm chart
   now set `KUBERNETES_RESOURCES_DEFAULT_CPU` / `KUBERNETES_RESOURCES_DEFAULT_MEM`
   beside the engine limits, so each engine requests 2 CPU / 8Gi by default
@@ -117,6 +139,13 @@ anything that breaks.
   guessing binds the bundle to an agent somebody else may be running.
 
 ### Changed
+
+- **`doctor` probes egress with your CA before crane is deployed.** It used to
+  report egress as unknown whenever a CA was configured. The throwaway curl pod
+  now gets the same CA (the inline PEM, or the CA ConfigMap from the
+  namespace). Where that ConfigMap does not exist yet, or cannot be read, the
+  report says which and why. A chain the CA does not verify is now a FAIL that
+  points to `ca-check`.
 
 - **Generated bundles read as customer documentation.** Comments in the
   manifests, the Helm chart (`values.yaml`, templates, README), the docker

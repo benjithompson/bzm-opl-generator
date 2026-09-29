@@ -136,4 +136,6 @@ def ca_slot_notice(options):
     }.get(o["output_format"])
     if not builds:
         return None
-    return f"CA certificate: this bundle {named}. {builds}"
+    return (f"CA certificate: this bundle {named}. {builds} Before deploying, "
+            f"bzm-opl-gen ca-check tests that file against the chain the "
+            f"agent's network presents.")

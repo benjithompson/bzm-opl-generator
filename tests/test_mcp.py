@@ -276,6 +276,17 @@ def test_a_ca_slot_is_a_warning_here_rather_than_a_line_beside_the_token(
     assert not any("CA certificate" in w for w in plain["warnings"])
 
 
+def test_an_inline_ca_bundle_is_linted_into_warnings(fake_account, tmp_path):
+    """A server certificate given where the CA belongs is written, and said."""
+    from ca_fixtures import LEAF_PEM
+    body = ok("opl_bundle", "generate",
+              {"facts": FACTS, "out_dir": str(tmp_path),
+               "options": {"ca_bundle": LEAF_PEM}})
+    assert any(w.startswith("CA bundle FAIL: ") for w in body["warnings"]), \
+        body["warnings"]
+    assert (tmp_path / bundle_names.CA_CONFIGMAP_FILE).exists()
+
+
 def test_rotating_names_the_ship_whose_credential_it_replaced(fake_account,
                                                               tmp_path):
     """A rotation names the ship in token_source and in warnings; the token never
