@@ -124,7 +124,7 @@ bzm-opl-gen toolcheck --cluster minikube --local-registry 5001 --local-proxy
 
 `toolcheck` preflights *your machine* against the flags you intend to pass.
 What each rig flag proves is in [docs/live-test.md](docs/live-test.md), and the
-environment traps behind them in [CLAUDE.md](CLAUDE.md).
+environment traps behind them in [LIVE_RIG.md](LIVE_RIG.md).
 
 ## The web UI build
 
@@ -172,8 +172,8 @@ production:
 - **Create a scratch private location for it**, rather than pointing it at one
   that already has a job.
 - If a run repoints an existing test, it restores the original `executions` in a
-  `finally` and prints the original first. Verify afterwards; CLAUDE.md has the
-  one-liner.
+  `finally` and prints the original first. Verify afterwards; LIVE_RIG.md has the
+  post-run checks.
 - Leave the account clean: check for stray namespaces, containers and minikube
   profiles when a run is interrupted.
 
@@ -248,7 +248,8 @@ generated from commit subjects.
 | `docs/` | the user-facing reference: options, web UI, Helm, docker, SV, preflight, capacity planning, the live rig. Shipped in the wheel and served to MCP sessions, so write it for a customer |
 | `CONTEXT.md` | the glossary |
 | `CONTRIBUTING.md` | this file: setup, layout, test layers, PR flow, releases |
-| `CLAUDE.md` | live-rig internals, account facts, the traps behind each flag |
+| `CLAUDE.md` | what a coding session needs: tests, account guardrails, architecture, invariants |
+| `LIVE_RIG.md` | live-rig internals: the run command, the traps behind each flag, post-run checks |
 
 Add a new `docs/` page to the README's documentation table, or nothing will find
 it.
