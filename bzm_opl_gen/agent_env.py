@@ -1,48 +1,19 @@
 """BlazeMeter's agent-environment reference, as data.
 
-`extra_env` is the escape hatch, and it was a name box and a value box: to use
-it somebody had to already know that KUBERNETES_USE_PRE_PULLING exists, spell
-it, and know that its value is the word `true`. That is a documentation lookup
-performed at the keyboard, and every part of it is somewhere it can go wrong --
-a typo produces a variable the agent never reads, and nothing anywhere says so.
-
-So the reference is here, transcribed from
+Transcribed from
 
     https://help.blazemeter.com/docs/guide/private-locations-blazemeter-agent-environment-variables.html
 
-and the form offers it as a list with a control per type. Three things follow
-from that page being the source rather than a summary of it:
+so the `extra_env` form can offer each variable with a control per type rather
+than asking for a name and a value blind.
 
-**Every documented variable is declared, including the ones this generator
-writes for itself.** `core.agent_env()` subtracts `generate.RESERVED_ENV` at
-the point it is served, so a name is offered exactly while no option owns it --
-and an option removed later hands its variable back to this list without anyone
-remembering to. Declaring only the leftovers would be the same table written
-twice, out of sync at the first change.
-
-**The platform is part of the record, and so is the functionality.** They are
-two different questions and a performance location was being offered the answer
-to both. The page has two tables and they are not the same table:
-HOSTNAME_OVERRIDE and TLS_CERT are Docker's, the KUBERNETES_* half is not, and a
-form that offered all of them would be offering a setting the agent under the
-bundle has no reader for. Beside that, a variable can be documented for this
-platform and still reach nothing the *location* runs -- the Grid proxy's port on
-a location with no grid -- so each row also names the functionalities that read
-it, empty meaning every location. `core.agent_env()` applies both filters at the
-point it is served, for the same reason it subtracts RESERVED_ENV there:
-declaring only what a given location is offered would be this table written once
-per location.
-
-**The type is what the control is chosen from.** A boolean gets a three-way
-control rather than a text box (see `env.ts` for why three), an integer a number
-box, and a JSON object the key/value table this page uses everywhere else --
-nobody types JSON (#127). The values still reach `extra_env` as strings,
-because an environment variable is text and `generate.extra_env` refuses
-anything else.
-
-`default` is the agent's own default, stated on the row: a variable left unset
-is not a variable with no value, and a form that did not say so would make
-"leave it alone" look like a gap.
+Every documented variable is declared, including the ones the generator writes
+itself: `core.agent_env()` subtracts `generate.RESERVED_ENV` when serving, so an
+option removed later hands its variable back. Each row names its platforms
+(the page has a Docker table and a Kubernetes table) and the functionalities
+that read it (empty meaning every location); `core.agent_env()` filters by both.
+`type` picks the control; values still reach `extra_env` as strings. `default`
+is the agent's own default.
 """
 
 # The two tables on that page. A variable in both is in both tuples.
@@ -50,13 +21,9 @@ KUBERNETES = "kubernetes"
 DOCKER = "docker"
 BOTH = (KUBERNETES, DOCKER)
 
-# What the form builds a control from. `pem` is a string as far as the agent is
-# concerned -- it is here because a certificate pasted into a one-line input is
-# a one-line input holding 40 lines, and that is a different control rather
-# than a different value. It is a claim about what the variable *holds*, never
-# about what its name suggests: TLS_CERT reads as a certificate and holds a
-# path to one (#181), and typing it `pem` invited the value the agent cannot
-# use.
+# What the form builds a control from. `pem` is a string to the agent but
+# needs a multi-line control; it describes what the variable holds, not what
+# its name suggests (TLS_CERT holds a path).
 TYPES = ("string", "bool", "int", "json_object", "pem")
 
 
@@ -64,28 +31,18 @@ def _v(name, type_, platforms, summary, default=None, example=None,
        functionalities=()):
     """One row of the reference.
 
-    `functionalities` is read exactly the way `OptionGroup.functionalities` is
-    on the page: the funcIds whose agent has a reader for this variable, and
-    **empty means every location**. Empty is therefore both "agent-wide" and
-    "nobody has decided", which is the safe direction to be wrong in -- a
-    variable offered where it reaches nothing costs a row, one filtered out
-    where it was needed costs the setting. The reserved names below are
-    untagged for that reason and no other: nothing offers them, so there is no
-    decision to record, and if an option is removed later its variable comes
-    back offered to everyone rather than to nobody.
+    `functionalities` are the funcIds whose agent reads this variable; empty
+    means every location, the safe direction to be wrong in.
     """
     return {"name": name, "type": type_, "platforms": list(platforms),
             "summary": summary, "default": default, "example": example,
             "functionalities": list(functionalities)}
 
 
-# Transcribed in the page's own order, Docker's table first and then the
-# Kubernetes one, minus the names that appear in both. Summaries are the page's
-# sentence tightened to fit a row; where the page states a default it is here
-# verbatim, and where it does not the field is None rather than a guess.
+# In the page's own order (Docker's table, then Kubernetes' remaining names).
+# A default is the page's verbatim, or None where the page states none.
 AGENT_ENV = (
-    # -- identity and the credential. Reserved by this generator, declared here
-    # so the reference is whole rather than pre-filtered.
+    # -- identity and the credential (reserved by this generator)
     _v("AUTH_TOKEN", "string", BOTH, "The agent auth token"),
     _v("HARBOR_ID", "string", BOTH,
        "ID of the private location the agent is associated with"),
@@ -142,21 +99,11 @@ AGENT_ENV = (
        "Network interface to read the machine's IP address from",
        default="the first interface that is not docker0 or lo",
        example="eth0"),
-    # Doduo is BlazeMeter's Selenium *grid* proxy, which is why this and the two
-    # _GRID certificates below are GUI functional's rather than agent-wide.
-    # Not a new claim: `facts.IMAGE_CATEGORY` already classifies the `doduo`
-    # image as `gui`, and a live functionalGui location's /versions carries
-    # blazemeter/doduo where a performance-only location's does not -- so the
-    # tag agrees with a table this repo already had rather than asserting
-    # something beside it.
+    # Doduo is the Selenium grid proxy, present only on GUI functional agents.
     _v("DODUO_PORT", "int", BOTH,
        "Port the BlazeMeter Grid proxy (Doduo) listens on", default="8000",
        functionalities=["functionalGui"]),
     # -- virtual services: how they are published
-    # BlazeMeter's own reference defines this one, TLS_CERT and TLS_KEY against
-    # "transactional virtual services", which is service virtualization -- the
-    # sentence is in the summaries below, and the tag is that sentence read as
-    # data.
     _v("HOSTNAME_OVERRIDE", "string", (DOCKER,),
        "Hostname for transactional virtual services created on this agent",
        functionalities=["mockServices"]),
@@ -184,23 +131,9 @@ AGENT_ENV = (
     _v("KUBERNETES_USE_APIPA", "bool", (KUBERNETES,),
        "Publish endpoints on the node's IP address rather than 127.0.0.1",
        default="true", functionalities=["mockServices"]),
-    # -- TLS material for the endpoints the agent serves itself. The first pair
-    # is the domain HOSTNAME_OVERRIDE names, so it goes where that does; the
-    # _GRID pair is Doduo's, so it goes where DODUO_PORT does.
-    #
-    # These two hold a **path**, not a certificate (#181). BlazeMeter's own
-    # example sets them beside the mounts that put the files there --
-    # `--env TLS_CERT=/etc/ssl/certs/public.pem -v /path/to/public.pem:/etc/
-    # ssl/certs/public.pem` -- which is the same shape REQUESTS_CA_BUNDLE and
-    # AWS_CA_BUNDLE above already carry, so they are typed the same way: a
-    # string whose example is the path. They were `pem`, which put a
-    # certificate textarea on the page, and a certificate pasted into a
-    # variable the agent opens as a filename is an agent that starts, reports
-    # online and serves no TLS. The summary carries what the name cannot --
-    # the path is *inside the container*, so the file has to be mounted there.
-    # The _GRID pair below is left `pem` deliberately: it is declared for both
-    # platforms, only the Docker side is documented as a path, and what
-    # Kubernetes expects is unconfirmed (#186).
+    # -- TLS material for the endpoints the agent serves itself. TLS_CERT and
+    # TLS_KEY hold a path inside the container, where the file must be mounted.
+    # The _GRID pair stays `pem`: only its Docker side is documented as a path.
     _v("TLS_CERT", "string", (DOCKER,),
        "Path in the container to the public certificate for the domain in "
        "HOSTNAME_OVERRIDE; mount the file there",

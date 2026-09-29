@@ -1,14 +1,9 @@
 """Run the web UI as a macOS LaunchAgent, so no terminal has to stay open.
 
-launchd rather than docker, deliberately: the UI's one job that touches the
-world outside the browser is writing bundles somewhere `kubectl apply` can see
-them, and a container puts a filesystem boundary exactly there. A LaunchAgent
-is the same native process `bzm-opl-gen ui` starts by hand -- same paths, same
-key discovery -- just started at login and restarted if it dies.
+A LaunchAgent rather than a container: the UI writes bundles where `kubectl
+apply` can see them, and a container would put a filesystem boundary there.
 
-stdlib only. This module is imported by the CLI before anyone has asked for
-the `[ui]` extra's dependencies, so an ImportError here would break `--help`
-for everything.
+stdlib only: the CLI imports this before the `[ui]` extra is known to exist.
 """
 
 import os
@@ -34,30 +29,15 @@ def log_path():
 def build_plist(port=8765, host="127.0.0.1", api_key_path=None):
     """The agent definition, as a dict for plistlib.
 
-    ProgramArguments starts with sys.executable: the venv that ran
-    --install-service is the one that serves, which is what makes an editable
-    checkout's UI the one you get. It also means moving or deleting that venv
-    silently kills the service -- reinstall after either.
-
-    --no-browser always: launchd starts this at login and on every crash, and
-    each start popping a browser tab would turn a restart loop into a tab
-    storm.
-
-    --dev always, which is the whole point of a *local* install (#224). This
-    process serves the checkout that installed it, and without reload it serves
-    whatever that checkout was at login -- for days, silently. One service ran a
-    day behind a route the page depends on: the fetch 404'd, the page read that
-    as "not read yet" and showed every option for a docker bundle, and three
-    generator defects were suspected before the server was. Releases are the
-    distribution; a local install is for testing this repo, so it tracks the
-    working tree. `ui_dist` is the half reload cannot fix -- see
-    server.build_state.
+    Runs sys.executable, so the venv that installed it serves (reinstall if it
+    moves). Always --no-browser (launchd restarts would open tabs) and --dev
+    (a local install tracks the working tree; `ui_dist` still needs a rebuild,
+    see server.build_state).
     """
     args = [sys.executable, "-m", "bzm_opl_gen", "ui", "--no-browser", "--dev",
             "--port", str(port), "--host", host]
     if api_key_path:
-        # Absolute for the same reason core refuses relative out_dirs: launchd
-        # starts this process in a working directory nobody chose.
+        # Absolute: launchd starts this in a working directory nobody chose.
         args += ["--api-key", os.path.abspath(os.path.expanduser(api_key_path))]
     return {
         "Label": LABEL,
@@ -84,10 +64,8 @@ def _require_darwin():
 def install(port=8765, host="127.0.0.1", api_key_path=None):
     """Write the plist and load it. Returns {plist, log, url}.
 
-    bootout first, ignoring its result: `launchctl bootstrap` refuses a label
-    that is already loaded, so a reinstall (new port, new key) has to unload
-    the old definition -- and when nothing was loaded, bootout's failure is
-    the expected case, not a problem.
+    bootout first, result ignored: bootstrap refuses a label already loaded,
+    and when nothing was loaded bootout's failure is expected.
     """
     _require_darwin()
     path = plist_path()
@@ -107,8 +85,8 @@ def install(port=8765, host="127.0.0.1", api_key_path=None):
 
 
 def uninstall():
-    """Unload and remove. Returns what it removed, or names what was absent --
-    'there was nothing to remove' is an answer, not an error."""
+    """Unload and remove. Returns {"removed": path}, or None for the path when
+    nothing was installed."""
     _require_darwin()
     subprocess.run(["launchctl", "bootout", f"{_domain()}/{LABEL}"],
                    capture_output=True)

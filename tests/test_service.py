@@ -1,11 +1,5 @@
-"""The LaunchAgent installer, without launchd.
-
-Everything launchctl-shaped is recorded rather than run: what these tests pin
-is the plist that lands on disk and the order of the calls around it, which is
-the part a refactor can silently break. Whether launchd itself accepts the
-plist is only provable on a Mac with a login session, and a test that skips
-off-macOS is the fastapi problem again -- so nothing here needs darwin.
-"""
+"""The LaunchAgent installer, with launchctl recorded rather than run: pins the
+plist written and the calls around it. Nothing here needs darwin."""
 
 import os
 import plistlib
@@ -52,10 +46,7 @@ def test_plist_serves_with_this_python_and_never_opens_a_browser():
     key = args[args.index("--api-key") + 1]
     assert os.path.isabs(key) and "~" not in key  # launchd's cwd is nobody's
     assert p["KeepAlive"] is True and p["RunAtLoad"] is True
-    # #224: this process serves the checkout that installed it, and without
-    # reload it serves whatever that checkout was at login -- for days, with
-    # nothing on the page to say so. Releases are the distribution; a local
-    # install exists to test the working tree.
+    # A local install tracks the working tree, so it reloads.
     assert "--dev" in args
 
 

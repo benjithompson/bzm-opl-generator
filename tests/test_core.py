@@ -1,15 +1,8 @@
 """The orchestration layer, driven directly rather than over HTTP.
 
-This module imports no fastapi and skips nothing. That is the point of the
-split: the decisions worth testing -- when a token is fetched, which namespace
-a preflight is for, what counts as an agent being online -- used to live inside
-route handlers, so the only way to reach them was a TestClient, and a venv
-without fastapi tested none of them while reporting a clean pass.
-
-tests/test_server.py still covers the same behaviour through the HTTP layer.
-That is deliberate: these are the decisions and those are the status codes, and
-a change that moves one without the other should fail somewhere.
-"""
+This module imports no fastapi and skips nothing. tests/test_server.py covers
+the same behaviour through the HTTP layer; these pin the decisions, those the
+status codes."""
 
 import ast
 import base64
@@ -27,16 +20,9 @@ from bzm_opl_gen import api, core, generate as gen
 from test_generate import FACTS
 
 
-# What a real account answers to GET /accounts/{id}/functionalities, trimmed to
-# the entries that decide something here and otherwise verbatim: the display
-# names are BlazeMeter's, and `functionalApi` is absent because the account no
-# longer serves it while locations created before its removal still carry it.
-#
-# `functionalGui` carries three of its 117 `subFunctionalities` -- a parent with
-# several of its pins is the shape #160 is about, and one pin would not show a
-# reader keeping them in a list. They are the browser a GUI Functional location
-# is pinned to, which is a *parameter* of that funcId rather than a funcId of
-# its own; a location carrying one carries the parent beside it.
+# What a real account answers to GET /accounts/{id}/functionalities, trimmed.
+# `functionalApi` is absent (retired). `functionalGui` carries three of its
+# browser pins, which are parameters of that funcId, not funcIds of their own.
 ACCOUNT_FUNCTIONALITIES = {
     "additionalSpace": 50,
     "functionalities": [
@@ -63,29 +49,21 @@ ACCOUNT_FUNCTIONALITIES = {
 
 
 class FakeClient:
-    """Enough BzmClient to exercise the paths that reach for one.
-
-    Shared with tests/test_mcp.py rather than written twice: both suites drive
-    the same core functions, and two fakes answering `private_location`
-    differently would let the two layers disagree about what an account looks
-    like. Methods no core test calls are here for that reason.
-    """
+    """Enough BzmClient to exercise core. Shared with tests/test_mcp.py so both
+    suites agree on what an account looks like."""
 
     def __init__(self, token="TOKEN-FROM-API", harbor=None, locations=None,
                  ignores=(), versions=None):
         self._token = token
-        # What GET .../versions does -- a recorded payload, or an exception to
-        # raise. It defaults to raising, because a stand-in account that answers
-        # would decide the images for every test here rather than the one asking
-        # about them.
+        # GET .../versions: a recorded payload, or an exception to raise (the
+        # default, so the image list decides nothing unless a test asks).
         self._versions = versions if versions is not None else api.BzmApiError(
             "GET /private-locations/h/ships/s/versions -> HTTP 404: not found")
         self._harbor = harbor if harbor is not None else {}
         self._locations = locations
         self._workspaces = [{"id": 1, "name": "Alpha"}, {"id": 2, "name": "Beta"}]
-        # BlazeMeter fields this stand-in account accepts on a PATCH and then
-        # does not store, which is a real behaviour rather than an invented
-        # one: POST /private-locations does exactly that with threadsPerEngine.
+        # Fields this account accepts on a PATCH and does not store, as the real
+        # POST does with threadsPerEngine.
         self._ignores = set(ignores)
         self.calls = []
 
@@ -141,10 +119,7 @@ class FakeClient:
                                 threads_per_engine=None,
                                 override_cpu=None, override_memory=None):
         self.calls.append(("update_private_location", harbor_id))
-        # The write lands on the harbor this fake hands back, so a caller that
-        # re-reads sees what it wrote -- which is the whole point of
-        # core.update_location's second GET, and untestable against a fake
-        # whose state never moves.
+        # The write lands on the harbor this fake hands back, so a re-read sees it.
         sent = {"slots": slots, "threadsPerEngine": threads_per_engine,
                 "overrideCPU": override_cpu, "overrideMemory": override_memory}
         for field, value in sent.items():
@@ -154,33 +129,20 @@ class FakeClient:
 
 
 # -- nothing here turns a functionality on for a location ---------------------
-#
-# core.add_func_id was here, additive by construction, behind the configure
-# page's "Enable on this location…". Both went in #113: what funcIds a location
-# carries is what the location *is*, and BlazeMeter's own UI is where that
-# changes. The client cannot send them any more either -- see
-# test_the_client_cannot_replace_a_location_s_functionalities.
 
 
 def test_the_client_cannot_replace_a_location_s_functionalities():
-    """BlazeMeter's PATCH replaces `funcIds` wholesale, so a caller meaning to
-    add one drops the rest. With nothing left that adds them additively, the
-    parameter would be that hazard with nothing guarding it."""
+    """BlazeMeter's PATCH replaces `funcIds` wholesale, so the client does not
+    accept them."""
     assert "func_ids" not in inspect.signature(
         api.BzmClient.update_private_location).parameters
     assert not hasattr(core, "add_func_id")
 
 
 # -- creating one, and whether it can start a test -----------------------------
-#
-# #93. The warning lived in `cli.py` alone, so the two surfaces that create
-# locations without a terminal -- the web page and an MCP session -- made one
-# that 403s every test start and said nothing about it.
 
 class _RunnableClient(FakeClient):
-    """An account that stores threadsPerEngine, as the PATCH after the POST
-    makes it. FakeClient's own create answers the shape a location comes back
-    in before that lands, which is the unrunnable one."""
+    """An account that stores threadsPerEngine, as the PATCH after the POST does."""
 
     def create_private_location(self, name, account_id, workspace_ids,
                                 func_ids=("performance",), slots=1,
@@ -191,9 +153,7 @@ class _RunnableClient(FakeClient):
 
 
 def test_a_location_that_cannot_start_a_test_says_so_when_it_is_created():
-    """The 403 it produces -- "Not enough available resources" -- names neither
-    field and reads as a busy account, so the moment to say it is the one where
-    the location is made."""
+    """A location missing threadsPerEngine is reported unrunnable when created."""
     made = core.create_location(FakeClient(), "loc", 7, 2, slots=2)
     assert made["location"]["id"] == "h9"
     assert made["runnable"] is False
@@ -208,19 +168,13 @@ def test_a_runnable_location_carries_no_warning():
 
 
 def test_a_location_created_without_slots_is_unrunnable_too():
-    """Either field missing is the same 403, so the verdict reads both -- one
-    that looked only at the field this tool tends to lose would vouch for the
-    other."""
+    """Either field missing is the same 403, so the verdict reads both."""
     made = core.create_location(_RunnableClient(), "loc", 7, 2, slots=0,
                                 threads_per_engine=500)
     assert made["runnable"] is False and made["warning"]
 
 
 # -- the slots a functionality needs before BlazeMeter will make the location --
-#
-# #159. Found on a live POST, because nothing offline could have found it: the
-# rule is not in BlazeMeter's private-location documentation, and every fixture
-# here answers a create the account never saw.
 
 def test_gui_functional_cannot_be_created_at_the_default_one_slot():
     """The POST 400s, so the refusal is here -- before the write, on every
@@ -231,8 +185,7 @@ def test_gui_functional_cannot_be_created_at_the_default_one_slot():
                              func_ids=["performance", "functionalGui"])
     assert "Parallel engine runs must be greater than 1" in str(e.value)
     assert "GUI Functional" in str(e.value)
-    # Nothing reached the account: a refusal that POSTs first is the 400 with
-    # extra steps.
+    # Nothing reached the account.
     assert not [c for c in client.calls if c[0] == "create_private_location"]
 
 
@@ -289,29 +242,129 @@ def test_slots_refusal_is_none_for_what_the_account_would_accept():
     assert core.slots_refusal([], 1) is None
 
 
-def test_issue_auth_token_mints_for_the_ship_it_was_given():
+def test_fetch_ship_token_mints_for_the_ship_it_was_given():
     client = FakeClient()
-    assert core.issue_auth_token(client, "h1", "s1") == "TOKEN-FROM-API"
+    assert core.fetch_ship_token(client, "h1", "s1") == "TOKEN-FROM-API"
     assert client.calls == [("auth_token", "h1", "s1")]
 
 
-def test_issue_auth_token_reports_a_refused_endpoint_as_such():
-    """Same refusal as everywhere else the token endpoint is called: it names
-    the ship and says a token read off the BlazeMeter UI works as well."""
+def test_fetch_ship_token_reports_a_refused_endpoint_as_such():
+    """The refusal names the ship and says what to do without the endpoint."""
     with pytest.raises(core.TokenRefused) as e:
-        core.issue_auth_token(RefusingClient(), "h1", "s1")
+        core.fetch_ship_token(RefusingClient(), "h1", "s1")
     assert "could not be issued" in str(e.value)
+
+
+# -- the pieces every front door shares ----------------------------------------
+
+def test_create_agent_issues_the_new_agent_s_token():
+    client = FakeClient()
+    made = core.create_agent(client, "h1", "agent1")
+    assert made == {"ship": {"id": "s2", "name": "agent1"},
+                    "auth_token": "TOKEN-FROM-API", "token_error": None}
+    assert client.calls == [("auth_token", "h1", "s2")]
+
+
+def test_create_agent_reports_a_refused_token_beside_the_agent():
+    """The agent exists either way; its id must survive a refused token."""
+    made = core.create_agent(RefusingClient(), "h1", "agent1")
+    assert made["ship"]["id"] == "s2" and made["auth_token"] is None
+    assert "could not be issued" in made["token_error"]
+
+
+def test_create_agent_can_issue_nothing():
+    client = FakeClient()
+    made = core.create_agent(client, "h1", "agent1", issue_token=False)
+    assert made["auth_token"] is None and made["token_error"] is None
+    assert client.calls == []
+
+
+def test_whoami_names_the_user_and_default_account():
+    assert core.whoami(FakeClient()) == {
+        "email": "se@example.com", "display_name": "SE",
+        "default_account_id": 7}
+    assert core.default_account_id(FakeClient()) == 7
+
+
+def test_a_user_with_no_default_project_has_no_default_account():
+    class NoProject(FakeClient):
+        def user(self):
+            return {"email": "x@example.com"}
+    assert core.default_account_id(NoProject()) is None
+
+
+def test_reporting_counts_keep_unknown_apart_from_not_reporting():
+    ships = [{"lastHeartBeat": int(time.time()), "state": "idle"},
+             {"lastHeartBeat": 1, "state": "idle"},
+             {}]
+    assert core.reporting_counts(ships) == {"agents_reporting": 1,
+                                            "agents_unknown": 1}
+    assert core.reporting_counts([]) == {"agents_reporting": 0,
+                                         "agents_unknown": 0}
+
+
+def test_facts_warnings_name_blank_ids_by_marker():
+    said = " ".join(core.facts_warnings(core.manual_facts()["facts"]))
+    assert "harbor_id (<HARBOR_ID>) and ship_id (<SHIP_ID>)" in said
+    assert "not a legal label value" in said
+    assert core.facts_warnings(core.manual_facts("H1", "S1")["facts"]) == []
+
+
+def test_facts_warnings_name_a_gui_location_with_no_browser_image():
+    facts = core.manual_facts("H1", "S1", func_ids=["functionalGui"])["facts"]
+    assert any("browser" in w for w in core.facts_warnings(facts))
+
+
+def test_facts_warnings_name_a_refused_image_list():
+    facts = dict(core.manual_facts("H1", "S1")["facts"],
+                 image_list={"state": "unread", "count": None,
+                             "detail": "HTTP 403"})
+    assert any("could not be read" in w and "HTTP 403" in w
+               for w in core.facts_warnings(facts))
+
+
+def test_build_bundle_refuses_a_relative_out_dir_before_minting():
+    client = FakeClient()
+    with pytest.raises(core.BadRequest, match="absolute"):
+        core.build_bundle(FACTS, {"namespace": "ns1"}, client=client,
+                          rotate=True, out_dir="rel/dir", write=True)
+    assert client.calls == []
+
+
+def test_build_bundle_writes_and_reports_the_token_source(tmp_path):
+    built = core.build_bundle(FACTS, {"namespace": "ns1", "auth_token": "T"},
+                              out_dir=str(tmp_path), write=True)
+    assert built.token.branch == core.TOKEN_GIVEN
+    assert {w["name"] for w in built.written} == set(built.files)
+    assert (tmp_path / gen.PROFILE_FILE).exists()
+
+
+def test_build_bundle_without_write_writes_nothing(tmp_path):
+    built = core.build_bundle(FACTS, {"namespace": "ns1"},
+                              out_dir=str(tmp_path))
+    assert built.written is None and not list(tmp_path.iterdir())
+    assert built.token.branch == core.TOKEN_PLACEHOLDER
+
+
+def test_build_bundle_does_not_mutate_the_caller_s_options():
+    opts = {"namespace": "ns1"}
+    core.build_bundle(FACTS, opts, client=FakeClient(), rotate=True)
+    assert opts == {"namespace": "ns1"}
+
+
+def test_a_generate_refusal_after_a_rotation_still_reports_the_rotation():
+    with pytest.raises(core.BadRequest) as e:
+        core.build_bundle(FACTS, {"namespace": "ns1",
+                                  "engine_cpu_limit": "not-a-cpu"},
+                          client=FakeClient(), rotate=True)
+    assert "rotated" in str(e.value)
 
 
 # -- the split itself ---------------------------------------------------------
 
 def _imports(path):
-    """Every top-level name a file imports, read from the parsed source.
-
-    Parsed rather than taken from sys.modules: another test module in the same
-    session imports fastapi, so by the time these run it is loaded whatever
-    core does.
-    """
+    """Every top-level name a file imports, read from the parsed source (another
+    test module has already loaded fastapi)."""
     with open(path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
     names = set()
@@ -319,8 +372,6 @@ def _imports(path):
         if isinstance(node, ast.Import):
             names.update(a.name.split(".")[0] for a in node.names)
         elif isinstance(node, ast.ImportFrom):
-            # `from bzm_opl_gen import core, server` -- the interesting name is
-            # what was imported, not the package it came from.
             names.update(a.name for a in node.names)
             if node.module and not node.level:
                 names.add(node.module.split(".")[0])
@@ -338,11 +389,7 @@ def test_core_is_transport_free():
 
 
 def test_this_suite_is_transport_free_too():
-    """An import of `server` anywhere in this file would put every test in it
-    behind the optional dependency -- which is the whole thing the split was
-    for. It happened once already, in a test that only wanted to read server.py
-    as text; open it by path instead.
-    """
+    """This suite imports no `server`, or it would skip without fastapi."""
     assert "server" not in _imports(__file__)
 
 
@@ -352,31 +399,21 @@ def test_this_suite_is_transport_free_too():
     (core.UpstreamError, 502),
 ])
 def test_errors_carry_the_status_the_web_layer_answers_with(exc, status):
-    """The web layer translates rather than re-deciding, so the code is part of
-    the error and not of the route -- otherwise the two drift and the same
-    refusal answers 400 on one endpoint and 500 on another."""
+    """The status belongs to the error, so every transport answers it the same."""
     e = exc("nope")
     assert isinstance(e, core.CoreError) and e.status == status
     assert str(e) == "nope"
 
 
 def test_an_unclassified_failure_does_not_blame_the_caller():
-    """The base carries 500 so that a subclass which forgets to name a status
-    reports a bug in here, rather than inheriting 400 and reading as bad
-    input from whoever called."""
+    """A subclass naming no status reports a bug (500), not bad input."""
     assert core.CoreError.status == 500
     assert all(e.status != core.CoreError.status
                for e in (core.BadRequest, core.NotFound, core.UpstreamError))
 
 
 def test_a_deleted_location_is_not_the_same_failure_as_an_unreachable_one():
-    """404 is the one upstream status that becomes a different type.
-
-    Both used to be a 502 carrying whatever sentence BlazeMeter wrote, so the
-    only remedy either could offer was "something went wrong" -- while the two
-    remedies are opposites: re-read the account, or wait. It is the same pair
-    this package keeps apart everywhere else, arriving from the other side.
-    """
+    """404 becomes NotFound; an unreachable BlazeMeter stays an UpstreamError."""
     def deleted():
         raise api.BzmApiError("GET /private-locations/h1 -> HTTP 404: gone",
                               status=404)
@@ -387,12 +424,8 @@ def test_a_deleted_location_is_not_the_same_failure_as_an_unreachable_one():
 
 @pytest.mark.parametrize("status", [401, 403, 429, 500, 502, None])
 def test_only_404_says_the_thing_asked_for_is_gone(status):
-    """A key the account has stopped accepting, an endpoint it restricts, a rate
-    limit, BlazeMeter broken -- none of them is evidence that anything was
-    deleted, and reporting one as a deletion would send somebody to press
-    Refresh at a problem no re-read can fix. `None` is the failure that is not a
-    status at all (see api.BzmApiError), which a reader must not judge as a code.
-    """
+    """Only 404 says the thing asked for is gone; 401, 403, 5xx and status-less
+    failures do not."""
     def refuse():
         raise api.BzmApiError("nope", status=status)
     with pytest.raises(core.UpstreamError) as caught:
@@ -402,9 +435,7 @@ def test_only_404_says_the_thing_asked_for_is_gone(status):
 
 
 # -- where a bundle's AUTH_TOKEN comes from -----------------------------------
-# Four branches, one rule, and only one of them mints. Minting *rotates*: the
-# previous token dies and the agent holding it sits at 0/1 Running, so a bundle
-# regenerated to look at it used to revoke a working agent's credential (#64).
+# Four branches and only one mints; minting revokes the running agent's token.
 
 def _bundle(tmp_path, **opts):
     """A written bundle, as a predecessor for the reuse branch to read back."""
@@ -414,9 +445,7 @@ def _bundle(tmp_path, **opts):
 
 
 def test_generate_mints_nothing_by_default_even_holding_a_key():
-    """The whole of #64: a client is no longer permission to rotate. Generating
-    twice against an account used to hand back two different tokens, the second
-    of which quietly killed the agent running on the first."""
+    """Holding a client is not permission to rotate."""
     c = FakeClient()
     files = core.generate_bundle(FACTS, {"namespace": "ns1"}, client=c)
     assert c.calls == []
@@ -424,10 +453,7 @@ def test_generate_mints_nothing_by_default_even_holding_a_key():
 
 
 def test_a_token_in_the_options_wins_outright_and_a_rotation_is_not_silent():
-    """Both flags together is a contradiction with one safe reading -- minting
-    and then writing the supplied value over it revokes the token that was
-    passed and puts nothing usable in the bundle. So the rotation loses, and
-    says it lost: a flag quietly dropped is the shape of this whole bug."""
+    """A supplied token wins over rotate, and the dropped rotation is said."""
     c = FakeClient()
     opts = {"namespace": "ns1", "auth_token": "MINE"}
     src = core.resolve_auth_token(FACTS, opts, client=c, rotate=True)
@@ -439,9 +465,7 @@ def test_a_token_in_the_options_wins_outright_and_a_rotation_is_not_silent():
 
 
 def test_rotating_mints_and_names_the_ship_it_was_for():
-    """`rotate=True` is the one branch that calls the endpoint, and the ship
-    comes back so the caller can say whose credential just changed -- which the
-    MCP surface answered as `warnings: []` before this."""
+    """`rotate=True` calls the endpoint and names the ship it rotated."""
     c = FakeClient()
     opts = {"namespace": "ns1"}
     src = core.resolve_auth_token(FACTS, opts, client=c, rotate=True)
@@ -452,10 +476,7 @@ def test_rotating_mints_and_names_the_ship_it_was_for():
 
 
 def test_rotating_warns_before_it_acts_not_after():
-    """After is a report: the agent's credential is already dead by then. The
-    announcement has to reach the caller ahead of the call, which is why
-    `announce` is a parameter of the resolution rather than something the
-    caller is trusted to remember."""
+    """The rotation warning is announced before the mint, not after."""
     said = []
 
     class Announcing(FakeClient):
@@ -499,8 +520,7 @@ def test_rotating_uses_the_ship_it_was_told_about():
 
 
 def test_the_token_already_in_the_output_directory_is_reused(tmp_path):
-    """`generate.existing_auth_token` was written for exactly this and had no
-    production caller at all -- so every regenerate fell through to a mint."""
+    """A bundle in out_dir for the same ship lends its token (reused branch)."""
     _bundle(tmp_path, auth_token="TOKENVALUE")
     c = FakeClient()
     opts = {"namespace": "ns1"}
@@ -510,9 +530,8 @@ def test_the_token_already_in_the_output_directory_is_reused(tmp_path):
 
 
 def test_regenerating_a_bundle_twice_is_byte_identical(tmp_path):
-    """#64's own acceptance criterion. It holds because the second render reads
-    the first one's token back instead of issuing a new one -- and it covers
-    profile.json too, which is the file a reviewer would diff."""
+    """Regenerating into the same directory reuses its token, so the bundle is
+    byte-identical, profile.json included."""
     first = _bundle(tmp_path, auth_token="TOKENVALUE")
     opts = {"namespace": "ns1"}
     core.resolve_auth_token(FACTS, opts, client=FakeClient(),
@@ -522,11 +541,7 @@ def test_regenerating_a_bundle_twice_is_byte_identical(tmp_path):
 
 
 def test_a_bundle_for_another_ship_is_refused_rather_than_overwritten(tmp_path):
-    """Reusing across ships would write another location's credential into this
-    bundle. Warning and carrying on is not enough, because carrying on
-    *overwrites that directory* -- and the API only mints, so the bundle was the
-    only copy of that token outside a running cluster. Refused, and the file is
-    still there afterwards."""
+    """A directory holding another ship's bundle is refused and left intact."""
     facts = dict(FACTS, ships=[dict(FACTS["ships"][0], id="b1"),
                                dict(FACTS["ships"][0], id="b2")])
     gen.write(gen.generate(facts, {"namespace": "ns1", "ship_id": "b1",
@@ -541,9 +556,8 @@ def test_a_bundle_for_another_ship_is_refused_rather_than_overwritten(tmp_path):
 
 def test_saying_what_this_bundle_s_token_is_makes_the_overwrite_deliberate(
         tmp_path):
-    """The escape from the refusal above, and why it is not a dead end: a token
-    passed for *this* ship never looks at the directory at all, so replacing
-    another ship's bundle stays possible for whoever means it."""
+    """A supplied token never reads the directory, so replacing another ship's
+    bundle stays possible deliberately."""
     facts = dict(FACTS, ships=[dict(FACTS["ships"][0], id="b1"),
                                dict(FACTS["ships"][0], id="b2")])
     gen.write(gen.generate(facts, {"namespace": "ns1", "ship_id": "b1",
@@ -554,10 +568,8 @@ def test_saying_what_this_bundle_s_token_is_makes_the_overwrite_deliberate(
 
 
 def test_the_refusal_never_names_a_ship_called_None(tmp_path):
-    """Two agents and no --ship-id: `want` is None, and the sentence came out as
-    "holds a bundle for ship b1, not None" -- naming a ship that does not exist
-    and burying the actual remedy, which is to say which ship this bundle is
-    for. The ambiguity is the thing to report, not the directory."""
+    """With several agents and no ship named, the refusal says so rather than
+    naming a ship "None"."""
     facts = dict(FACTS, ships=[dict(FACTS["ships"][0], id="b1"),
                                dict(FACTS["ships"][0], id="b2")])
     gen.write(gen.generate(facts, {"namespace": "ns1", "ship_id": "b1",
@@ -571,11 +583,8 @@ def test_the_refusal_never_names_a_ship_called_None(tmp_path):
 
 
 def test_a_bundle_whose_ship_cannot_be_confirmed_is_refused_too(tmp_path):
-    """An older bundle, or a hand-assembled directory: there is a token in it
-    and nothing that says whose. Refused on the same ground as the mismatch --
-    writing over it destroys a credential nothing can re-read -- but the reason
-    given differs, because so does the remedy: pass the token rather than go
-    looking at another directory."""
+    """A bundle whose ship cannot be confirmed is refused, with the remedy of
+    passing its token."""
     _bundle(tmp_path, auth_token="TOKENVALUE")
     os.remove(os.path.join(str(tmp_path), gen.PROFILE_FILE))
     opts = {"namespace": "ns1"}
@@ -587,18 +596,15 @@ def test_a_bundle_whose_ship_cannot_be_confirmed_is_refused_too(tmp_path):
 
 
 def test_an_empty_directory_is_not_a_bundle_to_protect(tmp_path):
-    """The refusals above must not have turned a first run into an error: a
-    directory with no token in it is the ordinary case, and generating into a
-    fresh or nonexistent path stays the placeholder branch."""
+    """A directory with no token in it is the ordinary placeholder case."""
     src = core.resolve_auth_token(FACTS, {"namespace": "ns1"},
                                   out_dir=str(tmp_path / "nothing-here"))
     assert src.branch == core.TOKEN_PLACEHOLDER
 
 
 def test_no_token_anywhere_says_where_a_real_one_comes_from(tmp_path):
-    """The placeholder is a fine bundle to read and an unusable one to apply,
-    so the branch that produces it has to name both sources of a real token.
-    The kubectl is *named*, never run: nothing here reads a cluster."""
+    """The placeholder message names where a real token comes from; the kubectl
+    is named, never run."""
     src = core.resolve_auth_token(FACTS, {"namespace": "ns1"},
                                   out_dir=str(tmp_path))
     assert src.branch == core.TOKEN_PLACEHOLDER
@@ -607,11 +613,7 @@ def test_no_token_anywhere_says_where_a_real_one_comes_from(tmp_path):
 
 
 def test_the_placeholder_message_reads_on_every_surface_that_shows_it():
-    """This sentence is not the CLI's. The web UI renders it verbatim under the
-    download button and an MCP session quotes it, so a tail that named only
-    `--auth-token` and `--rotate-token` told a browser to type flags it has no
-    prompt for. It names the option and both registers, or it is wrong somewhere.
-    """
+    """The placeholder message names the option and both the CLI and page spellings."""
     msg = core.token_recovery_hint({"namespace": "ns1"})
     assert "auth_token" in msg, "the option itself, which every surface has"
     assert "--auth-token" in msg, "the command line"
@@ -619,10 +621,7 @@ def test_the_placeholder_message_reads_on_every_surface_that_shows_it():
 
 
 def test_one_sentence_names_every_place_a_token_can_be_got_from():
-    """There were two of these -- one naming the BlazeMeter UI's install command,
-    one naming create-agent and a deployed Secret -- and `resolve_auth_token` used
-    each in a different branch. Three real sources, so one sentence carries all
-    three; a caller who never ran create-agent still has somewhere to go."""
+    """One sentence names every source of a real token."""
     msg = core.token_recovery_hint({"namespace": "ns1"})
     assert "create-agent" in msg, "what was printed when the agent was made"
     assert "Private Locations" in msg, "the BlazeMeter UI's install command"
@@ -630,9 +629,7 @@ def test_one_sentence_names_every_place_a_token_can_be_got_from():
 
 
 def test_a_refused_endpoint_says_where_else_a_token_lives():
-    """The refusal path used the other sentence, so it named the BlazeMeter UI
-    and not the agent already running -- which is the source that needs no
-    account access at all, and the account is precisely what just refused."""
+    """A refused endpoint also names the running agent as a token source."""
     c = RefusingClient()
     with pytest.raises(core.TokenRefused) as caught:
         core.fetch_ship_token(c, "h1", "s1")
@@ -660,10 +657,7 @@ def test_generate_refuses_options_it_cannot_render():
 
 
 def test_generate_marks_a_blank_field_rather_than_refusing_it():
-    """The refusal this replaced was unanswerable from the one surface that
-    could reach it: the page had already let the field be emptied, so the
-    download failed naming a field the person was looking at. It is a bundle
-    now, and the bundle says so."""
+    """A blank required field becomes its marker rather than a refusal."""
     files = core.generate_bundle(FACTS, {"service_account_name": ""},
                                  client=None)
     assert "not finished" in files["README.md"]
@@ -672,9 +666,7 @@ def test_generate_marks_a_blank_field_rather_than_refusing_it():
 
 # -- a credential the account will not issue ----------------------------------
 
-# What a restricted account really answers, in the wording api.BzmClient hands
-# on: the token endpoint is allowed only from BlazeMeter's own gateway, so every
-# attempt fails and no argument to it would have helped.
+# A restricted account: the token endpoint answers only BlazeMeter's gateway.
 TOKEN_403 = ('POST /private-locations/aaa111/ships/bbb222/docker-command -> '
              'HTTP 403: {"error": {"code": 403, "message": "Forbidden: Should '
              'access from Private-Data gateway"}}')
@@ -689,21 +681,13 @@ class RefusingClient(FakeClient):
         raise api.BzmApiError(TOKEN_403)
 
 
-# A key BlazeMeter has stopped accepting -- expired, revoked, or typed wrong.
-# Nothing about it is visible until something is asked of the account, which is
-# why it is the failure every surface has to be able to report: it arrives on
-# the first call each command makes.
+# A key BlazeMeter no longer accepts; every surface must report it as a sentence.
 EXPIRED_401 = ('GET /user -> HTTP 401: {"error": {"code": 401, "message": '
                '"Unauthorized: invalid API key"}}')
 
 
 class ExpiredClient(FakeClient):
-    """An account that answers 401 to everything. Shared with tests/test_cli.py.
-
-    Every read and every write, because which call a command makes first is the
-    command's business -- what has to be true is that whichever it is comes
-    back as a sentence rather than as a BzmApiError nobody caught.
-    """
+    """An account that answers 401 to everything. Shared with tests/test_cli.py."""
 
     def _refuse(self, *a, **kw):
         raise api.BzmApiError(EXPIRED_401)
@@ -714,11 +698,8 @@ class ExpiredClient(FakeClient):
     delete_private_location = create_ship = auth_token = _refuse
 
 
-# Every path that still reaches the endpoint. Parametrised rather than tested
-# once through the fetch helper: the point of the refusal is that it arrives
-# whole at whoever asked, and a caller that unwrapped it on the way -- turning
-# it into a BadRequest, or letting the raw body past -- would pass a test that
-# only drove the helper.
+# Every path that still reaches the token endpoint: the refusal must arrive
+# whole at each caller.
 REFUSED_CALLS = {
     "rotate_auth_token":
         lambda c: core.rotate_auth_token(c, FACTS, {"namespace": "ns1"}),
@@ -741,11 +722,7 @@ def _refusal(name):
 
 @pytest.mark.parametrize("name", list(REFUSED_CALLS))
 def test_a_refused_credential_names_the_ship_and_what_failed(name):
-    """The 403 body names no ship and does not say which of the two things went
-    wrong -- the credential, or the operation the caller asked for. On an
-    account that restricts the endpoint every attempt fails, so a message that
-    reads as "your request was wrong" sends the reader to look at their
-    arguments."""
+    """The refusal names the ship and says it was the credential fetch that failed."""
     msg = str(_refusal(name))
     assert "bbb222" in msg              # the ship, which the body never names
     assert "AUTH_TOKEN" in msg
@@ -754,9 +731,7 @@ def test_a_refused_credential_names_the_ship_and_what_failed(name):
 
 @pytest.mark.parametrize("name", list(REFUSED_CALLS))
 def test_a_refused_credential_says_the_token_can_be_supplied_instead(name):
-    """A refusal with no way forward dead-ends the whole operation, and this one
-    has one: the token is on the agent in the BlazeMeter UI, and every generate
-    takes it as an option."""
+    """The refusal says the token can be supplied instead."""
     msg = str(_refusal(name))
     assert "auth_token" in msg and "--auth-token" in msg
     assert "BlazeMeter UI" in msg
@@ -764,13 +739,11 @@ def test_a_refused_credential_says_the_token_can_be_supplied_instead(name):
 
 @pytest.mark.parametrize("name", list(REFUSED_CALLS))
 def test_a_refused_credential_keeps_the_upstream_reason(name):
-    """Written over, not swallowed: "Should access from Private-Data gateway" is
-    the only clue that the account is configured this way deliberately, so it
-    stays both in the message and reachable on the error."""
+    """The upstream reason stays in the message and on `.upstream`."""
     e = _refusal(name)
     assert e.upstream == TOKEN_403
     assert TOKEN_403 in str(e)
-    assert str(e) != TOKEN_403          # ...but is no longer the whole message
+    assert str(e) != TOKEN_403          # ...but is not the whole message
 
 
 @pytest.mark.parametrize("name", list(REFUSED_CALLS))
@@ -784,15 +757,8 @@ def test_a_refused_credential_is_not_a_malformed_request(name):
 
 
 def test_mirroring_by_hand_pushes_where_the_bundle_will_look():
-    """`images --mirror` (and the MCP tool behind it) was the third copy of
-    #234's destination rule, and it is the one with no bundle beside it to
-    disagree with -- somebody mirrors, then generates, and the map points at a
-    path nothing was pushed to. Held against a real bundle's IMAGE_OVERRIDES.
-
-    It takes references rather than facts, so docker's composed names are out
-    of reach here -- those come from the crane key -- and the bundle's own
-    script is that platform's answer.
-    """
+    """`mirror_images` pushes to the names a Kubernetes bundle's IMAGE_OVERRIDES
+    map to (crane keeps its short form)."""
     reg = "reg.local/bzm"
     pushed = {c.split()[-1] for c in core.mirror_images(
         core.bundle_images(FACTS), mirror=reg, dry_run=True)["commands"]
@@ -831,9 +797,7 @@ def test_zip_filename_names_the_namespace():
 
 
 def test_zip_extracts_to_the_directory_the_archive_is_named():
-    """The archive and the folder it extracts to are one string. They were two,
-    so every bundle whatever its location extracted to `bzm-opl/` -- and a
-    second download merged into the first rather than sitting beside it."""
+    """The archive and the directory it extracts to share one name."""
     files = core.generate_bundle(FACTS, {"namespace": "ns1"}, client=None)
     stem = core.zip_stem({"namespace": "ns1"})
     assert core.zip_filename({"namespace": "ns1"}) == stem + ".zip"
@@ -849,12 +813,7 @@ def test_zip_stem_survives_a_blank_and_a_placeholder_namespace():
     assert core.zip_stem({"namespace": "<NAMESPACE>"}) == "bzm-opl-NAMESPACE"
 
 
-# -- the rule three call sites applied ----------------------------------------
-# `generate --api-key`, `livetest` and the UI's download button each decided
-# which ship they were about, in their own copy of the same clause. They agreed,
-# which is the only reason it was not already a bug -- and for the two that
-# fetch a token, disagreeing means rotating a credential belonging to an agent
-# the user never mentioned.
+# -- which ship an operation is about -----------------------------------------
 
 def _with_ships(*ids):
     return dict(FACTS, ships=[dict(FACTS["ships"][0], id=s) for s in ids])
@@ -887,14 +846,8 @@ def test_which_ship_a_token_would_be_fetched_for(options, ids, expect):
 
 
 def test_no_caller_still_decides_which_ship_for_itself():
-    """Read out of the source: each duplicate was a single line that looked
-    obviously right, which is how three of them survived. `ships[0]` is the
-    shape of the mistake -- taking a ship by position.
-
-    Opened by path rather than imported: `server` imports fastapi at module
-    scope, and importing it here would put this suite behind the optional
-    dependency it exists to be independent of.
-    """
+    """No caller picks a ship by position; they ask core.sole_ship_id. Read by
+    path, since importing `server` needs fastapi."""
     here = os.path.dirname(os.path.abspath(core.__file__))
     for name in ("cli.py", "server.py"):
         with open(os.path.join(here, name), encoding="utf-8") as fh:
@@ -965,10 +918,8 @@ def test_preflight_falls_back_to_the_namespace_the_file_was_collected_for():
     assert body["namespace"] == doc["namespace"]
 
 
-# The half of preflight() a caller that prints its own report needs on its own.
-# `doctor --cluster-evidence` is that caller -- doctor.run writes to stdout and
-# core is not a terminal -- and it had its own copy of this precedence, comment
-# included, so a change to one was a change to one.
+# preflight_cluster: the half of preflight() that `doctor --cluster-evidence`
+# needs on its own.
 
 def test_preflight_cluster_decides_the_same_namespace_preflight_does():
     doc = _evidence()
@@ -978,9 +929,7 @@ def test_preflight_cluster_decides_the_same_namespace_preflight_does():
 
 
 def test_an_explicitly_asked_for_namespace_wins_over_both():
-    """`doctor -n` is the one input the options cannot carry: the bundle's
-    namespace is what it was generated for, and -n is what is being preflighted
-    now."""
+    """`doctor -n` wins over the options' namespace and the evidence's."""
     doc = _evidence()
     _, namespace = core.preflight_cluster(doc, {"namespace": "elsewhere"},
                                           namespace="asked-for")
@@ -988,9 +937,7 @@ def test_an_explicitly_asked_for_namespace_wins_over_both():
 
 
 def test_no_evidence_at_all_is_an_empty_read_rather_than_a_refusal():
-    """A `doctor` run against a cluster it can reach passes no file. Empty says
-    exactly what doctor's own defaults say: no cluster data, no probes, no
-    verdicts reached before the checks ran."""
+    """No evidence is an empty read (a live cluster), not a refusal."""
     imported, namespace = core.preflight_cluster(None, {"namespace": "ns1"})
     assert imported == core.doctor.Evidence(None, None, ())
     assert namespace == "ns1"
@@ -1015,10 +962,8 @@ def test_preflight_reaches_no_cluster(monkeypatch):
 
 
 # -- evidence as the file it is -----------------------------------------------
-# The collector's output is an artifact somebody sends, so a caller may name it
-# rather than restate it. The two refusals below are the point of the helper:
-# a file that could not be read and a file that was read and is not evidence
-# have different remedies, and one message covering both hides which happened.
+# A file that could not be read and one that is not evidence are different
+# refusals.
 
 def _written(tmp_path, text, name="cluster-evidence.json"):
     path = tmp_path / name
@@ -1059,9 +1004,7 @@ def test_a_path_that_is_not_a_file_at_all_is_unread_too(tmp_path):
 
 
 def test_a_file_that_was_read_and_is_not_evidence_is_a_different_refusal(tmp_path):
-    """Pointing this at a facts file is the likely mistake. It parsed, so the
-    refusal names the document rather than the read -- and must not arrive as
-    the type that means the file could not be opened."""
+    """A readable file that is not evidence is a BadRequest, not EvidenceUnreadable."""
     path = _written(tmp_path, json.dumps({"harbor_id": "h1", "images": {}}))
     doc = core.evidence_document(path)             # read, and read fine
     with pytest.raises(core.BadRequest) as e:
@@ -1128,9 +1071,7 @@ def _locs(*names):
 
 
 def test_a_cap_accounts_for_what_it_left_out():
-    """The whole point of the numbers: a caller handed 2 of 5 with no count
-    reads the account as having 2, and then reports a location that is there as
-    missing."""
+    """A cap counts what it left out."""
     sel = core.select_locations(_locs("a", "b", "c", "d", "e"), limit=2)
     assert [l["name"] for l in sel["locations"]] == ["a", "b"]
     assert sel["total"] == 5 and sel["returned"] == 2
@@ -1177,9 +1118,7 @@ def test_a_location_with_no_name_is_not_a_crash():
 
 
 def test_a_ship_with_no_heartbeat_field_is_unknown_not_silent():
-    """The listing endpoint is not the per-location read, and a payload that
-    never carried a heartbeat cannot be evidence that an agent is dead --
-    "could not tell" and "not reporting" want different next steps."""
+    """A ship with no heartbeat field is unknown (None), not "not reporting"."""
     assert core.ship_reporting({"id": "s1", "state": "idle"}) is None
     assert core.ship_reporting({"id": "s1", "state": "idle",
                                 "lastHeartBeat": 0}) is False
@@ -1190,11 +1129,7 @@ def test_a_ship_with_no_heartbeat_field_is_unknown_not_silent():
 # -- where a key might be -----------------------------------------------------
 
 def test_key_candidates_read_the_environment_when_asked(monkeypatch, tmp_path):
-    """The one deliberate behaviour change in the extraction. This was a
-    module-level list, so BZM_API_KEY_FILE froze at import -- and `ui --dev`
-    sets that variable *after* startup for its reloader subprocess, which only
-    worked because the subprocess re-imports. Read per call, it is right
-    whether or not anything re-imports."""
+    """BZM_API_KEY_FILE is read per call, not frozen at import."""
     key = tmp_path / "api-key.json"
     key.write_text('{"id": "KID", "secret": "s"}')
     monkeypatch.setenv("BZM_API_KEY_FILE", str(key))
@@ -1213,12 +1148,7 @@ def test_a_key_file_that_does_not_parse_is_skipped_not_raised(monkeypatch,
 
 
 def test_a_malformed_key_file_is_a_refusal_rather_than_an_exit(tmp_path):
-    """The contract the server leans on. `api.BzmClient(path)` used to read the
-    file and raise SystemExit, a BaseException that walks past every `except
-    Exception` between here and the top of the process -- fine for a command,
-    fatal for a server. This is the construction that does not, and since #95
-    it is the only one: the constructor takes a keyword-only pair, so there is
-    no exiting read left for a caller to reach by accident."""
+    """A malformed key file is a CoreError, never SystemExit."""
     bad = tmp_path / "api-key.json"
     bad.write_text("not json")
     with pytest.raises(core.NotConfigured) as e:
@@ -1229,37 +1159,17 @@ def test_a_malformed_key_file_is_a_refusal_rather_than_an_exit(tmp_path):
 
 
 # -- one construction for the client ------------------------------------------
-#
-# #92. Thirteen places built a client and three suites stood in at three
-# different points, so `client_from_key` widened to take all three inputs a
-# caller can have: a path, an id and secret, or nothing and the environment.
-# #95 then moved every caller onto it and deleted the rest, which is what the
-# guard at the end of this section keeps true.
-#
-# Every one of these asserts a CoreError and none asserts SystemExit -- an
-# escaping SystemExit is not caught by pytest.raises(CoreError), so each of the
-# refusal tests below fails rather than passes if an exiting constructor ever
-# creeps back in underneath.
+# Each refusal asserts a CoreError, so an escaping SystemExit fails the test.
 
 @pytest.fixture
 def no_key_env(monkeypatch):
-    """No key in the environment of whoever is running the suite.
-
-    The developer running this very likely has BZM_API_KEY_FILE set (the MCP
-    server wants it) and an api-key.json in the checkout, and a test that
-    reads either would pass here and fail in CI, or worse the other way round.
-    """
+    """No key in the environment of whoever runs the suite."""
     for var in (core.KEY_FILE_ENV, core.KEY_ID_ENV, core.KEY_SECRET_ENV):
         monkeypatch.delenv(var, raising=False)
 
 
 def credential_of(client):
-    """The (id, secret) a built client will authenticate as.
-
-    Past the underscore deliberately: which credential a client ended up
-    holding is the whole question this section asks, and the only other way to
-    ask it is an HTTP request, which does not belong in an offline suite.
-    """
+    """The (id, secret) a built client will authenticate as."""
     return tuple(base64.b64decode(client._auth).decode().split(":", 1))
 
 
@@ -1272,12 +1182,7 @@ def test_a_client_is_built_from_a_key_file(no_key_env, tmp_path):
 
 
 def test_a_client_is_built_from_an_id_and_secret(no_key_env, monkeypatch):
-    """The UI's input, which arrives pasted into a form and has no file behind
-    it. `key_set` used to write it to a temp file purely to have a path to hand
-    to a constructor that only took one, then unlink it -- a secret on disk for
-    the duration of a call, to satisfy an argument list. It passes the pair
-    since #95, and this is the half that says the pair reaches no disk at all;
-    tests/test_server.py has the half about the route."""
+    """An id and secret build a client with no file on disk."""
     monkeypatch.setattr(api, "read_key_file", lambda p: pytest.fail(
         f"a pasted id and secret read {p} -- it should reach no disk at all"))
     client = core.client_from_key(key_id="KID", secret="SHHH")
@@ -1301,12 +1206,8 @@ def test_a_key_file_missing_half_the_key_is_a_refusal(no_key_env, tmp_path):
 
 def test_a_key_file_that_cannot_be_read_at_all_is_a_refusal(no_key_env,
                                                             tmp_path):
-    """Not every unreadable file is a missing or malformed one: a path that is
-    a directory (a `--api-key ~/.config/bzm-opl-gen` away), or one with the
-    wrong mode, or a binary file, all reach `open()` and none of them raised
-    ValueError. They came back as OSError and UnicodeDecodeError -- bare
-    exceptions, straight past a route's `except CoreError` into a 500 with a
-    traceback in it."""
+    """A directory, an unreadable mode or a binary file is a refusal, not a bare
+    OSError or UnicodeDecodeError."""
     with pytest.raises(core.NotConfigured) as e:
         core.client_from_key(str(tmp_path))            # a directory
     assert str(tmp_path) in str(e.value)
@@ -1318,9 +1219,7 @@ def test_a_key_file_that_cannot_be_read_at_all_is_a_refusal(no_key_env,
 
 
 def test_a_path_and_a_pasted_pair_together_are_refused(no_key_env, tmp_path):
-    """Two credentials and no way to tell which one the caller meant. Taking
-    the first silently is how a bundle gets generated against the wrong
-    account and nothing anywhere says so."""
+    """A path and a pasted pair together are refused."""
     key = tmp_path / "api-key.json"
     key.write_text('{"id": "FILE", "secret": "s"}')
     with pytest.raises(core.BadRequest) as e:
@@ -1329,9 +1228,7 @@ def test_a_path_and_a_pasted_pair_together_are_refused(no_key_env, tmp_path):
 
 
 def test_half_a_pasted_pair_names_the_half_that_is_missing(no_key_env):
-    """Not the "no API key anywhere" sentence: a caller that sent one of the
-    two plainly has a key and is one field away, and telling it to go set an
-    environment variable is an answer to a different question."""
+    """Half a pasted pair names the missing half."""
     with pytest.raises(core.BadRequest, match="secret"):
         core.client_from_key(key_id="KID")
     with pytest.raises(core.BadRequest, match="id"):
@@ -1340,9 +1237,7 @@ def test_half_a_pasted_pair_names_the_half_that_is_missing(no_key_env):
 
 def test_the_environment_is_the_last_place_looked(no_key_env, monkeypatch,
                                                   tmp_path):
-    """Both env forms, and the argument beating each. Precedence matters to
-    the UI more than anywhere: the server it runs in may have been started
-    with a key in its environment, and a key typed into the page has to win."""
+    """Arguments beat the environment, and both environment forms work."""
     env_key = tmp_path / "env-key.json"
     env_key.write_text('{"id": "FROM-FILE-ENV", "secret": "s"}')
     monkeypatch.setenv(core.KEY_FILE_ENV, str(env_key))
@@ -1362,9 +1257,8 @@ def test_the_environment_is_the_last_place_looked(no_key_env, monkeypatch,
 
 
 def test_no_key_anywhere_says_how_to_supply_one(no_key_env, monkeypatch):
-    """And does not go looking in the working directory -- see the comment at
-    the refusal: a server's cwd is wherever a client launched it, quite
-    possibly a customer's checkout holding an api-key.json that is theirs."""
+    """With no key anywhere, the refusal says how to supply one; the working
+    directory is not searched."""
     monkeypatch.setattr(core, "detect_keys", lambda: pytest.fail(
         "the construction discovered a key from the working directory"))
     with pytest.raises(core.NotConfigured) as e:
@@ -1377,14 +1271,8 @@ SEAM = f"core.{core.client_from_key.__name__}"
 
 
 def _client_constructions(path):
-    """Every `BzmClient(...)` a source file builds, by line.
-
-    Parsed rather than grepped: the construction is argued about in half a
-    dozen docstrings and comments here, and a guard that counted those would
-    be turned off within a week. An `ast.Call` is a construction whichever way
-    the class was reached -- `api.BzmClient(...)` or a bare `BzmClient(...)`
-    after `from .api import BzmClient`.
-    """
+    """Every `BzmClient(...)` call in a source file, by line (parsed, so prose
+    mentioning it does not count)."""
     with open(path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
     called = []
@@ -1399,18 +1287,8 @@ def _client_constructions(path):
 
 
 def test_the_client_is_built_in_exactly_one_place():
-    """The contract half of #92-#93-#95, and the only thing that keeps it.
-
-    Thirteen constructions became one, and nothing about the code stops a
-    fourteenth: `api.BzmClient(credentials=...)` is two lines and works. What it
-    costs is invisible at the site that writes it -- a caller building its own
-    decides for itself what a missing key, a directory instead of a file, or a
-    revoked credential means, and the three suites stand in at a point it does
-    not pass through, so it is untested as well as inconsistent.
-
-    Package sources only. Tests build clients directly on purpose: that is what
-    a stand-in account is.
-    """
+    """The package builds a BzmClient in exactly one place: core.client_from_key.
+    Tests build their own on purpose."""
     pkg = os.path.dirname(core.__file__)
     found = {}
     for root, _dirs, names in os.walk(pkg):
@@ -1440,16 +1318,8 @@ def _line_range(fn):
 
 
 def test_the_fake_client_is_a_second_adapter_and_not_a_third_interface():
-    """What "one construction" is worth: the suites stand in at that one point
-    by handing back this fake, so it has to answer as the real client does.
-
-    Names first -- a method here that BzmClient does not have is a fake
-    account answering a call no real one would -- then the parameters of the
-    shared ones, because a fake whose argument names have drifted lets a core
-    change that renames a keyword pass here and fail against BlazeMeter.
-    Defaults are excluded on purpose: what a real client does when a field is
-    omitted is its own behaviour, and this fake only records the call.
-    """
+    """FakeClient's methods and parameter names match BzmClient's (defaults
+    excluded), so the suites stand in for the real interface."""
     def methods(cls):
         return {n: f for n, f in inspect.getmembers(cls, inspect.isfunction)
                 if not n.startswith("_")}
@@ -1483,21 +1353,11 @@ def test_option_docs_cover_every_option():
 
 
 # -- the funcId vocabulary, and where it comes from ----------------------------
-#
-# #148. It was `core.FUNC_ID_LABELS`, five funcIds written by hand, and the
-# account disagreed with it in both directions.
 
 
 def test_the_keyless_vocabulary_is_the_funcids_this_tool_covers():
-    """Asked with no account, the answer is the three this tool configures.
-
-    Not a stand-in for the account's list and not a guess at it: the page
-    fetches this on mount, before there is a key let alone an account, and
-    manual entry never has an account at all. So there has to be an answer with
-    nothing connected, and the only honest one is what this tool covers -- with
-    BlazeMeter's own display names, so the words do not change when an account
-    arrives and replaces it.
-    """
+    """With no account, the vocabulary is the covered funcIds under BlazeMeter's
+    own display names."""
     rows = core.func_ids()["choices"]
     assert [(r["id"], r["label"]) for r in rows] == [
         ("performance", "Performance"),
@@ -1507,52 +1367,24 @@ def test_the_keyless_vocabulary_is_the_funcids_this_tool_covers():
 
 
 def test_the_vocabulary_says_whether_it_is_the_account_s_or_the_baseline():
-    """The two answers are told apart on the answer, not by remembering which
-    call was made (#160).
-
-    A funcId in neither the vocabulary nor any parent's pins means two
-    different things: read against the account it is *retired* -- BlazeMeter
-    stopped serving it and locations created before that still carry it -- and
-    read against the baseline it means nothing at all, because the baseline is
-    three funcIds and every other one the account has is missing from it too.
-    A reader that could not tell would have to guess, and this repo's oldest
-    rule is that it must not have to.
-    """
+    """`source` says whether the vocabulary is the account's or the baseline."""
     assert core.func_ids()["source"] == "baseline"
     assert core.func_ids(FakeClient(), 123456)["source"] == "account"
 
 
 def test_a_browser_pin_is_a_parameter_of_its_parent_not_a_funcid_of_its_own():
-    """`functionalGui` carries its browser pins, and no pin is a row (#160).
-
-    A location's `funcIds` mixes the two -- `functionalGui` arrives with
-    `chrome:default` and `firefox:81` beside it -- and 43% of one account's 171
-    locations carry at least one pin, 41 on the worst. Tested against the
-    top-level vocabulary alone they all fall through as funcIds this tool has
-    no options for, which is a true sentence about nothing: a pin says *which
-    browser* GUI Functional uses, and there is no world in which it gets
-    options of its own.
-
-    Served under the parent for that reason, rather than flattened in beside
-    it: a list of every pin loses which functionality each is a parameter of,
-    and the row that knows is the one that has to say.
-    """
+    """Browser pins are served under functionalGui, not as rows of their own."""
     by_id = {r["id"]: r for r in core.func_ids(FakeClient(), 123456)["choices"]}
     assert by_id["functionalGui"]["sub_func_ids"] == [
         "chrome:default", "firefox:139", "safari:15"]
     assert not any(":" in f for f in by_id)
-    # Every other row carries an empty list rather than leaving the key off: a
-    # caller reading `.get("sub_func_ids", ...)` would have to invent what its
-    # absence meant, and "this functionality has no pins" is a real answer.
+    # Every row carries a list, empty meaning no pins.
     assert all(r["sub_func_ids"] == []
                for f, r in by_id.items() if f != "functionalGui")
 
 
 def test_the_baseline_claims_no_pins_rather_than_guessing_at_them():
-    """...and with no account there are none to serve. Only the account knows
-    which funcIds are pins, so the baseline says so by carrying none -- and
-    `source` is what stops that reading as "this account's GUI Functional has
-    no browsers"."""
+    """The baseline carries no pins; only the account knows them."""
     rows = core.func_ids()["choices"]
     assert all(r["sub_func_ids"] == [] for r in rows)
 
@@ -1571,10 +1403,7 @@ def test_the_account_replaces_the_baseline_with_its_own_vocabulary():
 
 
 def test_the_vocabulary_says_which_funcids_this_tool_covers():
-    """A funcId this tool has options for and one it can only name are both
-    served, and the difference is on the row. Silence would read as coverage:
-    a page that listed `delphix` beside `performance` with nothing to tell them
-    apart is a page offering to configure something it cannot."""
+    """Every row says whether this tool covers it; uncovered funcIds are still listed."""
     by_id = {r["id"]: r for r in core.func_ids(FakeClient(), 123456)["choices"]}
     assert [f for f, r in by_id.items() if r["covered"]] == [
         "performance", "mockServices", "functionalGui"]
@@ -1584,63 +1413,36 @@ def test_the_vocabulary_says_which_funcids_this_tool_covers():
 
 
 def test_an_unreadable_account_is_not_an_account_with_three_functionalities():
-    """The baseline is the keyless answer, never a fallback for a read that
-    failed. Falling back would answer "this account offers exactly what we
-    cover" to a 401 -- could-not-read wearing there-is-nothing-else, about the
-    one question whose whole point is that the account knows better."""
+    """An account that refuses the read raises rather than answering the baseline."""
     with pytest.raises(core.CoreError):
         core.func_ids(ExpiredClient(), 123456)
 
 
 def test_a_functionality_is_one_funcid_under_blazemeter_s_own_name():
-    """One entry per covered funcId, `id` equal to the funcId (#149).
-
-    It was two entries and `performance` claimed four funcIds, so its label had
-    to name all of them at once -- "Performance & functional testing", printed
-    over a location whose only funcId is `performance`. A list of funcIds per
-    functionality is a translation table between this tool's ids and
-    BlazeMeter's, and the 1:1 mapping exists so that there is not one: the
-    funcId a location carries *is* the id, in both directions, with nothing to
-    look up.
-    """
+    """One functionality per covered funcId, `id` equal to it, labelled as
+    BlazeMeter labels it."""
     served = core.functionalities()
     assert [(f["id"], f["label"]) for f in served] == [
         ("performance", "Performance"),
         ("functionalGui", "GUI Functional"),
         ("mockServices", "Service Virtualization")]
-    # The labels are the account's own words (from
-    # GET /accounts/{id}/functionalities), so a customer reading their own
-    # location settings does not have to translate -- and nothing here has a
-    # `func_ids` to keep them apart from.
+    # The account's own labels.
     assert not any("func_ids" in f for f in served)
 
 
 def test_a_covered_funcid_and_a_functionality_are_one_table():
-    """`covered` on the funcId vocabulary and having a card on the configure
-    step are the same fact, so they are the same declaration. Kept twice they
-    are free to disagree about the one thing a row exists to say -- and the row
-    that says it is the one telling a funcId this tool configures from a funcId
-    it can only name."""
+    """`covered` and having a functionality card are one table."""
     ids = [f["id"] for f in core.functionalities()]
     assert [r["id"] for r in core.func_ids()["choices"]] == ids
     assert all(r["covered"] for r in core.func_ids()["choices"])
-    # ...and with an account, whose vocabulary is longer, the covered rows are
-    # still exactly the functionalities.
+    # With an account, the covered rows are still exactly the functionalities.
     rows = core.func_ids(FakeClient(), 123456)["choices"]
     assert {r["id"] for r in rows if r["covered"]} == set(ids)
 
 
 def test_every_functionality_names_a_funcid_the_facts_layer_models():
-    """A functionality whose funcId the facts layer does not model would select
-    no images for the bundle it declares -- which is the one thing manual entry
-    reads a declaration for.
-
-    The reverse is deliberately *not* asserted, and #149 is where it stopped
-    holding: `functionalApi` and `proxyRecorder` are modelled here and covered
-    by nothing, because BlazeMeter has retired one and this tool has no options
-    for either. A location carrying only those claims no functionality, which
-    the page reads as nobody having said -- and names them, rather than folding
-    them into a card whose label would then have to mean four things."""
+    """Every functionality's funcId selects images in the facts layer. (The reverse
+    does not hold: functionalApi and proxyRecorder are modelled but uncovered.)"""
     from bzm_opl_gen import facts as facts_mod
     ids = {f["id"] for f in core.functionalities()}
     assert ids <= set(facts_mod.CATEGORY_BY_FUNC)
@@ -1660,12 +1462,7 @@ TOKEN_SHAPES = [
 
 @pytest.mark.parametrize("opts,where", TOKEN_SHAPES, ids=lambda v: v if isinstance(v, str) else "")
 def test_no_generated_file_survives_redaction_still_holding_the_token(opts, where):
-    """The sentinel for generate.TOKEN_FIELDS.
-
-    A template that renames its key, or a fourth file that starts carrying the
-    token, would return verbatim with `redacted_fields: 0` -- which reads to a
-    caller as "no secret in this file", the quiet direction. This fails instead.
-    """
+    """Redaction leaves no generated file holding the token (generate.TOKEN_FIELDS)."""
     files = core.generate_bundle(
         dict(FACTS), {"namespace": "ns1", "auth_token": "TOKENVALUE", **opts},
         client=None)
@@ -1690,10 +1487,7 @@ def test_the_reader_and_the_redactor_know_the_same_fields():
 
 
 def test_regenerating_a_chart_bundle_finds_the_token_it_wrote(tmp_path):
-    """`existing_auth_token` reads the bundle back rather than re-fetching,
-    because fetching mints a new one. It only looked in the two manifest files,
-    so a chart bundle re-fetched every time -- rotating the token of whatever
-    was running."""
+    """A chart bundle's token is read back on regenerate rather than re-fetched."""
     from bzm_opl_gen import generate as gen
     files = core.generate_bundle(
         dict(FACTS), {"namespace": "ns1", "output_format": "helm",
@@ -1703,9 +1497,6 @@ def test_regenerating_a_chart_bundle_finds_the_token_it_wrote(tmp_path):
 
 
 # -- changing a location's settings after the fact ----------------------------
-# The case: the location and agent are set up, and the virtual users per engine
-# turns out to be 1,000 rather than 500. None of these four values is in a
-# manifest, so this is the whole of that change -- nothing to regenerate.
 
 def _loc(**over):
     base = {"id": "h1", "name": "loc", "slots": 2, "threadsPerEngine": 500,
@@ -1734,10 +1525,7 @@ def test_update_location_leaves_alone_what_was_not_sent():
 
 
 def test_update_location_reports_a_field_the_account_did_not_store():
-    """The failure this guards: POST /private-locations accepts
-    threadsPerEngine and drops it, and the location then 403s every test start.
-    A UI that echoed the request back would show the number the user typed
-    while the account held the old one."""
+    """A field the account accepted and did not store is reported as ignored."""
     client = FakeClient(harbor=_loc(), ignores={"overrideCPU"})
     out = core.update_location(client, "h1", threads_per_engine=1000,
                                override_cpu=2)
@@ -1774,20 +1562,15 @@ def test_update_location_refuses_a_setting_it_does_not_own():
 
 
 def test_update_location_says_a_value_was_already_what_was_asked_for():
-    """Unchanged because it already matched is not the same as refused, and the
-    two must not both come back as `ignored` -- one is a no-op, the other is an
-    account that would not take the value."""
+    """A value that already matched is unchanged, not ignored."""
     client = FakeClient(harbor=_loc())
     out = core.update_location(client, "h1", threads_per_engine=500)
     assert out["changed"] == {} and out["ignored"] == []
 
 
 # -- what an account can generate ---------------------------------------------
-# The numbers here were settled by a live run rather than by reading: on a
-# location with 2 agents, slots=1 and threadsPerEngine=50, a 100 virtual user
-# test started and ran on two engines, one per agent. Asking for three engines
-# allocated two. 101 virtual users also started, packed onto the same two -- so
-# the engine count is enforced and the virtual users per engine is a rating.
+# Settled live: `agents x slots` engines are enforced; threadsPerEngine is a
+# rating, not a ceiling.
 
 def _cap_loc(name, ships=1, slots=1, tpe=50, workspaces=(1,), **over):
     loc = {"id": f"h-{name}", "name": name, "slots": slots,
@@ -1799,8 +1582,8 @@ def _cap_loc(name, ships=1, slots=1, tpe=50, workspaces=(1,), **over):
 
 
 def test_rated_capacity_is_agents_times_slots_times_threads():
-    """The Bens Linux case, which is the one that was measured: two agents at
-    one engine each, fifty virtual users an engine, so a hundred."""
+    """Two agents at one slot each and 50 virtual users per engine rate 100
+    (measured live)."""
     client = FakeClient(locations=[_cap_loc("Bens Linux", ships=2, slots=1, tpe=50)])
     out = core.account_capacity(client, 7)
     loc = out["locations"][0]
@@ -1836,14 +1619,8 @@ def test_a_location_in_two_workspaces_is_flagged_and_counted_once():
 
 
 def test_an_agent_the_payload_says_nothing_about_is_unknown_not_absent():
-    """A locations listing need not carry `lastHeartBeat`, and ship_reporting
-    answers None there. Counting that as "not reporting" would print a claim
-    about an agent nothing had looked at -- the same "could not read" versus
-    "there is nothing there" collapse this package keeps making.
-
-    Both are in the rating either way: the location advertises the agents, and
-    whether one is up today is a different question from what it is sized for.
-    """
+    """A ship the payload says nothing about is counted unknown, not "not
+    reporting"; both still count toward the rating."""
     stale = {"id": "s1", "lastHeartBeat": 1, "state": "idle"}   # present, old
     silent = {"id": "s2"}                                        # no heartbeat
     client = FakeClient(locations=[{

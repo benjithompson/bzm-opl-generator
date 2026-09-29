@@ -1,10 +1,5 @@
-"""The option registry against the thing it describes.
-
-The registry is only worth having if it cannot fall behind, so the checks that
-matter here are the ones that fail when someone adds an option and stops: key
-parity in both directions, and docs/options.md being exactly what the registry
-renders.
-"""
+"""The option registry against what it describes: key parity both ways, and
+docs/options.md being exactly what the registry renders."""
 
 import re
 
@@ -62,9 +57,7 @@ def test_declared_group_is_one_that_renders(o):
 
 @pytest.mark.parametrize("o", opt.OPTIONS, ids=lambda o: o.name)
 def test_declared_type_matches_the_default(o):
-    """A default that contradicts its declared type would put a wrong type in
-    the MCP schema, where the client validates against it before we ever see
-    the call."""
+    """Each declared type matches its default, since the MCP schema carries it."""
     value = o.default
     if value is None:
         return  # unset carries no type; `nullable` is what says so
@@ -84,20 +77,15 @@ def test_default_is_one_of_the_choices(o):
 
 
 def test_choices_track_generate_enumerations():
-    """The two enumerations generate() actually branches on. Restating them
-    here is the drift the registry exists to prevent, so they are read from
-    generate -- this asserts nothing added a third copy by hand."""
+    """The registry's choices are read from generate's enumerations."""
     assert opt.BY_NAME["sv_ingress"].choices == (
         tuple(gen.SV_INGRESS_TYPES) + (gen.SV_INGRESS_NONE,))
-    # The sentinel is offered but is not a backend: anything iterating the
-    # backends to pick one must not find it among them.
+    # The `none` sentinel is offered but is not a backend.
     assert gen.SV_INGRESS_NONE not in gen.SV_INGRESS_TYPES
 
 
 def test_secret_options_are_the_ones_profile_json_omits():
-    """`secret` is derived from generate.SECRET_OPTIONS rather than declared,
-    so this is really asserting that the set is not empty and still means what
-    profile.json means by it."""
+    """`secret` options are exactly the ones profile.json omits."""
     secret = {o.name for o in opt.OPTIONS if o.secret}
     assert secret == set(gen.SECRET_OPTIONS)
     written = gen._profile_json(dict(gen.DEFAULT_OPTIONS))
@@ -106,14 +94,7 @@ def test_secret_options_are_the_ones_profile_json_omits():
 
 
 def test_ca_options_are_the_ones_this_registry_files_under_ca_trust():
-    """`generate.CA_OPTIONS` is what a caller clears to leave CA trust
-    unconfigured -- livetest's negative control, and the proxy overlay that
-    replaces whatever mode a profile already carried. Both went on clearing
-    three keys after `ca_bundle_slot` made a fourth mode (#250), so the set is
-    held against the section the registry files each option under: a fifth CA
-    option gets a registry row (the two parity tests above see to that), and if
-    it is not in `CA_OPTIONS` it fails here rather than in a 12-20 minute live
-    run that proves nothing."""
+    """generate.CA_OPTIONS is exactly the registry's CA trust section."""
     ca = {o.name for o in opt.OPTIONS if o.group == "CA trust"}
     assert ca == set(gen.CA_OPTIONS)
 
@@ -126,17 +107,13 @@ def test_clearing_the_ca_options_leaves_no_mode_configured():
 
 
 def test_a_nullable_option_is_the_one_whose_default_is_none():
-    """`nullable` is what every served shape spends -- core.option_docs carries
-    it to the UI and to an MCP session, and a client that cannot send `None`
-    back cannot send the value it was given."""
+    """`nullable` is true exactly where the default is None."""
     for o in opt.OPTIONS:
         assert o.nullable == (o.default is None), o.name
 
 
 def test_generated_table_is_what_the_doc_carries():
-    """`python -m bzm_opl_gen.options` is a no-op on a clean tree. It failing
-    means either the registry changed without regenerating, or someone edited a
-    table cell that the next regeneration would silently discard."""
+    """Regenerating the docs/options.md table is a no-op."""
     with open(opt.DOC_PATH, encoding="utf-8") as fh:
         text = fh.read()
     assert opt.render_table() in text, (

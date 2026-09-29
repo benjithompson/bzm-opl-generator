@@ -1,10 +1,5 @@
-"""The built page records what it was built from (#237).
-
-Its own module rather than a few cases inside `tests/test_server.py`, which
-skips entirely without fastapi: the first test here is the one that catches
-`ui_dist` committed without a rebuild, and a check that reports a clean pass
-having not run is exactly the failure it is about.
-"""
+"""The built page's source fingerprint. Not in test_server.py, which skips
+without fastapi."""
 import json
 import os
 import pathlib
@@ -25,20 +20,9 @@ def _frontend(tmp_path, **files):
 
 
 def test_the_built_page_records_the_sources_it_was_built_from():
-    """The committed fingerprint against the committed sources.
-
-    Worth more than the fingerprint itself. It fails when `ui_dist` is
-    committed without a rebuild, which is the mistake #224 was about and which
-    nothing in this suite caught before: the built page and the sources beside
-    it went out of step in a commit, and the first sign was a route answering
-    404 to a page that read the 404 as "not read yet".
-
-    It is also what holds the two halves equal. The writer is a vite plugin in
-    `frontend/scripts/source-fingerprint.mjs` and the reader is
-    `bzm_opl_gen/ui_build.py`; the covered set and the hashing rule are stated
-    twice, in two languages, because a Node build cannot import a Python table.
-    Nothing else notices one of them drifting.
-    """
+    """The committed ui_dist records the fingerprint of the committed sources, and
+    the Node writer (frontend/scripts/source-fingerprint.mjs) agrees with the
+    Python reader. Fails when ui_dist is committed without a rebuild."""
     dist = REPO / "bzm_opl_gen" / "ui_dist"
     recorded = ui_build.recorded_fingerprint(str(dist))
     assert recorded, (
@@ -51,10 +35,7 @@ def test_the_built_page_records_the_sources_it_was_built_from():
 
 
 def test_the_fingerprint_is_content_and_not_a_clock(tmp_path):
-    """The whole point of #238, one layer down. A `git pull`, a `git checkout`
-    and a branch switch all rewrite the mtime of every file they touch, and the
-    build is unaffected -- so a fingerprint that moved with a timestamp would
-    reproduce the defect it replaces."""
+    """The fingerprint moves with content, not with mtimes."""
     frontend = _frontend(tmp_path, **{"src/App.tsx": "x", "index.html": "<p>"})
     first = ui_build.source_fingerprint(frontend)
 
@@ -75,9 +56,7 @@ def test_a_source_that_moves_changes_it(tmp_path):
 
 
 def test_a_test_file_is_not_an_input(tmp_path):
-    """A `.test.ts` reaches no bundle, so an edit to one must not ask for a
-    rebuild that would change nothing. This directory is the one this repo
-    edits most, and a false alarm there is the crying-wolf failure again."""
+    """A `.test.ts` file is not an input."""
     frontend = _frontend(tmp_path, **{"src/App.tsx": "x"})
     first = ui_build.source_fingerprint(frontend)
     (tmp_path / "src" / "App.test.tsx").write_text("expect(1).toBe(1)")
@@ -94,25 +73,17 @@ def test_the_page_is_compiled_from_more_than_src(tmp_path):
         "package.json": "{}"})
     covered = ui_build.source_files(frontend)
     assert "index.html" in covered and "vite.config.ts" in covered
-    # The toolchain is deliberately out: a dependency bump changes the output,
-    # but it changes it under a command somebody just ran, and covering the
-    # lockfile would flip the fingerprint on every `npm install`.
+    # The toolchain is out: covering the lockfile would flip on `npm install`.
     assert "package.json" not in covered
 
 
 def test_no_sources_is_not_an_empty_set_of_them(tmp_path):
-    """The installed wheel. It ships a built `ui_dist` and no `frontend`, so
-    there is nothing to compute -- and a hash of no files would be a real
-    answer about a directory nobody has."""
+    """No `frontend/src` (an installed wheel) answers None."""
     assert ui_build.source_fingerprint(str(tmp_path / "nope")) is None
 
 
 def test_a_page_that_records_nothing_says_nothing(tmp_path):
-    """Every way the file fails to answer is one answer: not read. A page built
-    before #237 records nothing, a deleted file records nothing, and one
-    written by a rule this version does not know cannot be compared with a
-    number this version computes -- reporting that last one as a mismatch would
-    call every page built by the next algorithm stale."""
+    """A missing, unparseable or other-algorithm record reads as None (not read)."""
     assert ui_build.recorded_fingerprint(str(tmp_path)) is None
 
     doc = tmp_path / ui_build.FINGERPRINT_FILE
@@ -144,12 +115,7 @@ def _built(tmp_path, fingerprint=None, page=True):
 
 
 def test_staleness_is_four_answers_and_not_three(tmp_path):
-    """#238, all four in one place, because what the change is about is that
-    none of them may be read as another. The two that are not a stale page are
-    the ones a shortcut collapses: `"unrecorded"` answered False claims a check
-    nobody performed, answered True warns about every checkout until somebody
-    rebuilds, and folded into None makes "can never be checked" and "rebuild
-    and it can be" one sentence."""
+    """Staleness has four distinct answers: True, False, UNRECORDED, None."""
     frontend = _frontend(tmp_path / "frontend", **{"src/App.tsx": "x"})
     matching = ui_build.source_fingerprint(frontend)
 
@@ -161,24 +127,17 @@ def test_staleness_is_four_answers_and_not_three(tmp_path):
     assert ui_build.staleness(
         frontend, _built(tmp_path / "old", "0" * 64)) is True
 
-    # A page built before #237. There are sources and there is a page, and the
-    # page says nothing about which sources it came from.
+    # A page that records nothing about its sources.
     assert ui_build.staleness(
         frontend, _built(tmp_path / "mute")) == ui_build.UNRECORDED
 
-    # The installed wheel: no frontend at all, so the question is not about
-    # anything. Read before the dist deliberately -- the wheel's answer must
-    # not depend on what a directory it does not have happens to hold.
+    # The installed wheel: no frontend, so None whatever the dist holds.
     assert ui_build.staleness(
         str(tmp_path / "nope"), _built(tmp_path / "wheel", matching)) is None
 
 
 def test_the_unrecorded_answer_cannot_be_reached_by_a_boolean_test(tmp_path):
-    """It is a string on purpose. `is True` and `is False` both miss it, so a
-    caller written for three states fails visibly instead of taking the one
-    branch it should not -- and a plain `if` is the trap, since a non-empty
-    string is true. That trap is live in `server.main`, which prints a `!!`
-    warning on one of the four."""
+    """UNRECORDED is a string, so `is True` and `is False` both miss it."""
     frontend = _frontend(tmp_path / "frontend", **{"src/App.tsx": "x"})
     answer = ui_build.staleness(frontend, _built(tmp_path / "mute"))
     assert answer is not True and answer is not False and answer is not None
@@ -186,19 +145,14 @@ def test_the_unrecorded_answer_cannot_be_reached_by_a_boolean_test(tmp_path):
 
 
 def test_a_checkout_with_no_built_page_has_nothing_to_be_stale(tmp_path):
-    """Sources and no `ui_dist`: there is no page, which the server says far
-    more loudly by serving none. Not `"unrecorded"` -- that is about a page
-    that exists and records nothing, and a missing page is not a page whose
-    record is missing."""
+    """Sources and no built page answer None, not UNRECORDED."""
     frontend = _frontend(tmp_path / "frontend", **{"src/App.tsx": "x"})
     empty = _built(tmp_path / "unbuilt", page=False)
     assert ui_build.staleness(frontend, empty) is None
 
 
 def test_staleness_moves_with_content_and_not_with_a_clock(tmp_path):
-    """The acceptance criterion of #238 at this layer: a `git` operation that
-    rewrites a source without changing it reports not stale, and a real edit
-    still reports stale."""
+    """Rewriting a source unchanged is not stale; a real edit is."""
     frontend = _frontend(tmp_path / "frontend", **{"src/App.tsx": "x"})
     dist = _built(tmp_path / "dist", ui_build.source_fingerprint(frontend))
     assert ui_build.staleness(frontend, dist) is False
@@ -212,9 +166,7 @@ def test_staleness_moves_with_content_and_not_with_a_clock(tmp_path):
 
 
 def test_the_writer_and_the_reader_agree_about_the_algorithm():
-    """Two implementations of one rule, so the name that travels with the
-    number is stated twice as well. A build writing `sha256-paths-v2` while
-    this reads `v1` is every page reading as unrecorded, which is quiet."""
+    """The writer and the reader name the same algorithm."""
     script = (REPO / "frontend" / "scripts" / "source-fingerprint.mjs").read_text()
     assert f'ALGORITHM = "{ui_build.ALGORITHM}"' in script
     assert f'FINGERPRINT_FILE = "{ui_build.FINGERPRINT_FILE}"' in script
