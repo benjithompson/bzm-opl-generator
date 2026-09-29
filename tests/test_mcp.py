@@ -20,7 +20,7 @@ import anyio
 import mcp
 import pytest
 
-from bzm_opl_gen import core, evidence, generate as gen_mod, mcp_server, plan
+from bzm_opl_gen import core, evidence, generate as gen_mod, kube, mcp_server, plan
 from test_core import FakeClient, RefusingClient
 from test_generate import FACTS
 
@@ -849,7 +849,7 @@ def test_manual_facts_need_no_ids_and_say_which_are_missing():
 def test_preflight_reads_an_evidence_file_without_a_cluster(monkeypatch):
     from evidence_fixtures import document as _evidence
     from test_doctor import FACTS as LOC_FACTS
-    monkeypatch.setattr(core.livetest, "cli_tool",
+    monkeypatch.setattr(kube, "cli_tool",
                         lambda *a, **k: pytest.fail("preflight ran a cluster CLI"))
     body = ok("opl_preflight", "doctor",
               {"facts": LOC_FACTS, "options": {"namespace": "blazemeter"},
@@ -878,7 +878,7 @@ def _evidence_file(tmp_path, **kw):
 
 def test_doctor_takes_the_evidence_file_as_the_path_it_is(tmp_path, monkeypatch):
     from test_doctor import FACTS as LOC_FACTS
-    monkeypatch.setattr(core.livetest, "cli_tool",
+    monkeypatch.setattr(kube, "cli_tool",
                         lambda *a, **k: pytest.fail("preflight ran a cluster CLI"))
     body = ok("opl_preflight", "doctor",
               {"facts": LOC_FACTS, "options": {"namespace": "blazemeter"},
@@ -1082,7 +1082,7 @@ def test_only_the_gated_action_can_reach_a_cluster_write(monkeypatch):
     """The claim the instructions make. Everything but `livetest` is a read or
     a local write, and `livetest` is the one that has to be switched on."""
     called = []
-    monkeypatch.setattr(core.livetest, "run",
+    monkeypatch.setattr(mcp_server.livetest, "run",
                         lambda *a, **k: called.append(True) or True)
     assert err("opl_agent", "livetest", {"manifests": "/tmp/x", "namespace": "n",
                                          "harbor_id": "h", "ship_id": "s"})

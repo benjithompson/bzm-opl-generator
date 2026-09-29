@@ -1,39 +1,32 @@
 """Pre-flight: can this cluster actually run the location's concurrency?
 
-`generate` renders manifests that apply cleanly; that says nothing about
-whether an engine can be *scheduled*. A location with slots=5 and the
-documented 2 CPU / 8Gi engine needs 10 CPU and 40Gi of schedulable capacity,
-plus quota, plus a LimitRange that does not fight the sizing, plus admission
-that accepts the engine pods crane spawns. When any of that is missing the
-customer sees a test that never starts -- no manifest error, no crane error,
-just a run stuck in "initializing".
+A bundle that applies cleanly says nothing about whether an engine can be
+*scheduled*: slots=5 at 2 CPU / 8Gi needs 10 CPU and 40Gi schedulable, plus
+quota, a LimitRange that does not fight the sizing, and admission that accepts
+the engine pods crane spawns. Missing any of it, a test sits in "initializing"
+with no error anywhere.
 
-Every check here is a pure function over already-fetched data (`Check` list),
-so the whole doctor is testable offline; the only impure parts are
-gather_cluster() / probe_egress(), which are thin. That data can equally come
-from an evidence file collected on a cluster nobody here can reach
-(cluster_from_evidence, the twin of facts.manual()), and no check can tell the
-difference -- it is the same shape either way. evaluate() returns the verdicts,
-run() prints them.
+Every check is a pure function over already-fetched data, so the doctor is
+testable offline; gather_cluster() and probe_egress() are the impure layer. The
+data may equally come from an evidence file (cluster_from_evidence, the twin of
+facts.manual()), in the same shape. evaluate() returns verdicts, run() prints.
 
 FAIL = a test would not start. WARN = the numbers are wrong or it will bite
 later, but a test still starts.
+
+A cluster section is None when nobody could read it and []/{} when it was read
+and empty; the two get opposite verdicts, and @reads keeps them apart.
 """
 
 import collections
 import functools
 import json
 import os
-import subprocess
 
-from . import livetest
-from . import plan
-# Aliased because every check takes a `facts` argument, which takes the name.
-from . import facts as facts_mod
-# Same reason: evaluate(), run() and half of core take an `evidence` argument.
-# This is the module that states what is *in* one -- the section names, which
-# used to be spelled out at each of the four places that read them.
+from . import kube, plan, verdict
+# Aliased: every check takes a `facts` argument, and evaluate() an `evidence`.
 from . import evidence as evidence_mod
+from . import facts as facts_mod
 from .api import (API_BASE, DEFAULT_THREADS_PER_ENGINE,
                   ENGINE_UPLOAD_HOSTS)
 from .generate import (CA_MODES, CRANE_CPU_LIMIT, CRANE_CPU_REQUEST,
@@ -50,150 +43,70 @@ from .generate import (CA_MODES, CRANE_CPU_LIMIT, CRANE_CPU_REQUEST,
                        separate_pools, service_account)
 from .quantity import (format_cpu, format_memory, human_memory, parse_cpu,
                        parse_memory)
-
-Check = collections.namedtuple("Check", "name status detail")
-PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
+from .verdict import FAIL, PASS, WARN, Check
 
 GB = 10 ** 9                     # the docs quote decimal GB, not GiB
 
 API_PROBE_URL = f"{API_BASE}/web/version"
-# Engines upload results and artifacts to hosts crane itself never contacts, so
-# an egress rule shaped around crane alone passes here and still fails a run.
-# Same hosts livetest looks for in the proxy log -- one list, not two.
+# Engines upload to hosts crane never contacts, so an egress rule shaped around
+# crane alone passes here and still fails a run.
 ENGINE_PROBE_URLS = tuple(f"https://{h}/" for h in ENGINE_UPLOAD_HOSTS)
 CURL_IMAGE = "curlimages/curl:8.11.1"
 
-
-def has_failures(checks):
-    return any(c.status == FAIL for c in checks)
-
-
-# What a FAIL in that list costs, in the words the report ends on. A constant
-# because two surfaces state it and one of them is not this process: the web UI
-# puts the same sentence beside the imported file's name.
+# What a FAIL costs, in the words the report ends on. The web UI shows the same
+# sentence beside an imported file's name.
 NO_TEST_WOULD_START = "a test would not start on this location as configured"
 
 
+def has_failures(checks):
+    return verdict.has_failures(checks)
+
+
 def summary_line(checks):
-    """The verdict list in one sentence: the counts, and what a failure means.
-
-    The consequence is stated only where something FAILed. An evidence file
-    whose collector was refused half the cluster is all warnings, and ending
-    that with "a test would not start" turns a thin read into a rejection of a
-    cluster nobody has judged -- which is the same rule `has_failures` keeps,
-    and it is kept once, here. The browser used to compose its own line from
-    the same counts, including this rule.
-    """
-    counts = collections.Counter(c.status for c in checks)
-    line = (f"{counts[PASS]} passed, {_plural(counts[WARN], 'warning')}, "
-            + (_plural(counts[FAIL], "failure") if counts[FAIL]
-               else "no failures"))
-    return f"{line} — {NO_TEST_WOULD_START}" if counts[FAIL] else line
-
-
-def _plural(n, word):
-    return f"{n} {word}" if n == 1 else f"{n} {word}s"
-
-
-def _unread_section(cluster, key, name, detail):
-    """The branch every check that reads a cluster section opens with.
-
-    A section is None when nobody could look -- a denied `list nodes`, an API
-    server that does not serve the kind, or an evidence file whose collector was
-    refused it. It is never None for "we looked and there are none": that
-    arrives as [] or {}, and the two get opposite verdicts. An unread section is
-    a WARN and exits 0; an empty one can be the FAIL that "no eligible node" or
-    "no IngressClass named nginx" is, and claiming either off a read we were
-    denied is a claim nothing here can stand behind.
-
-    Returns the verdict to hand straight back, or None to carry on. `detail`
-    stays the caller's, because what an unread section costs is specific to the
-    question being asked of it -- only the branch is shared.
-
-    Every check reaches this through its own @reads declaration now, so the
-    seam below is the only caller: a check that reads a new section gets the
-    branch by naming its section, and cannot get it by remembering the rule.
-    """
-    if cluster.get(key) is None:
-        return [Check(name, WARN, detail)]
-    return None
+    """The verdict list in one sentence; the consequence only where something
+    FAILed, so a thin all-warnings read is not a rejection."""
+    return verdict.summary_line(checks, NO_TEST_WOULD_START)
 
 
 class MissingSection(LookupError):
     """A check was handed cluster data with no key at all for a section it reads.
 
-    Absent is not a third answer to "what is in this section". Both producers --
-    gather_cluster() and cluster_from_evidence() -- carry every key always, null
-    for a section nobody could read and a value for one that was read, so a
-    mapping missing the key is a caller that has not said which of the two it
-    means. `.get()` picks "unread" for it silently, and that WARN is
-    indistinguishable from an honest one: it is how thirty-six partial test
-    fixtures could each have been putting a question to a check that the check
-    never answered, with a pinned count of WARNs as the only thing noticing.
-
-    Loud, therefore, and at the call site rather than in the report.
-    """
+    Both producers always carry every key (None for unread), so a missing key is
+    a caller -- usually a fixture -- that has not said which it means. Raised
+    rather than read as unread, which would be indistinguishable from an honest
+    WARN."""
 
 
-# What a check declares about a cluster section it reads.
-#
-# `name`/`unread` are the verdict to give when the section is null. Both may be
-# None: that is a check whose unread case is not its own to report -- either
-# another check already owns that verdict (check_resourcequota's second read of
-# `limitranges`) or the section cannot express the difference in the first place
-# (check_egress's probes). The key is still declared, because presence is
-# checked for every declaration and reading a section undeclared is the thing
-# this exists to stop.
-#
-# `when` is a predicate over the options, for a section only read when the
-# question arises at all -- crane's own pool on a split bundle, an
-# IngressClass for a virtual service. It gates the whole declaration: a section
-# a check will not look at need not be there, and an unread one costs nothing.
+# What a check declares about a cluster section it reads. `name`/`unread` are
+# the verdict for a null section; both None where that verdict is another
+# check's or the section cannot express it (the key is still presence-checked).
+# `when` is a predicate over the options gating the whole declaration, for a
+# section read only when the question arises.
 Section = collections.namedtuple("Section", "key name unread when")
 
 
 def reads(key, name=None, unread=None, when=None):
     """Declare a cluster section a check reads, and what an unread one costs.
 
-    The rule this exists to make structural is the one broken most often here:
-    an unread section (None -- denied, not served, trimmed out of an evidence
-    file) and an empty one ([] or {}) are opposite answers, and a check body
-    that forgets the difference turns a read somebody was refused into a FAIL
-    about a cluster nobody described. A declared check never gets the chance:
-    the wrapper answers the unread case from this declaration and the body is
-    only ever called with a section that was actually read.
-
-    The declaration travels with the check rather than being applied by the
-    loop, so a direct call -- which is how most of the tests here reach a check
-    -- is held to the same contract as evaluate(). A seam only the loop went
-    through would leave every other caller free to ask a check a question it
-    was never given.
-
-    `unread` is the check's own sentence, not a generic one, because what an
-    unread section costs is specific to the question being asked of it -- only
-    the branch is shared. It may be a callable over (facts, opts) where the
-    sentence names the location's own numbers ("slots=2 x 2 CPU / 8Gi"), which
-    is what makes it actionable; never over the cluster, which is the thing that
-    was not read.
-
-    Stack the decorator for a check that reads two sections. Undeclared checks
-    are run unchanged: a check that reads nothing from the cluster is right not
-    to declare, and says so where it is defined.
+    The wrapper answers a null section from this declaration, so the body only
+    ever sees a section that was read. It travels with the check, so a direct
+    call (as in the tests) keeps the same contract as evaluate(). `unread` may
+    be a callable over (facts, opts) -- never the cluster, which is what was not
+    read. Stack it for a check that reads two sections.
     """
     def declare(check):
         section = Section(key, name, unread, when)
         if getattr(check, "sections", None) is not None:
-            # Already wrapped by a decorator below this one; one wrapper is
-            # enough, and source order is the order they are answered in.
+            # Already wrapped below; source order is answer order.
             check.sections = (section,) + check.sections
             return check
 
         @functools.wraps(check)
         def declared(facts, opts, cluster):
             for s in declared.sections:
-                verdict = _declared_verdict(s, declared, facts, opts, cluster)
-                if verdict is not None:
-                    return verdict
+                verdict_ = _declared_verdict(s, declared, facts, opts, cluster)
+                if verdict_ is not None:
+                    return verdict_
             return check(facts, opts, cluster)
 
         declared.sections = (section,)
@@ -202,13 +115,7 @@ def reads(key, name=None, unread=None, when=None):
 
 
 def _declared_verdict(section, check, facts, opts, cluster):
-    """The verdict a declaration answers with by itself, or None to run the body.
-
-    Three outcomes, and the middle one is the point: a section the check does
-    not read here (`when`), a section the cluster data has no key for at all
-    (MissingSection -- see it), and a section that was read (carry on, possibly
-    after the unread WARN).
-    """
+    """The verdict a declaration gives by itself, or None to run the body."""
     if section.when is not None and not section.when(opts):
         return None
     if section.key not in cluster:
@@ -220,28 +127,16 @@ def _declared_verdict(section, check, facts, opts, cluster):
             f"gather_cluster() and cluster_from_evidence() always carry every "
             f"section, so this is a caller -- in practice a fixture -- that "
             f"has not said which it means")
-    if section.unread is None:
-        return None                   # not this check's verdict to give
+    if section.unread is None or cluster.get(section.key) is not None:
+        return None
     detail = (section.unread(facts, opts) if callable(section.unread)
               else section.unread)
-    return _unread_section(cluster, section.key, section.name, detail)
+    return [Check(section.name, WARN, detail)]
 
 
 def defers_to(*owners):
-    """Declare the checks whose verdicts this one returns [] rather than restate.
-
-    Two checks here go quiet because an earlier one has already reported the
-    thing they would have said -- threadsPerEngine unset, an eligible node set
-    that is empty. That was true only by where they sat in CHECKS, which is a
-    fact about a tuple rather than about either check; _ordered() below turns it
-    into something that fails at import when the tuple is reshuffled.
-
-    Not a dependency graph, and it should not grow into one: it records the two
-    places a verdict is deliberately left to somebody else. A check that goes
-    quiet because the question does not arise (no split pools, no virtual
-    service, the bundle brings its own ServiceAccount) is not deferring to
-    anything and declares nothing.
-    """
+    """Declare the checks whose verdict this one leaves unrepeated (returns []
+    for). _ordered() enforces at import that each owner runs first."""
     def declare(check):
         check.defers = tuple(owners)
         return check
@@ -249,11 +144,8 @@ def defers_to(*owners):
 
 
 def _ordered(checks):
-    """CHECKS, with every declared deference met by the order it is written in.
-
-    Import-time, because a reordering that silences a check is invisible in the
-    report: the verdict the quiet one was counting on simply never appears.
-    """
+    """CHECKS, refusing an order in which a check runs before one it defers to:
+    the verdict it stays quiet for would never be reported."""
     seen = []
     for check in checks:
         for owner in getattr(check, "defers", ()):
@@ -267,36 +159,21 @@ def _ordered(checks):
 
 
 def run_check(check, facts, opts, cluster):
-    """One check's verdicts. A pass-through, and that is the finished shape.
-
-    The declaration used to be read here, which made this the one place a check
-    got what it was promised -- and left every caller that did not come through
-    it, most of this project's tests among them, free to hand a check anything
-    at all. Enforcing it on the check instead makes those two the same call, and
-    leaves nothing for a loop to do. Kept as the name evaluate() runs a check
-    under, so a caller running one on its own has the same thing to say.
-    """
+    """One check's verdicts. The @reads contract lives on the check itself."""
     return check(facts, opts, cluster)
 
 
 # -- location -----------------------------------------------------------------
 #
-# The three checks in this section read no cluster section at all -- they judge
-# the location's own settings against the bundle's -- so they declare nothing,
-# and that is a decision rather than an omission. A @reads on any of them would
-# be a claim about data none of them touches, and would make a cluster mapping
-# a fixture has to carry to ask a question about an account.
+# These judge the location's settings against the bundle's and read no cluster
+# section, so they declare none.
 
 def check_location(facts, opts, cluster):
-    """The two fields BlazeMeter itself needs before it will hand a run to this
-    location.
+    """The two fields BlazeMeter needs before it will hand a run to this location.
 
-    Both come from the account, so both are None on manually-entered facts --
-    the same None a real location with them unset produces, and only that second
-    case is a misconfiguration. The value cannot tell them apart; the marker the
-    facts already carry for how they arrived can, and it is read here rather
-    than folded into the facts, so nothing that generates learns the difference.
-    A typed 0 is still a FAIL: that is a value someone supplied.
+    Hand-entered facts have both None, like a real location with them unset;
+    only the second is a misconfiguration, so facts.from_manual_entry() decides.
+    A typed 0 is still a FAIL.
     """
     typed_by_hand = facts_mod.from_manual_entry(facts)
     checks = []
@@ -311,9 +188,8 @@ def check_location(facts, opts, cluster):
                             "the location advertises no slots -- BlazeMeter has "
                             "nowhere to place a run"))
     else:
-        # "Engines per agent" in BlazeMeter's UI: a location's concurrency is
-        # agents x slots. check_capacity measures one cluster, which is one
-        # agent, so slots is the right number to size it against.
+        # "Engines per agent": one cluster is one agent, so slots is what a
+        # cluster is sized against.
         checks.append(Check("location slots", PASS,
                             f"{slots} engine(s) per agent"))
     tpe = facts.get("threads_per_engine")
@@ -324,9 +200,7 @@ def check_location(facts, opts, cluster):
                             "403 'Not enough available resources', so check it in "
                             "Settings -> Private Locations"))
     elif not tpe:
-        # A location created via the API has this null (POST ignores it), and
-        # every start then fails 403 "Not enough available resources" -- with no
-        # hint that a scalar field is the reason.
+        # A location created via the API has this null (POST ignores it).
         checks.append(Check("location threadsPerEngine", FAIL,
                             "threadsPerEngine is unset -- every test start fails "
                             "with 403 'Not enough available resources'. Set it in "
@@ -338,25 +212,15 @@ def check_location(facts, opts, cluster):
 
 @defers_to(check_location)
 def check_threads_per_engine(facts, opts, cluster):
-    """Threads the location promises per engine vs what the engine is sized for.
-
-    The ratio itself is plan.supported_vus: BlazeMeter's own default pairs
-    500 threads with a 2 CPU / 8Gi engine, scaled linearly on whichever of the
-    two dimensions is tighter. 500 threads on a 1 CPU / 4Gi engine is not a
-    runnable location, it is one that OOM-kills or throttles halfway up the
-    ramp. `plan` sizes a cluster *from* that ratio where this judges a location
-    against it, and the two answering differently would be the planner
-    recommending what the preflight then warns about.
-    """
+    """Threads per engine against what the engine is sized for, by
+    plan.supported_vus -- the ratio the planner sizes from, so the two agree."""
     tpe = facts.get("threads_per_engine")
     if not tpe:
-        return []                     # check_location has already reported it
+        return []
     cpu, mem = engine_size(opts)
     model = _sizing_model(facts, cpu, mem)
     if model and not model["engine"]:
-        # No taurus engine on this agent at all, so the ratio is arithmetic
-        # about a pod the location never creates. Said rather than skipped: a
-        # check that returns nothing reads exactly like one that passed.
+        # Said rather than skipped: silence reads like a pass.
         return [Check("threadsPerEngine vs engine size", PASS,
                       f"not judged -- this location runs {model['runs']} and "
                       f"carries no taurus engine, so the per-engine ratio is not "
@@ -377,14 +241,8 @@ def check_threads_per_engine(facts, opts, cluster):
 
 
 def _sizing_model(facts, cpu, mem):
-    """The model a location's funcIds put it in, with what one pod of the
-    configured size holds -- or None where they name no model here.
-
-    `doctor` has a location where `plan` has only a number, so this is the same
-    join the bundle README makes and for the same reason (#165): both were
-    printing the performance model's vocabulary over whatever the location ran.
-    A fourth model is a row in `plan.SIZING_MODELS` and needs no edit here.
-    """
+    """The sizing model the location's funcIds put it in, with what one pod of
+    the configured size holds; None where they name no model here."""
     models = plan.sizing_models_for(facts.get("func_ids")) or []
     if not models:
         return None
@@ -396,20 +254,10 @@ def _sizing_model(facts, cpu, mem):
 
 
 def _model_caveat(facts, model):
-    """Whose ratio was just applied, where it is not this location's own.
+    """Whose ratio was applied, where it is not this location's own model.
 
-    The threads-per-engine ratio is the performance model's, and it is the only
-    one there is: a GUI agent runs the same taurus engine, and funcIds this tool
-    has no model for still have to be judged by something. So the verdict stands
-    and the sentence names the model instead -- which is the half that was
-    missing, not the arithmetic.
-
-    Two ways to have no model and they are not one sentence. Facts carrying no
-    funcIds at all were not read; funcIds naming none of these models were, and
-    real accounts have them (tdm, dataPublisher, delphix). `doctor` is where
-    somebody is working out what is wrong, and "we did not look" reported as
-    "there is nothing there" is the failure this whole file is arranged against.
-    """
+    No funcIds at all (not read) and funcIds naming no model (tdm, delphix...)
+    are different facts and get different sentences."""
     if model is None:
         if facts.get("func_ids") is None:
             return (". These facts carry no funcIds, so that is the performance "
@@ -448,17 +296,12 @@ def _tolerates(toleration, taint):
 
 
 def eligible_nodes(nodes, opts, placement=None):
-    """Nodes a pod could actually land on: Ready, uncordoned, matching the
-    nodeSelector, and with every blocking taint tolerated.
+    """Nodes a pod could land on: Ready, uncordoned, matching the nodeSelector,
+    every NoSchedule/NoExecute taint tolerated.
 
-    `placement` is a (selector, tolerations) pair -- engine_scheduling(opts) or
-    crane_scheduling(opts). It defaults to the engines' placement because every
-    caller here is asking about engines; crane's pod is one, theirs are the ones
-    that fail to schedule. On a two-pool location the two answers are different
-    sets of nodes, so a caller that means crane has to say so.
-
-    PreferNoSchedule is a preference, not a rejection, so it does not exclude.
-    """
+    `placement` is (selector, tolerations); it defaults to the engines'
+    (engine_scheduling), and a caller asking about crane passes
+    crane_scheduling(opts) -- on split pools they are different node sets."""
     selector, tolerations = placement or engine_scheduling(opts)
     out = []
     for n in nodes:
@@ -477,9 +320,8 @@ def eligible_nodes(nodes, opts, placement=None):
 
 
 def _allocatable(node):
-    """(cpu_millicores, mem_bytes) the node advertises as schedulable. Not what
-    is free -- that needs every pod's requests summed per node, a much bigger
-    read than a preflight should do."""
+    """(cpu_millicores, mem_bytes) the node advertises as schedulable -- an
+    upper bound, not what is free."""
     alloc = node.get("status", {}).get("allocatable", {})
     return parse_cpu(alloc.get("cpu", "0")), parse_memory(alloc.get("memory", "0"))
 
@@ -489,8 +331,7 @@ def _engine_str(cpu, mem):
 
 
 def _scope(opts, placement=None):
-    """How the eligible-node set was narrowed, for a detail string. Defaults to
-    the engines' placement, matching eligible_nodes()."""
+    """How the eligible-node set was narrowed, for a detail string."""
     selector, tolerations = placement or engine_scheduling(opts)
     bits = []
     if selector:
@@ -507,23 +348,12 @@ def _scope(opts, placement=None):
        "hold crane is unverified",
        when=separate_pools)
 def check_crane_pool(facts, opts, cluster):
-    """The crane pool can hold crane.
+    """The crane pool can hold crane (split pools only; otherwise
+    check_capacity spends crane's share out of the one pool).
 
-    Only asked when the pools are split, because otherwise check_capacity
-    already spends crane's share out of the one set of nodes it measures. Split,
-    nothing was checking the crane side at all: every capacity check here is
-    about engines, and a crane pool too small to run crane fails in the way that
-    is hardest to attribute -- the agent goes offline mid-run, and BlazeMeter
-    reports a test that stopped.
-
-    The case that motivated it is not exotic. `e2-medium` is the obvious choice
-    for "small always-on node" and reports **940m** allocatable CPU: crane
-    schedules on its 250m request and can never reach its 1 CPU limit, so it is
-    throttled exactly when a run makes it busy.
+    A too-small crane pool shows as an agent going offline mid-run. The usual
+    case: e2-medium reports 940m allocatable, below crane's 1 CPU limit.
     """
-    # The `when` on the declaration above is this same condition: a bundle with
-    # one pool asks nothing of the nodes here, so an unread `nodes` costs it
-    # nothing either, and the section is not required to be present.
     if not separate_pools(opts):
         return []
     placement = crane_scheduling(opts)
@@ -553,10 +383,6 @@ def check_crane_pool(facts, opts, cluster):
 
 
 def _capacity_unread(facts, opts):
-    """What an unread `nodes` costs the capacity question, in the location's own
-    numbers -- which is what makes it something to act on rather than a note
-    that a read failed. Composed from facts and options only: the cluster is the
-    thing that was not read."""
     slots = facts.get("slots") or 1
     want = _engine_str(*engine_size(opts))
     return (f"the cluster's nodes could not be read, so nothing here knows "
@@ -566,31 +392,17 @@ def _capacity_unread(facts, opts):
 
 @reads("nodes", "capacity", _capacity_unread)
 def check_capacity(facts, opts, cluster):
-    """slots x engine size vs what the eligible nodes can hold.
-
-    Two checks, because they fail differently: a pod is not splittable across
-    nodes, so 'the cluster has 40Gi free' does not mean an 8Gi engine fits
-    anywhere.
-    """
+    """slots x engine size against the eligible nodes: one node must fit an
+    engine (a pod cannot split across nodes), and all of them must fit slots."""
     cpu, mem = engine_size(opts)
     slots = facts.get("slots") or 1
     want = _engine_str(cpu, mem)
     nodes = eligible_nodes(cluster["nodes"], opts)
     if not nodes:
         if separate_pools(opts):
-            # An engine pool aimed at its own nodes is *supposed* to sit at zero
-            # between runs -- that is the saving the split exists for. From
-            # `get nodes` alone an empty autoscaling pool and a pool that was
-            # never created look identical, and they are opposite verdicts, so
-            # this cannot be the FAIL it is on a single-pool cluster. Observed
-            # on a correctly-built GKE pool at min-nodes 0, where the old FAIL
-            # said "engines have nowhere to run" about a cluster that was right.
-            #
-            # The cluster-autoscaler does publish its node groups
-            # (kube-system/cluster-autoscaler-status), but names them by
-            # instance-group URL and carries none of their labels, so it cannot
-            # settle which group answers this selector either. Hence a WARN that
-            # says what to look at rather than a guess in either direction.
+            # A dedicated engine pool at min-nodes 0 has no nodes between runs,
+            # and `get nodes` cannot tell it from a pool never created (the
+            # autoscaler status names groups without their labels). So a WARN.
             return [Check("capacity: eligible nodes", WARN,
                           f"no node currently matches {_scope(opts)}. With a "
                           f"dedicated engine pool that is expected between runs "
@@ -622,11 +434,7 @@ def check_capacity(facts, opts, cluster):
                             f"{human_memory(biggest[1][1])}. An engine is one pod; "
                             f"it cannot be split across nodes"))
 
-    # Crane's own pod is spent out of the engine pool only when it is *on* it.
-    # With engines pointed at their own pool crane is somewhere else entirely,
-    # and charging the engine pool for it understates the capacity by a whole
-    # crane -- which on a small pool is the difference between a PASS and a FAIL
-    # that sends someone resizing nodes they did not need to touch.
+    # Crane's pod is spent out of the engine nodes only when it can land there.
     crane_here = not separate_pools(opts) or _crane_on(nodes, opts)
     crane_cpu, crane_mem = parse_cpu(CRANE_CPU_LIMIT), parse_memory(CRANE_MEM_LIMIT)
     spent_cpu, spent_mem = (crane_cpu, crane_mem) if crane_here else (0, 0)
@@ -652,81 +460,27 @@ def check_capacity(facts, opts, cluster):
 
 MB = 1024 ** 2
 
-# The engine sizing model, calibrated entirely from the one configuration
-# BlazeMeter documents: 500 threads on 2 CPU / 8Gi with a 4096MB heap.
-#
-#   HEAP_MB_PER_THREAD   4096 / 500  = 8.192
-#   CONTAINER_HEAP_RATIO 8Gi  / 4096 = 2.0
-#
-# Neither number is invented, and that is the whole reason they are these two
-# rather than a physically explicit heap + threads*stack + overhead model: the
-# stack and overhead terms of that model would have been guesses wearing the
-# costume of a measurement.
-#
-# Note what the documented 500 actually tracks. 500 * 8.192MB is exactly the
-# 4096MB *heap*, not the 8Gi container -- so the heap is the unit of capacity
-# and the container is derived from it, not the reverse. This check previously
-# compared the heap against a flat 75% of the container limit, which fired on
-# BlazeMeter's own default pairing (4096MB in 8Gi is exactly half) while saying
-# nothing about a 4096MB heap on a 50-thread location, where it is ten times
-# oversized. The threads are the signal; the ratio never was.
-#
-# What these constants are NOT: a measurement of what an engine needs.
-#
-# BlazeMeter's "2 CPU / 8Gi" is a system *requirement* in the dumbed-down sense
-# -- a floor chosen so that things work consistently across every customer and
-# every script, not a figure anyone optimised. The 2.0 ratio is round because it
-# is somebody's rule of thumb. So both constants encode a safety margin of
-# unknown size, and scaling them linearly carries that margin to every thread
-# count rather than removing it.
-#
-# That makes this model safe by construction and no better: a recommendation it
-# produces is exactly as conservative as BlazeMeter's own default, proportionally
-# -- which is the right *default* to ship, because it cannot be less safe than
-# what the vendor already tells people to run. It is also why the numbers here
-# cannot deliver an optimised cluster on their own. Getting below the vendor's
-# margin needs observed usage from a calibration loop, which does not exist (#125);
-# until it does, treat every value this produces as an upper bound that happens
-# to be defensible, not as a measured requirement.
-#
-# Anyone revising these should record what they measured, on what, right here.
+# The engine sizing model, from the one configuration BlazeMeter documents:
+# 500 threads on 2 CPU / 8Gi with a 4096MB heap. 4096/500 = 8.192MB of heap a
+# thread; 8Gi/4096MB = 2.0 container per heap. Both carry the vendor's safety
+# margin, so everything derived here is a defensible upper bound, not a
+# measured requirement. Record any revision's measurements here.
 HEAP_MB_PER_THREAD = 8.192
 CONTAINER_HEAP_RATIO = 2.0
 
-# The floor, and it is not an edge case -- it is very nearly the whole answer.
-#
-# Measured by bisecting a real engine's container limit until it broke, on a
-# Docker agent with a light script (small HTML, 1s think-time). Verdict is the
-# Taurus exit code, because nothing else distinguishes the cases:
+# The floor, and in practice nearly the whole answer. Bisecting a real engine's
+# limit (Docker agent, light script), verdict by Taurus exit code:
 #
 #   threads  limit   result
 #     300    1024MB  never starts -- JVM cannot initialise
-#     300    1536MB  starts, dies as the ramp completes   (1,139 samples)
-#     300    2048MB  starts, dies as the ramp completes   (2,435 samples)
 #     300    2560MB  starts, dies halfway                (31,130 samples)
 #     300    3072MB  runs the whole test                 (61,348 samples)
 #     300    4096MB  runs the whole test                 (61,139 samples)
-#      50    1536MB  starts, dies partway                 (1,926 samples)
 #      50    2560MB  starts, dies partway                 (6,019 samples)
 #
-# Two things fall out, and both contradict the model above.
-#
-# **The requirement is essentially fixed.** 50 threads and 300 threads have the
-# same floor, 2560 < floor <= 3072. Six times the load, no measurable change:
-# what costs the memory is the JVM, Taurus and JMeter existing at all, not the
-# threads. So `threads * HEAP_MB_PER_THREAD` has the wrong shape -- it is a
-# large constant with a small per-thread term, and this "floor" is doing nearly
-# all the work across the range anyone runs. Restructuring it needs more than
-# two thread counts on one script against one target; see #125.
-#
-# **Above the floor, more memory buys nothing.** 3072 and 4096 are
-# indistinguishable (61,348 vs 61,139 samples). It is a knee, not a slope, so
-# the right recommendation sits just above it and paying for headroom is waste.
-#
-# 3072 is the smallest measured pass. The previous 1536 was set from an engine
-# *consuming* 1220MB, and consumption is not a requirement -- 1536 fails at both
-# thread counts. That mistake has now been made three times in this file's
-# history; a reading of what an engine used is never a floor for what it needs.
+# 50 and 300 threads share the floor (2560 < floor <= 3072), so the need is
+# mostly fixed JVM/Taurus/JMeter cost, and above the knee more memory buys
+# nothing. A reading of what an engine *used* is never a floor for what it needs.
 MIN_HEAP_MB = 256
 MIN_CONTAINER_MB = 3072
 
@@ -737,36 +491,19 @@ def engine_heap_mb(threads):
 
 
 def engine_container_mb(heap_mb):
-    """The container the heap has to live in, in MB -- heap plus what the JVM
-    needs outside it (metaspace, thread stacks, code cache, direct buffers, and
-    the GC's own structures)."""
+    """The container the heap has to live in, in MB: heap plus what the JVM
+    needs outside it (metaspace, stacks, code cache, direct buffers, GC)."""
     return max(int(heap_mb * CONTAINER_HEAP_RATIO), MIN_CONTAINER_MB)
 
 
 def check_engine_heap(facts, opts, cluster):
-    """The location's JVM heap against the threads it must carry, and against
-    the container the bundle gives it.
+    """The location's JVM heap against the threads it carries, and against the
+    container the bundle gives it.
 
-    Two comparisons, because they fail differently and only one of them was
-    being made before:
-
-    * **heap vs threads.** The heap is what runs the load, and what it must
-      hold scales with `threadsPerEngine`. A heap short of the threads OOMKills
-      mid-run; a heap far over them reserves node capacity the JVM can never
-      address, which on a dedicated autoscaling engine pool is most of what the
-      pool costs. Both are invisible to a scheduler, so nothing else here sees
-      them. This is the comparison that was missing: 4096MB is right for 500
-      threads and ten times too much for 50, and a ratio against the container
-      cannot tell those apart.
-    * **heap vs container.** Whatever the heap is, the JVM needs room outside
-      it. A heap at or above the whole limit is an OOMKill reported as a test
-      that stopped rather than as a resource error.
-
-    The heap and the threads are *location* settings and the limit is a bundle
-    option, so this is where the two sources of truth for engine size meet.
-    Unknown heap is a WARN naming where to look, never a pass: the default is
-    4096MB on almost every location, and the one that has been retuned is
-    exactly the one somebody is generating a bundle for.
+    Heap vs threads: short OOMKills mid-run; far over reserves node capacity
+    the JVM cannot address. Heap vs container: at or above the limit is an
+    OOMKill reported as a stopped test. Heap and threads are location settings,
+    the limit a bundle option. An unknown heap is a WARN, never a pass.
     """
     xmx = facts.get("engine_xmx_mb")
     threads = facts.get("threads_per_engine")
@@ -774,10 +511,7 @@ def check_engine_heap(facts, opts, cluster):
     limit = format_memory(mem)
     model = _sizing_model(facts, cpu, mem)
     if model and not model["engine"]:
-        # Every branch below is about a JVM. This agent carries crane,
-        # group-gateway and service-mock and no taurus engine, so `the location
-        # has no engineXmx set` here is a WARN about a heap that does not exist
-        # (#165).
+        # No taurus engine on this agent, so no JVM heap to judge.
         return [Check("engine heap", PASS,
                       f"not judged -- this location runs {model['runs']} and "
                       f"carries no taurus engine, so there is no JVM here for a "
@@ -794,8 +528,6 @@ def check_engine_heap(facts, opts, cluster):
                       f"heap against the {limit} limit is unverified")]
 
     heap = xmx * MB
-    # Fits in its box at all? Independent of the threads, and the loudest way
-    # to be wrong, so it is asked first.
     if heap >= mem:
         return [Check("engine heap", FAIL,
                       f"engineXmx={xmx}MB against a {limit} container limit: the "
@@ -806,9 +538,7 @@ def check_engine_heap(facts, opts, cluster):
                       f"{engine_container_mb(xmx)}MB, or lower the heap")]
 
     if not threads:
-        # check_location has already FAILed on an unset threadsPerEngine; the
-        # sizing comparison simply cannot be made, and saying so beats implying
-        # the heap was checked against the load.
+        # check_location has FAILed on it; the load comparison cannot be made.
         return [Check("engine heap", WARN,
                       f"engineXmx={xmx}MB fits the {limit} limit, but "
                       f"threadsPerEngine is unset, so whether the heap matches "
@@ -817,17 +547,10 @@ def check_engine_heap(facts, opts, cluster):
     want_heap = engine_heap_mb(threads)
     want_container = engine_container_mb(xmx)
     pair = f"engineXmx={xmx}MB for {threads} threads"
-    # A factor either way before complaining: these constants come from a single
-    # vendor data point, so a verdict on a 10% difference would be false
-    # precision.
+    # A 1.5x band either way: one vendor data point does not support finer.
     if xmx < want_heap / 1.5:
-        # WARN, not FAIL, and the wording says why: this rests on
-        # HEAP_MB_PER_THREAD, whose *shape* the bisection refuted -- 50 and 300
-        # threads measured the same requirement, so per-thread scaling is not
-        # how this behaves in the range we have data for. Above that range it
-        # may well be right, but "may well be" does not earn a non-zero exit.
-        # The heap-exceeds-the-limit FAIL above is untouched: that one is
-        # arithmetic, not a model.
+        # WARN, not FAIL: the per-thread model measured flat between 50 and 300
+        # threads, so this rests on a shape the data does not confirm.
         return [Check("engine heap", WARN,
                       f"{pair}: that load needs about {want_heap}MB of heap "
                       f"({HEAP_MB_PER_THREAD}MB a thread, from BlazeMeter's "
@@ -859,16 +582,13 @@ def check_engine_heap(facts, opts, cluster):
 
 
 def _crane_on(engine_nodes, opts):
-    """Whether the crane pod could also land on the engine pool. Asked of the
-    already-filtered engine nodes, so it answers about the overlap rather than
-    about the cluster: two pools configured separately may still both accept
-    crane, and then its share really is spent out of this set."""
+    """Could crane also land on these (engine) nodes? Two separately configured
+    pools may still both accept crane."""
     return bool(eligible_nodes(engine_nodes, opts, crane_scheduling(opts)))
 
 
 def _pod_ceiling(node):
-    """`allocatable.pods`, the kubelet's maxPods as the node reports it. Absent
-    on a node whose status was trimmed, which is not zero -- None says so."""
+    """`allocatable.pods`, or None where a trimmed status omits it."""
     raw = node.get("status", {}).get("allocatable", {}).get("pods")
     try:
         return int(raw)
@@ -881,36 +601,17 @@ def _pod_ceiling(node):
        "the cluster's nodes could not be read, so nothing here knows how many "
        "engines would share one")
 def check_engine_packing(facts, opts, cluster):
-    """How many engines the scheduler will put on one node, versus how many
+    """How many engines the scheduler would put on one node, versus how many
     can actually run there.
 
-    Both the scheduler and the cluster autoscaler place pods by *requests*, so
-    a node with room for one engine's limits is offered as many as its requests
-    divide into it. What sets those requests is the **location's** overrideCPU
-    and overrideMemory, not this bundle and not anything in these manifests --
-    confirmed live, where a location at 1 CPU / 4096MB against a bundle asking
-    2 CPU / 8Gi produced requests {1, 4Gi} and limits {2, 8Gi} on the same pod.
-    Unset, they default to 250m/256Mi, which is how nearly every location runs
-    and why engines pack.
-
-    So the fix this check points at is the location's overrides; the engine
-    pool's maxPods is the backstop for when they are not set. `allocatable.pods`
-    is how the node reports that ceiling.
-
-    WARN, never FAIL: the engines do start, and a small test may never notice.
-    What it costs is the validity of the numbers -- engines throttling against
-    each other report the load generator's latency, not the system's.
-
-    The `nodes` it reads are declared above, so an unread section is answered
-    before this body runs and `[]` here is only ever "we looked and there are
-    none".
-    """
+    Scheduler and autoscaler place by requests, which come from the location's
+    overrideCPU/overrideMemory (250m/256Mi when unset), not from these
+    manifests. WARN, never FAIL: engines start, but throttle against each other
+    and report the load generator's latency."""
     nodes = eligible_nodes(cluster["nodes"], opts)
     if not nodes:
-        return []            # check_capacity already FAILed on the empty set
+        return []
     cpu, mem = engine_size(opts)
-    # The requests the engine will really carry, from the location -- not the
-    # default, which is only what an unset location produces.
     req_cpu_s, req_mem_s = engine_requests(facts)
     req_cpu, req_mem = parse_cpu(req_cpu_s), parse_memory(req_mem_s)
     overridden = bool(facts.get("override_cpu") or facts.get("override_memory"))
@@ -918,24 +619,14 @@ def check_engine_packing(facts, opts, cluster):
     worst = None
     for n in nodes:
         alloc_cpu, alloc_mem = _allocatable(n)
-        # What the scheduler will accept, by the requests the pod carries.
         by_req = min(alloc_cpu // req_cpu, alloc_mem // req_mem)
-        # ...capped by the node's own pod ceiling, less the DaemonSets that land
-        # on every node. That subtraction is an assumption, not a measurement:
-        # `allocatable.pods` counts all pods and nothing here collects
-        # DaemonSets, so the number is named in the verdict for the reader to
-        # correct rather than buried. TYPICAL_SYSTEM_PODS is the same constant
-        # the generated recipe sizes maxPods from, so a pool built to that
-        # recipe is judged by the arithmetic that produced it. It counts what
-        # actually lands on a tainted node, which is not the DaemonSet count --
-        # see the constant.
+        # Capped by maxPods less the pods every node runs -- an assumption,
+        # named in the verdict; TYPICAL_SYSTEM_PODS is what the node-pool
+        # recipe sizes maxPods from.
         ceiling = _pod_ceiling(n)
         if ceiling is not None:
             by_req = min(by_req, max(ceiling - TYPICAL_SYSTEM_PODS, 1))
-        # What can actually run: the limits the engine was configured with,
-        # but never counted above what the pool was *designed* to hold. A node
-        # sized for 2 engines is not over-packed by taking 2, and judging it
-        # against its raw capacity would WARN on a pool built exactly to spec.
+        # Never counted above the pool's design, or a pool built to spec warns.
         runs = min(alloc_cpu // cpu, alloc_mem // mem, engines_per_node(opts))
         if by_req > max(runs, 1) and (worst is None or by_req > worst[1]):
             worst = (n["metadata"]["name"], by_req, runs, ceiling)
@@ -987,8 +678,7 @@ def check_engine_packing(facts, opts, cluster):
        f"engine is unverified")
 def check_disk(facts, opts, cluster):
     """Ephemeral storage per eligible node against the documented engine
-    footprint. WARN, not FAIL: a short run may never fill it -- but an engine
-    that does gets evicted mid-test, which reads as a random failure."""
+    footprint. WARN: an engine that fills it is evicted mid-test."""
     slots = facts.get("slots") or 1
     nodes = eligible_nodes(cluster["nodes"], opts)
     if not nodes:
@@ -1026,22 +716,13 @@ _LR_TYPES = ("Container", "Pod")
        "the namespace's LimitRanges could not be read, so whether one would "
        "reject the engine pod at admission is unverified")
 def check_limitrange(facts, opts, cluster):
-    """An existing LimitRange can reject the engine pod outright -- max below
-    its limits, min above the requests crane stamps, or a maxLimitRequestRatio
-    tighter than the gap between the two -- and can rewrite the resources of any
-    pod in the namespace that declares none. Neither shows up in the manifests.
-
-    The declaration above means `limitranges` here is a list that was read:
-    empty is "the namespace caps nothing", which is this check's WARN, and never
-    "we were refused it", which is the seam's."""
+    """An existing LimitRange can reject the engine pod at admission -- max
+    below its limits, min above the requests crane stamps, or a
+    maxLimitRequestRatio tighter than their gap -- and its defaults reach every
+    pod that declares no resources. None of it shows in the manifests."""
     limitranges = cluster["limitranges"]
     cpu, mem = engine_size(opts)
     if not limitranges:
-        # Nothing caps the namespace, which is a note rather than a problem --
-        # and separately the engines schedule small, which nothing here can
-        # change. The generator used to offer a LimitRange for this and no
-        # longer does: it could not fix the requests, and the defaults it did
-        # apply landed on crane's helper pods.
         return [Check("limitrange", WARN,
                       f"no LimitRange in the namespace, so nothing caps what it "
                       f"may ask for. Separately, engine pods request "
@@ -1049,7 +730,7 @@ def check_limitrange(facts, opts, cluster):
                       f"rather than {_engine_str(cpu, mem)} because crane sets "
                       f"that explicitly -- a LimitRange cannot override it")]
 
-    # (field, parse, the engine's own value for it, how to show it)
+    # (field, parse, the engine's limit, how to show it, crane's stamped request)
     dims = (("cpu", parse_cpu, cpu, format_cpu, parse_cpu(ENGINE_STAMPED_REQUEST_CPU)),
             ("memory", parse_memory, mem, format_memory,
              parse_memory(ENGINE_STAMPED_REQUEST_MEM)))
@@ -1064,14 +745,10 @@ def check_limitrange(facts, opts, cluster):
                 mx = (item.get("max") or {}).get(key)
                 if mx and parse(mx) < limit:
                     blocking.append(f"max {key} {mx} < engine {show(limit)}")
-                # min rejects from below just as max does from above, measured
-                # against the requests crane stamps, not the engine's limits.
                 mn = (item.get("min") or {}).get(key)
                 if mn and parse(mn) > stamped:
                     blocking.append(f"min {key} {mn} > the {show(stamped)} "
                                     f"crane requests")
-                # An engine's own limit/request ratio is large precisely because
-                # crane requests so little of what it limits.
                 ratio = (item.get("maxLimitRequestRatio") or {}).get(key)
                 if ratio and limit / stamped > float(ratio):
                     blocking.append(f"maxLimitRequestRatio {key} {ratio} < the "
@@ -1101,8 +778,8 @@ def check_limitrange(facts, opts, cluster):
     return checks
 
 
-# Quota keys we can compare against an engine's claim. 'cpu'/'memory' are the
-# API's aliases for the requests.* forms.
+# Quota keys comparable with an engine's claim; 'cpu'/'memory' are the API's
+# aliases for requests.*.
 _QUOTA_CPU = ("requests.cpu", "limits.cpu", "cpu")
 _QUOTA_MEM = ("requests.memory", "limits.memory", "memory")
 
@@ -1114,12 +791,7 @@ def _quota_unread(facts, opts):
 
 
 @reads("quotas", "resourcequota", _quota_unread)
-# The second read, and the reason it is declared without a verdict of its own:
-# the last branch below distinguishes `limitranges == []` (read, the namespace
-# has none) from null, and check_limitrange already reports the null. Declaring
-# it says the section is read here, which is what stops a caller supplying
-# quotas alone and getting an answer composed against a LimitRange list nobody
-# looked at.
+# Read for its [] vs None: check_limitrange owns the unread verdict.
 @reads("limitranges")
 def check_resourcequota(facts, opts, cluster):
     """hard - used, per resource, against slots x engine (+1 pod for crane)."""
@@ -1162,9 +834,8 @@ def check_resourcequota(facts, opts, cluster):
                                 f"{slots} ({format_cpu(cpu * slots)} / "
                                 f"{format_memory(mem * slots)}, {slots + 1} pods)"))
     if constrains and limitranges == []:      # read them, there are none
-        # With a cpu/memory quota in force the API server rejects any pod that
-        # does not declare that resource -- and crane sets no requests on the
-        # engines it spawns, so something has to supply them.
+        # A cpu/memory quota rejects pods that declare no requests, and crane
+        # sets none on the job pods it spawns.
         checks.append(Check("quota defaults", WARN,
                             f"ResourceQuota '{constrains}' constrains "
                             f"cpu/memory, so every pod must declare requests and "
@@ -1188,26 +859,11 @@ SCC_UID_RANGE = "openshift.io/sa.scc.uid-range"
 def check_admission(facts, opts, cluster):
     """Will the namespace's admission posture accept the *engine* pods?
 
-    Our crane pod satisfies restricted PSA (runAsNonRoot, no privilege
-    escalation, drop ALL, RuntimeDefault seccomp). The engines crane spawns are
-    a different matter, and the one worth checking: their security context comes
-    from KUBERNETES_SECURITY_CONTEXT_CAP_JSON and INHERIT_RUNNING_USER_AND_GROUP
-    in the ConfigMap, not from anything in the Deployment, so a bundle can look
-    entirely correct and still have crane create a privileged pod that
-    admission refuses. That refusal lands after the agent is online and the
-    location reads ready, which is why it is worth a preflight at all.
-
-    Those envs are on by default on every platform now, so what this reads is
-    the option, not the platform.
+    Crane's own pod satisfies restricted PSA. The engines' security context
+    comes from KUBERNETES_SECURITY_CONTEXT_CAP_JSON / INHERIT_RUNNING_USER_AND_GROUP
+    (the restrict_engines option), and a refusal lands after the agent reads
+    online. `{}` here is a namespace that does not exist yet.
     """
-    # Two different facts, and only one of them is answered by creating the
-    # namespace. `{}` is a read that came back empty -- the live path's `get ns`
-    # answered NotFound, which is the ordinary preflight case, and the only one
-    # that reaches this body. `None` is nobody having looked -- a refused `get
-    # ns` on the live path, or a section an evidence collector was refused --
-    # and telling its reader to create a namespace they may well already have
-    # is advice about a problem they do not have. That case is answered by the
-    # declaration above, before this runs.
     namespace_obj = cluster["namespace"]
     platform = opts.get("platform") or "openshift"
     meta = namespace_obj.get("metadata") or {}
@@ -1227,10 +883,6 @@ def check_admission(facts, opts, cluster):
                       f"has nothing to inherit and engine pods may be rejected")]
     enforce = (meta.get("labels") or {}).get(PSA_ENFORCE)
     if enforce == "restricted":
-        # This was a flat FAIL while the engine security envs were emitted only
-        # for platform=openshift. They are on by default everywhere now, so the
-        # verdict follows the option rather than the platform -- and turning
-        # them off is exactly what puts this namespace back where it was.
         if opts.get("restrict_engines", True):
             return [Check("admission (PodSecurity)", PASS,
                           f"{PSA_ENFORCE}=restricted; engines drop all "
@@ -1267,30 +919,15 @@ def _account_unverified(facts, opts):
 @reads("serviceaccounts", "service account", _account_unverified,
        when=_brings_its_own_account)
 def check_service_account(facts, opts, cluster):
-    """Is the ServiceAccount the bundle references actually there?
-
-    Only asked when the bundle does not create one: with
-    `service_account_create` off, the Deployment and both binding subjects name
-    an account somebody else owns, and if that name is wrong nothing errors --
-    the Deployment applies, the ReplicaSet reports `serviceaccounts "x" not
-    found` in an event, and the agent simply never appears. A preflight is the
-    only place that is visible before someone waits on it.
-
-    This is one of the two checks CLAUDE.md notes branch on falsiness rather
-    than on null, and it still does, below -- but the two halves are now split
-    where they belong. Null is the declaration's, like everywhere else. Empty
-    stays this check's own judgement, and is the one section here where an empty
-    read means the same thing as no read at all: see below.
-    """
+    """Does the ServiceAccount the bundle references exist? Asked only when the
+    bundle does not create one: a wrong name fails silently, as a ReplicaSet
+    event and an agent that never appears."""
     if opts.get("service_account_create", True):
-        return []                     # we create it; nothing to find
+        return []
     name = service_account(opts)
     accounts = cluster["serviceaccounts"]
-    # Every namespace that exists has at least `default`, so an empty list means
-    # the namespace is missing or the read was filtered rather than the
-    # namespace being genuinely accountless -- which is not a fact any cluster
-    # produces. So this is the one place [] and null earn the same sentence, and
-    # it is composed once for both rather than written out twice.
+    # Every existing namespace has `default`, so an empty read means missing or
+    # filtered -- the same "unverified" as an unread one.
     if not accounts:
         return [Check("service account", WARN, _account_unverified(facts, opts))]
     if name in {(sa.get("metadata") or {}).get("name") for sa in accounts}:
@@ -1307,24 +944,16 @@ def check_service_account(facts, opts, cluster):
 
 # -- service virtualization ---------------------------------------------------
 
-# Crane writes `ingressClassName: nginx` on the Ingress it creates per virtual
-# service and BlazeMeter exposes no env to change it, so the name is ours to
-# check, not to configure. It matches the `nginx` sv_ingress value only by
-# coincidence -- keep the two apart so renaming either does not silently change
-# which branch below runs.
+# Crane hardcodes `ingressClassName: nginx` on each virtual service's Ingress;
+# BlazeMeter exposes no env for it. Equal to the `nginx` sv_ingress value only
+# by coincidence, so kept separate.
 CRANE_INGRESS_CLASS = "nginx"
 OPENSHIFT_ROUTE_CONTROLLER = "openshift.io/ingress-to-route"
 
 
 def _claims_an_ingress_class(opts):
-    """Whether this bundle publishes an Ingress for something to claim at all.
-
-    The three branches the body takes before it reaches the cluster -- no SV, a
-    value generate() would have rejected, a backend that routes through its own
-    CRD -- are all answers about the options, and none of them is improved by
-    knowing whether IngressClasses could be read. So the declaration is gated on
-    the one case that does read them.
-    """
+    """Does this bundle publish an Ingress for a class to claim? Gates the
+    IngressClass read: the other branches answer from the options alone."""
     backend = SV_INGRESS_BACKENDS.get(opts.get("sv_ingress"))
     return bool(backend and backend.via_ingress_class)
 
@@ -1336,39 +965,26 @@ def _claims_an_ingress_class(opts):
 def check_ingress_class(facts, opts, cluster):
     """Will anything claim the Ingress crane creates for a virtual service?
 
-    With no IngressClass named `nginx` no controller adopts it, no route is
-    created, and the endpoint BlazeMeter publishes returns 503 -- while the
-    virtual service itself is healthy and serving in-cluster. Nothing in the
-    deploy fails, so a preflight is the only place this is visible. On
-    OpenShift the only shipped class is `openshift-default`, which makes that
-    the default outcome there rather than an unlucky one.
+    With no IngressClass named `nginx` the published endpoint returns 503 while
+    the virtual service is healthy in-cluster, and nothing in the deploy fails.
+    OpenShift ships only `openshift-default`.
     """
     ingress = opts.get("sv_ingress")
     if not ingress or ingress == SV_INGRESS_NONE:
-        # Not an SV deployment -- either unconfigured, or configured for
-        # performance alone -- so there is no Ingress to preflight. The two are
-        # still different states everywhere it matters; here they genuinely
-        # share an answer, because neither publishes an object.
         return []
     backend = SV_INGRESS_BACKENDS.get(ingress)
     if backend is None:
-        # generate() rejects anything outside SV_INGRESS_TYPES, so this only
-        # shows up for a hand-written profile. Say so rather than checking a
-        # class name that such a deployment may never ask for.
+        # Only a hand-written profile gets here; generate() rejects it.
         known = "', '".join(SV_INGRESS_BACKENDS)
         return [Check("sv ingress class", WARN,
                       f"unrecognised sv_ingress={ingress}; expected one of "
                       f"'{known}', so the ingress path is unverified")]
     if not backend.via_ingress_class:
-        # Verified on Istio 1.30 and Contour v1.33: neither registers an
-        # IngressClass, so treating "none found" as a failure here would fail
-        # every correctly-installed cluster of both.
+        # Istio and Contour register no IngressClass (verified on 1.30 / v1.33).
         return [Check("sv ingress class", PASS,
                       f"sv_ingress={ingress} routes through the "
                       f"{backend.creates} crane creates, not an IngressClass")]
 
-    # An API server that does not serve the kind is the declaration's, above;
-    # what reaches here is a list, and an empty one is the FAIL below.
     by_name = {c.get("metadata", {}).get("name"): c
                for c in cluster["ingressclasses"]}
     mine = by_name.get(CRANE_INGRESS_CLASS)
@@ -1387,17 +1003,15 @@ def check_ingress_class(facts, opts, cluster):
     controller = (mine.get("spec") or {}).get("controller") or "?"
     detail = (f"IngressClass '{CRANE_INGRESS_CLASS}' exists (controller "
               f"{controller}) to claim the Ingress crane creates")
-    # Only under CLUSTERIP. Crane's Ingress backend writes a constant 8080 and
-    # this controller resolves it against spec.ports[].port -- which is 80 under
-    # CLUSTERIP (mismatch, no Route) and 8080 under NODEPORT (a match, so the
-    # defect does not arise). Saying it unconditionally would tell a NODEPORT
-    # customer their endpoint is broken when generate() just accepted it.
+    # Crane's Ingress backend writes port 8080; this controller resolves it
+    # against the Service's port, which is 80 under CLUSTERIP (no Route) and
+    # 8080 under NODEPORT (fine).
     if (controller == OPENSHIFT_ROUTE_CONTROLLER
             and opts.get("service_type", "CLUSTERIP") == "CLUSTERIP"):
-        detail += (f"; note that this controller resolves the backend port "
-                   f"against the Service's port 80 and crane writes 8080, so it "
-                   f"reports IncompleteIngressToRouteRules and creates no Route "
-                   f"(upstream defect -- see README)")
+        detail += ("; note that this controller resolves the backend port "
+                   "against the Service's port 80 and crane writes 8080, so it "
+                   "reports IncompleteIngressToRouteRules and creates no Route "
+                   "(upstream defect -- see README)")
     return [Check("sv ingress class", PASS, detail)]
 
 
@@ -1412,22 +1026,13 @@ def egress_targets(opts):
     return targets
 
 
-# Declared for presence, without an unread verdict of its own -- the other
-# check CLAUDE.md notes branches on falsiness, and the branch stays here because
-# probes is the one section where null and empty are genuinely the same answer.
-# egress_targets() is never empty, so there is no "we probed and there was
-# nothing to probe": {} is what an evidence file carries (a probe needs a pod in
-# the namespace, which a collector must not create) and None is a caller that
-# did not probe. Both are "not probed", and one sentence says so.
+# No unread verdict: {} (an evidence file cannot probe) and None (not probed)
+# are the same answer, since egress_targets() is never empty.
 @reads("probes")
 def check_egress(facts, opts, cluster):
-    """Pure verdict over {target: curl returncode}; None = we could not probe."""
+    """Pure verdict over {target: curl returncode, or None if unknown}."""
     probes = cluster["probes"]
     if not probes:
-        # True of both ways in: no crane pod and no throwaway pod either, or an
-        # evidence file, which cannot carry a probe -- it takes a pod in the
-        # namespace to find out, and that is the one thing a collector script
-        # must not create.
         return [Check("egress", WARN,
                       "egress was not probed from inside the cluster, so whether "
                       "the namespace can reach BlazeMeter is unverified -- the "
@@ -1453,22 +1058,14 @@ def check_egress(facts, opts, cluster):
 # -- impure layer -------------------------------------------------------------
 
 def _items(document):
-    """The `.items` of a kubectl List document, or None when the command failed.
-
-    "served the kind, has none" and "could not ask" are different answers and
-    the checks report them differently -- [] is a FAIL where we know nothing
-    will claim crane's Ingress, None is a WARN because we did not look.
-    `.get("items", [])` would collapse both to [], turning a namespace we were
-    denied into a hard failure with a non-zero exit. kget reports a failed
-    command as {}, which is the falsy case here.
-    """
+    """A kubectl List's `.items`, or None when the command failed ({} from kget).
+    Never `.get("items", [])`, which would turn a denied read into a FAIL."""
     return document.get("items", []) if document else None
 
 
 def _split_by_kind(document):
     """One `get limitrange,resourcequota,serviceaccount` -> the three lists, or
-    three Nones when the whole get failed. Nothing partial: the kinds come back
-    from a single command, so it succeeded for all of them or none."""
+    three Nones: one command succeeds for all of them or none."""
     items = _items(document)
     if items is None:
         return None, None, None
@@ -1479,42 +1076,31 @@ def _split_by_kind(document):
 
 
 def gather_cluster(cli, namespace):
-    """Everything the checks read, in as few API round trips as it takes.
-    LimitRanges, ResourceQuotas and ServiceAccounts are all namespaced, so one
-    `get` covers them; splitting the result by kind is cheaper than three."""
-    limitranges, quotas, accounts = _split_by_kind(livetest.kget(
+    """Everything the checks read, in as few API round trips as it takes."""
+    limitranges, quotas, accounts = _split_by_kind(kube.kget(
         cli, namespace, "limitrange,resourcequota,serviceaccount"))
-    # IngressClass is cluster-scoped like nodes, but kept its own get: kget
-    # reports a failed command as {}, so folding the kinds into one call would
-    # lose the nodes too on a cluster whose API server does not serve it.
+    # IngressClass has its own get: folded in with nodes, an API server that
+    # does not serve it would fail the nodes read too.
     return {
-        "nodes": _items(livetest.kget(cli, None, "nodes")),
-        "ingressclasses": _items(livetest.kget(cli, None, "ingressclass")),
+        "nodes": _items(kube.kget(cli, None, "nodes")),
+        "ingressclasses": _items(kube.kget(cli, None, "ingressclass")),
         "limitranges": limitranges,
         "quotas": quotas,
         "serviceaccounts": accounts,
-        # Named, so {} alone cannot tell "not created yet" from "not allowed
-        # to look": kget_named answers None for the second, which the
-        # admission check's declaration reports as unread.
-        "namespace": livetest.kget_named(cli, None, "ns", namespace),
+        # kget_named: {} for "not created yet", None for "not allowed to look".
+        "namespace": kube.kget_named(cli, None, "ns", namespace),
     }
 
 
 # -- evidence file ------------------------------------------------------------
 
-# The file's own vocabulary, under the names every caller of this module already
-# reads them by. What they say is stated with the rest of the document's shape,
-# in `evidence`, so the collector and this reader cannot drift apart.
-
-# What an import produces: cluster data in gather_cluster()'s shape, the probes
-# it cannot supply, and the verdicts about the file itself.
+# An import: cluster data in gather_cluster()'s shape, the probes (none), and
+# the verdicts about the file itself.
 Evidence = collections.namedtuple("Evidence", "cluster probes checks")
 
 
 def load_evidence(path):
-    """Read an evidence file. ValueError says what to do about a bad one --
-    this is a file a customer mailed back, so every way it can be wrong is a
-    message rather than a traceback."""
+    """Read an evidence file; ValueError, with what to do, for a bad one."""
     try:
         with open(path) as fh:
             return json.load(fh)
@@ -1527,29 +1113,16 @@ def load_evidence(path):
         raise ValueError(f"'{path}' is not valid JSON ({e}). It should be the "
                          f"unedited output of {evidence_mod.SCRIPT}")
     except OSError as e:
-        # A directory, an unreadable file, a dead symlink. Named rather than
-        # raised: every caller of this turns a ValueError into a sentence
-        # somebody can act on, and an IsADirectoryError traceback out of a
-        # server is the one shape none of them expected.
+        # A directory, an unreadable file, a dead symlink.
         raise ValueError(f"'{path}' could not be read ({e}). It should be the "
                          f"file {evidence_mod.SCRIPT} wrote on the customer's "
                          f"machine")
 
 
 def cluster_from_evidence(doc, namespace=None):
-    """Normalise an evidence file into what gather_cluster() returns.
-
-    The cluster-side twin of `facts.manual()`, and the same rule applies: the
-    result is exactly the shape the live path produces, so no check can tell
-    which way the data arrived. Everything the file carries beyond that --
-    when it was collected, which namespace for, what the script could not read
-    -- comes back as Checks instead, because it qualifies the verdicts without
-    being one of them.
-
-    The `raw` sections are whole kubectl List documents, or null where the
-    command failed; null stays null through here (see _items) so that "we did
-    not look" cannot arrive looking like "there are none".
-    """
+    """Normalise an evidence file into what gather_cluster() returns, so no
+    check can tell which way the data arrived. What the file says about itself
+    comes back as Checks. Null sections stay null."""
     _validate_evidence(doc)
     raw = doc.get(evidence_mod.RAW) or {}
     limitranges, quotas, accounts = _split_by_kind(
@@ -1560,22 +1133,17 @@ def cluster_from_evidence(doc, namespace=None):
         "limitranges": limitranges,
         "quotas": quotas,
         "serviceaccounts": accounts,
-        # Null stays null here too, and this section is the one where it costs
-        # something to lose: `{}` is what the live path produces for a namespace
-        # that is not there yet, and check_admission's answer to that is "create
-        # it". A collector that was refused `get ns` said nothing of the kind.
+        # Null, not {}: {} would tell check_admission the namespace is missing.
         "namespace": _section(raw, evidence_mod.NAMESPACE),
     }
-    # Egress needs something inside the namespace to curl from, so an evidence
-    # file cannot carry it. {} is check_egress's "not probed" (WARN), which is
-    # the honest answer -- never a PASS nobody stood behind.
+    # Probing needs a pod in the namespace, which a collector must not create;
+    # {} is check_egress's "not probed".
     return Evidence(cluster, {}, _evidence_checks(doc, namespace))
 
 
 def _section(raw, key):
-    """One `raw` section: the kubectl document as collected, or None. Files come
-    back by mail and are sometimes trimmed on the way, so anything else is named
-    here rather than reaching a check as an AttributeError."""
+    """One `raw` section as collected, or None; anything else is a ValueError
+    (files come back by mail, sometimes trimmed)."""
     document = raw.get(key)
     if document is not None and not isinstance(document, dict):
         raise ValueError(f"cluster evidence: raw.{key} should be the kubectl "
@@ -1604,19 +1172,14 @@ def _validate_evidence(doc):
 
 
 def _evidence_checks(doc, namespace):
-    """One verdict about the file itself: where these answers came from, how
-    stale they are, whether they describe the namespace being preflighted, and
-    anything the script was refused. Every verdict after it is only as good as
-    this one, which is why it is a Check and not a printed aside."""
+    """One verdict about the file: where and when it was read, whether it
+    describes this namespace, and what the collector was refused."""
     collected = doc.get(evidence_mod.COLLECTED_AT) or "an unrecorded time"
     doc_ns = doc.get(evidence_mod.NAMESPACE)
     parts = [f"cluster read by {evidence_mod.SCRIPT} at {collected} for namespace "
              f"{doc_ns or 'an unnamed namespace'}, not from a live cluster"]
     if describes_elsewhere(doc_ns, namespace):
-        # Most of what follows is per-namespace -- LimitRanges, quotas,
-        # ServiceAccounts, the PSA labels -- so evidence from another namespace
-        # says little about this one. It still describes the same nodes, so this
-        # reports rather than refuses.
+        # Reported, not refused: the nodes are the same cluster's.
         parts.append(f"but this preflight is for '{namespace}', so the "
                      f"namespaced verdicts below describe '{doc_ns}' "
                      f"instead: re-collect with -n {namespace}")
@@ -1627,10 +1190,8 @@ def _evidence_checks(doc, namespace):
 
 
 def _unread(notes):
-    """The script's own errors, which are what explains every null below. It
-    writes "<section>: <error>", and on a cluster nobody can reach that error is
-    the same six times over -- so the sections are listed and the distinct
-    reasons given once."""
+    """The collector's "<section>: <error>" notes: sections listed, distinct
+    reasons given once (an unreachable cluster repeats one reason)."""
     reasons = []
     for note in notes:
         reason = note.partition(": ")[2].strip()
@@ -1642,8 +1203,7 @@ def _unread(notes):
 
 
 def unreadable_sections(notes):
-    """Which sections the collector recorded as unreadable, in the order it
-    wrote them. Names only -- the reasons are _unread's half."""
+    """Sections the collector recorded as unreadable, in the order written."""
     sections = []
     for note in notes or []:
         section = str(note).partition(": ")[0]
@@ -1653,34 +1213,14 @@ def unreadable_sections(notes):
 
 
 def describes_elsewhere(doc_ns, namespace):
-    """Does this file describe a different namespace than the one being
-    preflighted?
-
-    A file that names none is not a mismatch: there is nothing to mismatch
-    with, and a warning nobody can act on is one more line between the reader
-    and the ones they can. Nor is a caller that named no namespace to compare
-    against -- which is *not* the same as agreeing, and is why the summary
-    keeps `namespace` beside this: false here means "nothing to report", and
-    what the file recorded is still said in full.
-    """
+    """Does the file describe another namespace than the one preflighted? False
+    where either side names none: nothing to compare, not agreement."""
     return bool(namespace and doc_ns and namespace != doc_ns)
 
 
 def evidence_summary(doc, namespace=None):
-    """What the file says about itself, as data rather than as a sentence.
-
-    The same facts _evidence_checks() states in prose, and it stays the one
-    that judges them -- this is for a caller that renders a header instead of a
-    verdict list. The web UI is that caller: three facts inside one verdict's
-    prose, ten verdicts down a panel, is how a thin file passes for a clean
-    bill of health (#53), and a browser re-deriving them by parsing that
-    sentence would be a second opinion about the same file.
-
-    `namespace` is the one being preflighted, and only the mismatch is about
-    it. Comparing the two served fields instead was that second opinion in its
-    shortest form -- the same comparison, one language away from the verdict
-    that already makes it.
-    """
+    """What the file says about itself, as data for a header (the web UI); the
+    same facts _evidence_checks() judges in prose."""
     doc = doc if isinstance(doc, dict) else {}
     doc_ns = doc.get(evidence_mod.NAMESPACE) or None
     return {"collected_at": doc.get(evidence_mod.COLLECTED_AT) or None,
@@ -1690,22 +1230,13 @@ def evidence_summary(doc, namespace=None):
 
 
 def _ca_configured(opts):
-    """Whether this bundle configures CA trust at all -- in any mode.
-
-    Read off `CA_MODES` rather than listed, which is what left `ca_bundle_slot`
-    out of it (#250): a slot bundle whose PEM had been pasted in probed without
-    `--cacert`, and an intercepting proxy's certificate was then rejected --
-    a FAIL saying BlazeMeter is unreachable, over a namespace that reaches it.
-
-    `.get`, and deliberately not `_ca_cfg`: these options may be a partial dict,
-    and a doctor must report rather than raise over a pair `generate` refuses.
-    """
+    """Does the bundle configure CA trust in any mode? `.get` over CA_MODES,
+    not _ca_cfg: a doctor reports rather than raises over a refused pair."""
     return any(opts.get(k) for k in CA_MODES)
 
 
 def _rc_lines(output, targets):
-    """Parse the `<url> rc=<n>` lines one shell emitted for all the targets.
-    A target with no line never ran -> None (unknown), never a FAIL."""
+    """Parse `<url> rc=<n>` lines; a target with no line is None (unknown)."""
     rcs = {t: None for t in targets}
     for line in output.splitlines():
         url, _, rc = line.strip().partition(" rc=")
@@ -1715,16 +1246,11 @@ def _rc_lines(output, targets):
 
 
 def _curl_script(targets, cacert=False, settle=0):
-    """One shell running every probe, so a doctor costs one exec (or one pod)
-    rather than one per target -- each is a process spawn plus the API round
-    trips to resolve and attach to a pod.
+    """One shell running every probe, so a doctor costs one exec or one pod.
 
-    Every probe is retried once: a freshly created pod can lose its first DNS
-    lookup (curl rc=6) before CoreDNS answers for it, and a doctor that reports
-    a FAIL it cannot reproduce is worse than one that says nothing. `settle`
-    delays the first probe so `kubectl run -i` has finished attaching -- output
-    written before that is simply dropped.
-    """
+    Each probe is retried once: a fresh pod can lose its first DNS lookup
+    (rc=6) before CoreDNS answers. `settle` delays the first probe until
+    `kubectl run -i` has attached; output before that is dropped."""
     ca = ' --cacert "$REQUESTS_CA_BUNDLE"' if cacert else ""
     probe = (f"curl -s -o /dev/null --max-time 20{ca} %s || "
              f"{{ sleep 2; curl -s -o /dev/null --max-time 20{ca} %s; }}")
@@ -1735,15 +1261,13 @@ def _curl_script(targets, cacert=False, settle=0):
 def probe_egress(cli, namespace, opts):
     """curl each target from inside the cluster -> {target: returncode}.
 
-    Preferably from the crane pod: it is the only place the profile's proxy env
-    and CA bundle are actually in force, which is what the customer's egress
-    depends on. A one-shot pod is the fallback, and cannot verify a corporate
-    CA at all -- that reports None (WARN), never a FAIL we cannot stand behind.
-    """
+    From the crane pod where there is one: only there are the profile's proxy
+    and CA in force. A throwaway pod cannot verify a corporate CA, so with one
+    configured the answer is None (WARN), never a FAIL."""
     targets = egress_targets(opts)
-    if livetest.kget(cli, namespace, "deploy", "crane"):
-        out = livetest._crane_exec(cli, namespace,
-                                   _curl_script(targets, _ca_configured(opts)))
+    if kube.kget(cli, namespace, "deploy", "crane"):
+        out = kube.crane_exec(cli, namespace,
+                              _curl_script(targets, _ca_configured(opts)))
         return _rc_lines(out, targets)
     if _ca_configured(opts):
         return {t: None for t in targets}
@@ -1751,28 +1275,21 @@ def probe_egress(cli, namespace, opts):
 
 
 def _oneshot_curl(cli, namespace, targets, opts):
-    """Probe from a single throwaway pod when crane is not deployed yet -- one
-    image pull and schedule for all the targets, not one each."""
+    """Probe from one throwaway pod: one pull and schedule for all targets."""
     env = [arg for name, value in proxy_env(opts).items()
            for arg in ("--env", f"{name}={value}")]
     print(f"  probing egress from a throwaway {CURL_IMAGE} pod in {namespace} "
           f"(crane is not deployed yet)")
-    out = subprocess.run(
+    out = kube.quiet(
         [cli, "-n", namespace, "run", f"bzm-doctor-{os.getpid()}", "--rm", "-i",
          "--restart=Never", "--image", CURL_IMAGE, *env, "--command", "--",
-         "sh", "-c", _curl_script(targets, settle=2)],
-        capture_output=True, text=True)
+         "sh", "-c", _curl_script(targets, settle=2)])
     return _rc_lines(out.stdout, targets)
 
 
-# Every check takes the same (facts, opts, cluster) so adding one is a single
-# edit here, not a new argument order to remember.
-#
-# What each check reads is on the check (@reads), and what it leaves to an
-# earlier one is too (@defers_to) -- _ordered() holds the tuple to the second at
-# import. So this is a reading order rather than a contract: the three checks
-# that declare nothing read nothing from the cluster, and every other one is
-# handed only sections that were actually read.
+# Every check takes (facts, opts, cluster). What each reads is on the check
+# (@reads) and what it leaves to an earlier one too (@defers_to, enforced by
+# _ordered at import), so this is a reading order rather than a contract.
 CHECKS = _ordered((check_location, check_threads_per_engine, check_engine_heap,
                    check_crane_pool, check_capacity, check_engine_packing,
                    check_disk, check_limitrange, check_resourcequota,
@@ -1781,47 +1298,32 @@ CHECKS = _ordered((check_location, check_threads_per_engine, check_engine_heap,
 
 
 def resolve_namespace(namespace, opts):
-    """What the checks are asked about: the explicit namespace, else the one the
-    bundle was generated for, else the documented default."""
+    """The explicit namespace, else the bundle's, else the documented default."""
     return (namespace or (opts or {}).get("namespace")
             or DEFAULT_OPTIONS["namespace"])
 
 
 def evaluate(facts, opts, namespace, cluster_data=None, probes=None, cli=None,
              extra_checks=(), evidence=None):
-    """Every verdict as data, and nothing printed.
+    """Every verdict as data, nothing printed.
 
-    Split out of run() so a caller that is not a terminal -- the web UI -- gets
-    the Check list without capturing stdout, and so importing cluster data can
-    be tested against the live path by comparing whole lists.
-
-    `extra_checks` are verdicts the caller reached before the cluster data
-    existed at all: where it came from, whether it describes this namespace.
-    They lead the list because they qualify everything after them.
-
-    `evidence` is the three of them as the one thing they are -- what
-    cluster_from_evidence() returns -- for the callers that have a file. The
-    three parts stay spelled out for the live path and for tests that supply
-    one and not the others, but a caller holding an Evidence should not have to
-    take it apart and hope it lands back in the right slots.
+    `extra_checks` lead the list: verdicts about where the cluster data came
+    from, which qualify everything after them. `evidence` is those three parts
+    as cluster_from_evidence() returns them; pass it or the parts, not both.
+    Whatever is not supplied is read from the live cluster.
     """
     if evidence is not None:
-        # Two spellings of one thing, never both: layering extra_checks over an
-        # imported file would silently drop one set or the other, and which is
-        # not something a reader of the call site could tell.
         if cluster_data is not None or probes is not None or extra_checks:
             raise TypeError("pass evidence= or the three parts it carries "
                             "(cluster_data, probes, extra_checks), not both")
         cluster_data, probes, extra_checks = evidence
     opts = dict(opts or {})
-    # The same resolution generate() applies (#132): unset engine limits
-    # derive from the location's overrideCPU/overrideMemory, so every check
-    # that reads engine_size judges the size the bundle will actually carry
-    # rather than the documented default it would fall back to.
+    # As generate() does: unset engine limits derive from the location's
+    # overrides, so every check judges the size the bundle will carry.
     opts.update(resolve_engine_limits(facts, opts))
     namespace = resolve_namespace(namespace, opts)
     if cluster_data is None or probes is None:
-        cli = cli or livetest.cli_tool()
+        cli = cli or kube.cli_tool()
     if cluster_data is None:
         cluster_data = gather_cluster(cli, namespace)
     if probes is None:
@@ -1834,18 +1336,12 @@ def evaluate(facts, opts, namespace, cluster_data=None, probes=None, cli=None,
 
 def run(facts, opts, namespace, cluster_data=None, probes=None, cli=None,
         extra_checks=(), evidence=None):
-    """Run every check and print the verdict list. Returns the Check list; the
+    """evaluate() and print the verdict list. Returns the Check list; the
     caller decides the exit code (see has_failures)."""
     checks = evaluate(facts, opts, namespace, cluster_data, probes, cli,
                       extra_checks, evidence)
-    _report(checks, facts, resolve_namespace(namespace, opts))
+    verdict.report(f"doctor: location {facts.get('harbor_name')} "
+                   f"({facts.get('harbor_id')}), namespace "
+                   f"{resolve_namespace(namespace, opts)}",
+                   checks, NO_TEST_WOULD_START)
     return checks
-
-
-def _report(checks, facts, namespace):
-    print(f"doctor: location {facts.get('harbor_name')} "
-          f"({facts.get('harbor_id')}), namespace {namespace}")
-    width = max((len(c.name) for c in checks), default=0)
-    for c in checks:
-        print(f"{c.status:<4}  {c.name:<{width}}  {c.detail}")
-    print(summary_line(checks))

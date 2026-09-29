@@ -16,7 +16,7 @@ import os
 import pytest
 import yaml
 
-from bzm_opl_gen import api, cli, core, generate as gen, livetest, plan
+from bzm_opl_gen import api, cli, core, generate as gen, kube, plan
 # The faked kubectl and pod shapes live with the cluster-reading tests; reused
 # rather than re-declared so every layer exercises the same stand-in binary.
 from test_livetest import _fake_kubectl, _sv_pod  # noqa: E402
@@ -51,7 +51,7 @@ def fake_cluster(monkeypatch):
         _fake_kubectl(monkeypatch, **kw)
     install()
     yield install
-    livetest.cli_tool.cache_clear()
+    kube.cli_tool.cache_clear()
 
 
 def _run(monkeypatch, *args):

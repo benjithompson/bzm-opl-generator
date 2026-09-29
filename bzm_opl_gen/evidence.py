@@ -1,31 +1,13 @@
 """The cluster-evidence document's shape, stated once.
 
-`scripts/bzm-cluster-evidence.sh` writes a JSON document on a cluster nobody
-here can reach. `doctor` normalises it into verdicts, `suggest` reads the same
-file for what it implies about the generate options, and `core.preflight` reads
-the namespace it was collected for. Four readers, one shape -- and the shape
-used to be written out longhand in every one of them, the collector included.
+`scripts/bzm-cluster-evidence.sh` writes it on a cluster nobody here can reach;
+`doctor`, `suggest` and `core.preflight` read it. Every reader treats a missing
+section as one nobody could read, so a section renamed in one place alone
+would silently read as "could not read" -- hence one table.
+`tests/test_cluster_evidence.py` holds the shell script to DOCUMENT.
 
-That is worse than it sounds, because of what a renamed section does. Every
-reader here treats a section it cannot find as one nobody could read, which is
-the right answer for a file whose collector was refused and the wrong one for a
-file whose collector wrote the same data under another name: the report says
-"could not read nodes" about a section sitting right there. Nothing fails, and
-the sentence is indistinguishable from an honest one. So the names live here,
-and a rename is a change to this table.
-
-What holds the *shell* script to it is `tests/test_cluster_evidence.py`, which
-parses the script's emitting half and compares the keys it writes with
-DOCUMENT. A shell script cannot import a Python table, and a comment in each
-file claiming the two agree is exactly what was there before.
-
-This states the shape of the *file*, and nothing else. What `doctor` normalises
-it into -- the cluster mapping the checks read -- is a different shape with its
-own contract (`doctor.reads`), and folding the two together would make a rename
-in the collector look like a change to what a check may ask for.
-
-Imports nothing: it is a statement about a file format, and everything that
-touches the format depends on it.
+This is the shape of the *file*; the cluster mapping `doctor` normalises it
+into is a separate contract (`doctor.reads`). Imports nothing.
 """
 
 SCHEMA = "bzm-opl-cluster-evidence/1"
@@ -33,14 +15,8 @@ SCRIPT = "scripts/bzm-cluster-evidence.sh"
 
 
 class UnknownSection(LookupError):
-    """A reader named a path this document has no key for.
-
-    Not the same thing as a *file* that does not carry the path -- files come
-    back trimmed and every reader here takes that as "nobody answered", which is
-    the whole point of the null-vs-empty rule. This is the other case: code
-    asking for a section the format does not define, which no file will ever
-    satisfy and which every reader would otherwise report as unread forever.
-    """
+    """A reader named a path this document does not define -- a code error,
+    unlike a *file* that lacks the path (read as "nobody answered")."""
 
 
 # -- the top level -----------------------------------------------------------
@@ -101,21 +77,15 @@ PROXY_CONFIG = "proxy_config"
 
 # -- versions -----------------------------------------------------------------
 
-# `kubectl version -o json` copied whole, so the keys below it are kubectl's
-# rather than the collector's. This one is named because `suggest` reads it: it
-# is present only when a server actually answered, which is the only thing in
-# the file that tells "the cluster said no" from "the command never reached
-# one" (`auth can-i` and `api-resources` both report failure as no).
+# `kubectl version -o json` copied whole. serverVersion is named because it is
+# present only when a server answered: the one way to tell "the cluster said
+# no" from "the command never reached one" (`auth can-i` and `api-resources`
+# report failure as no).
 SERVER_VERSION = "serverVersion"
 
 
-# Every key, and what is under it. A leaf is `{}` -- a scalar, an array of
-# names, or a kubectl document whose insides are not ours to name.
-#
-# No key here may contain a dot: a path is these keys joined with one, so a
-# dotted key would split into two that are not in the table, and cite() would
-# refuse a path the document does define. (Spaces are fine, and the permission
-# probes are `auth can-i`'s own words.)
+# Every key, and what is under it. A leaf is `{}`. No key may contain a dot,
+# since a path is these keys joined with dots; spaces are fine.
 DOCUMENT = {
     SCHEMA_FIELD: {},
     COLLECTED_AT: {},
@@ -138,10 +108,8 @@ DOCUMENT = {
     NOTES: {},
 }
 
-# Sections the collector writes the key of and not the keys inside. There is
-# one, and the test that holds the script to this table excludes it: expecting
-# the script to write `serverVersion` would be expecting it to rewrite kubectl's
-# document, which is the one thing it promises a reviewer it does not do.
+# Sections the collector copies whole from kubectl, so it writes the key but
+# not the keys inside.
 COPIED = (VERSIONS,)
 
 
@@ -156,14 +124,8 @@ def known(*parts):
 
 
 def cite(*parts):
-    """The dotted path, checked as it is built.
-
-    Every suggestion names the evidence behind it so a reader can go and look,
-    and a path that no longer exists sends them to a section that is not there
-    -- which reads, from the file's side, exactly like a collector that was
-    refused it. Cheap to check here, and it makes a rename fail in the rules
-    that cite the old name rather than in the reader who went looking.
-    """
+    """The dotted path, checked as it is built, so a renamed section fails at
+    the rule citing it rather than sending a reader to a missing section."""
     if not known(*parts):
         raise UnknownSection(
             f"'{'.'.join(parts)}' is not a path in the cluster evidence "
@@ -185,7 +147,7 @@ def paths(node=None, prefix=()):
 
 
 def collector_paths():
-    """The paths the collector script itself writes -- everything but the
-    insides of a document it copied. What the script is held to."""
+    """The paths the collector script itself writes: all but the insides of a
+    document it copied."""
     inside = tuple(f"{section}." for section in COPIED)
     return tuple(p for p in paths() if not p.startswith(inside))

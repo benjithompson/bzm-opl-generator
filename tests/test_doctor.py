@@ -1,9 +1,5 @@
-"""Offline tests for the pre-flight doctor.
-
-Every check is a pure verdict over already-fetched cluster JSON, so the whole
-file runs with no cluster and no network: the fixtures below are what
-`kubectl get nodes/limitrange/resourcequota/ns -o json` actually returns.
-"""
+"""Offline tests for the pre-flight doctor: every check is a pure verdict over
+fixtures shaped like real `kubectl get -o json` output."""
 
 import ast
 import inspect
@@ -14,7 +10,7 @@ import textwrap
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from bzm_opl_gen import doctor, evidence, facts as facts_mod, generate as gen  # noqa: E402
+from bzm_opl_gen import doctor, evidence, facts as facts_mod, generate as gen, kube  # noqa: E402
 
 
 # -- fixtures ---------------------------------------------------------------
@@ -120,9 +116,8 @@ def test_location_without_slots_fails(slots):
 # failure. The value cannot tell them apart; how the facts arrived can.
 
 def test_manually_entered_location_reports_the_two_fields_unknown():
-    """The flagship path: harbor id, ship id and a token typed in, no account
-    to read. Neither value could have been supplied and nothing is
-    misconfigured, so neither is a failure."""
+    """Hand-entered facts leave slots and threadsPerEngine unknown: WARN, not
+    FAIL."""
     checks = doctor.check_location(facts_mod.manual("aaa111", "bbb222"), {}, {})
     assert _statuses(checks) == {doctor.WARN}
     assert not doctor.has_failures(checks)
@@ -151,10 +146,8 @@ def test_manual_facts_with_the_values_filled_in_are_checked_normally():
 
 
 def test_manual_facts_with_a_slot_count_of_zero_still_fail():
-    """Unknown is `None` on manually-entered facts, and only that. A typed 0 is
-    a value the customer did supply, and zero slots is the case BlazeMeter has
-    nowhere to place a run -- exempting it would hide a real misconfiguration
-    behind the marker."""
+    """A typed 0 is a supplied value, so zero slots still FAILs on hand-entered
+    facts."""
     zero = {**facts_mod.manual("aaa111", "bbb222"),
             "slots": 0, "threads_per_engine": 500}
     assert _find(doctor.check_location(zero, {}, {}), "slots").status == doctor.FAIL
@@ -189,13 +182,8 @@ def test_threads_per_engine_silent_when_unset():
 
 
 def test_the_ratio_is_named_as_performances_over_a_location_that_runs_browsers():
-    """#165: `500 threads on a 1 CPU / 4Gi engine` was printed over a GUI
-    Functional location, which is sized in browser instances.
-
-    A GUI agent does carry a taurus engine, so the arithmetic is still worth
-    doing and the verdict is unchanged -- what was missing is the sentence
-    saying which model it belongs to, and what this location's own model would
-    be measured in."""
+    """On a GUI location the verdict stands and names the ratio as
+    performance's, beside the location's own unit."""
     c = doctor.check_threads_per_engine(
         {**FACTS, "func_ids": ["functionalGui"], "threads_per_engine": 500}, {}, {})[0]
     assert c.status == doctor.PASS
@@ -204,10 +192,8 @@ def test_the_ratio_is_named_as_performances_over_a_location_that_runs_browsers()
 
 
 def test_a_location_with_no_engine_is_not_judged_against_the_engine_ratio():
-    """An SV agent carries crane, group-gateway and service-mock and no engine
-    at all, so the threads-per-engine ratio is arithmetic about a pod it never
-    creates. Stated rather than skipped: a check that returns nothing reads as
-    one that passed."""
+    """An SV-only location gets a stated "not judged" PASS rather than the
+    engine ratio."""
     c = doctor.check_threads_per_engine(
         {**FACTS, "func_ids": ["mockServices"], "threads_per_engine": 500}, {}, {})[0]
     assert c.status == doctor.PASS
@@ -218,10 +204,7 @@ def test_a_location_with_no_engine_is_not_judged_against_the_engine_ratio():
 
 
 def test_funcids_this_tool_does_not_size_keep_the_ratio_and_say_whose_it_is():
-    """The `or` half of #165's third criterion. tdm and delphix are real funcIds
-    in real accounts and no model here covers them, so the performance ratio is
-    still the only one there is -- applied, with the caveat that the location may
-    not be a performance one, rather than applied silently."""
+    """Unsized funcIds (tdm, delphix) keep the performance ratio with a caveat."""
     over = doctor.check_threads_per_engine(
         {**FACTS, "func_ids": ["tdm"], "threads_per_engine": 1000}, {}, {})[0]
     assert over.status == doctor.WARN         # the arithmetic is unchanged
@@ -229,10 +212,7 @@ def test_funcids_this_tool_does_not_size_keep_the_ratio_and_say_whose_it_is():
 
 
 def test_unread_funcids_and_funcids_that_size_nothing_read_differently():
-    """The house rule, on the surface it was written for. Facts with no funcIds
-    were not read; funcIds naming no model here were. Both leave the performance
-    ratio as the only one to apply, and only one of them is a statement about
-    what the location is."""
+    """No funcIds (unread) and funcIds naming no model get different caveats."""
     unread = doctor.check_threads_per_engine(
         {k: v for k, v in FACTS.items() if k != "func_ids"}, {}, {})[0]
     read = doctor.check_threads_per_engine({**FACTS, "func_ids": ["tdm"]}, {}, {})[0]
@@ -296,26 +276,15 @@ def test_engine_heap_fails_when_the_jvm_can_fill_the_whole_limit():
 
 
 def test_the_vendor_default_pairing_passes():
-    """THE regression this model exists to fix. 500 threads on a 4096MB heap in
-    an 8Gi container is the configuration BlazeMeter documents and ships, and
-    the previous fixed-ratio check WARNed on it -- 4096 is exactly half of 8Gi.
-    A preflight that flags the vendor's own default teaches people to ignore
-    it."""
+    """500 threads on a 4096MB heap in an 8Gi container passes."""
     c = _find(doctor.check_engine_heap(_heap_facts(4096), {"engine_mem_limit": "8Gi"},
                                        {}), "engine heap")
     assert c.status == doctor.PASS
 
 
 def test_a_heap_short_of_its_threads_warns_rather_than_fails():
-    """The 1000-thread case, live on 24 locations in one real account: they
-    declare double the documented threads and almost all still carry the
-    default 4096MB heap.
-
-    WARN, not FAIL, deliberately. The judgement rests on per-thread scaling,
-    and the bisection measured that flat between 50 and 300 threads -- so what
-    1000 threads really needs is an extrapolation from a shape we know does not
-    hold in the range we tested. It may be right above that range; it has not
-    earned a non-zero exit, and the verdict says so."""
+    """A heap short of its threads WARNs (the per-thread model is unconfirmed),
+    and says so."""
     facts = dict(FACTS, engine_xmx_mb=4096, threads_per_engine=1000)
     c = _find(doctor.check_engine_heap(facts, {"engine_mem_limit": "8Gi"}, {}),
               "engine heap")
@@ -345,9 +314,7 @@ def test_engine_heap_warns_when_the_container_is_short_for_the_heap():
 
 
 def test_engine_heap_is_not_judged_against_load_when_threads_are_unset():
-    """threadsPerEngine unset is check_location's FAIL, not this one's. Saying
-    the heap fits the load when there is no load to compare it to would be a
-    verdict on a comparison that never happened."""
+    """Unset threadsPerEngine is WARNed as unverified, not judged."""
     facts = dict(FACTS, engine_xmx_mb=4096, threads_per_engine=None)
     c = _find(doctor.check_engine_heap(facts, {"engine_mem_limit": "8Gi"}, {}),
               "engine heap")
@@ -356,47 +323,33 @@ def test_engine_heap_is_not_judged_against_load_when_threads_are_unset():
 
 
 def test_the_model_reproduces_the_documented_point_exactly():
-    """A compatibility anchor, not a correctness one.
-
-    It proves the model never contradicts what BlazeMeter tells people to run.
-    It proves nothing about those numbers being right: 2 CPU / 8Gi is a floor
-    chosen so things work consistently everywhere, not a measurement, so this
-    pins a safety margin of unknown size rather than a requirement. Getting
-    below it needs observed usage nobody has collected (#125), and until then every
-    value the model produces is a defensible upper bound."""
+    """The model reproduces BlazeMeter's documented 500 threads / 4096MB / 8Gi
+    exactly."""
     assert doctor.engine_heap_mb(500) == 4096
     assert doctor.engine_container_mb(4096) == 8192
 
 
 def test_the_floor_is_the_measured_one_not_a_consumption_reading():
-    """3072MB is the smallest container limit measured to survive a whole run,
-    at BOTH 50 and 300 threads. The previous 1536 came from an engine
-    *consuming* 1220MB, and it fails at both -- consumption is not a
-    requirement. Pinned because that conflation has now been made three times."""
+    """The container floor is 3072MB, the smallest limit measured to survive a
+    run."""
     assert doctor.MIN_CONTAINER_MB == 3072
 
 
 def test_the_model_never_recommends_below_the_measured_floor():
-    """The property that matters, across the whole range anyone runs. At 50
-    threads the unfloored arithmetic gives 818MB, which died partway through a
-    real run; the floor is what stops the tool recommending it."""
+    """No thread count yields a container below the measured floor."""
     for threads in (1, 10, 50, 100, 250, 300):
         got = doctor.engine_container_mb(doctor.engine_heap_mb(threads))
         assert got >= 3072, f"{threads} threads -> {got}MB, under the measured floor"
 
 
 def test_the_low_thread_floor_keeps_the_container_startable():
-    """Below ~50 threads the ratio alone produces a container no JVM starts in
-    (10 threads -> 164MB). The floor covers that edge; at 50 threads, the common
-    low value, it is not needed."""
+    """Very low thread counts still get a startable container."""
     assert doctor.engine_container_mb(doctor.engine_heap_mb(10)) == doctor.MIN_CONTAINER_MB
     assert doctor.engine_heap_mb(50) > doctor.MIN_HEAP_MB
 
 
 def test_unknown_heap_is_a_warn_not_a_pass():
-    """4096 is the default on almost every location, so assuming it would pass
-    the check nearly always -- and the location somebody is generating a bundle
-    for is exactly the one that has been retuned."""
+    """An unknown heap WARNs rather than assuming the 4096MB default."""
     c = _find(doctor.check_engine_heap(_heap_facts(None), {"engine_mem_limit": "8Gi"},
                                        {}), "engine heap")
     assert c.status == doctor.WARN
@@ -428,11 +381,9 @@ def _engine_node(name="e1", cpu="16", mem="64Gi", pods=None):
 
 # -- engine requests come from the location ---------------------------------
 #
-# Measured on a live GKE run: a location at overrideCPU=1 / overrideMemory=4096
-# against a bundle asking for 2 CPU / 8Gi produced ONE pod carrying
-# requests {cpu: 1, memory: 4Gi} and limits {cpu: 2, memory: 8Gi}. The two
-# settings are not rivals for one field -- the bundle sets limits, the location
-# sets requests. 250m/256Mi is only what an unset location defaults to.
+# The bundle sets limits and the location's overrideCPU/overrideMemory set
+# requests (measured: 1/4096 against a 2 CPU / 8Gi bundle gave requests {1, 4Gi},
+# limits {2, 8Gi}); 250m/256Mi is only the unset default.
 
 def test_engine_requests_come_from_the_location_when_set():
     from bzm_opl_gen import generate as gen
@@ -447,9 +398,8 @@ def test_engine_requests_fall_back_to_cranes_default():
 
 
 def test_packing_uses_the_locations_requests_not_the_default():
-    """A location whose overrides match the engine limits packs correctly, and
-    the check has to see that -- judging it by the 250m default would WARN on
-    the very configuration that fixes the problem."""
+    """Packing is judged on the location's override requests, not crane's
+    default."""
     opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
     facts = dict(FACTS, override_cpu=2, override_memory=8192)
     # 3 CPU / 12Gi holds exactly one such engine once the requests are honest --
@@ -476,20 +426,16 @@ def test_packing_names_the_location_overrides_as_the_fix():
 
 # -- check_crane_pool -------------------------------------------------------
 #
-# Split pools left crane unchecked: every other capacity check here is about
-# engines. Numbers below are a real GKE e2-medium.
+# Crane's own pool on a split bundle. Numbers below are a real GKE e2-medium.
 
 def _e2_medium(name="c1"):
-    """940m allocatable CPU, ~2.73Gi memory -- measured, and the point is that
-    940m is *below* crane's 1 CPU limit while being above its 250m request."""
+    """An e2-medium node: 940m allocatable CPU (below crane's 1 CPU limit,
+    above its request), ~2.73Gi."""
     return _node(name, cpu="940m", mem="2866848Ki", labels=CRANE_POOL)
 
 
 def test_crane_pool_warns_when_the_node_cannot_reach_cranes_limit():
-    """The obvious "small always-on node" cannot actually run crane at its
-    limit. It schedules on the request and is throttled when a run makes it
-    busy -- and an agent that stops heartbeating mid-run reads as a test that
-    stopped, which is the hardest failure here to attribute."""
+    """A crane pool whose largest node is below crane's limit WARNs."""
     cluster = {"nodes": [_e2_medium(), _engine_node("e1")]}
     c = _find(doctor.check_crane_pool(FACTS, SPLIT, cluster), "crane pool")
     assert c.status == doctor.WARN
@@ -517,11 +463,8 @@ def test_crane_pool_is_not_checked_on_a_one_pool_bundle():
 
 
 def test_an_empty_engine_pool_is_a_warn_not_a_failure():
-    """A dedicated engine pool is *supposed* to sit at zero between runs -- that
-    is the saving the split exists for. Observed on a correctly-built GKE pool
-    at min-nodes 0, where FAIL claimed "engines have nowhere to run" about a
-    cluster that was right. An empty autoscaling pool and a pool that was never
-    created look identical in `get nodes`, and they are opposite verdicts."""
+    """A dedicated engine pool with no nodes WARNs (it may be scaled to zero),
+    not FAILs."""
     cluster = {"nodes": [_node("c1", labels=CRANE_POOL)]}      # crane only, no engine nodes
     checks = doctor.check_capacity(FACTS, SPLIT, cluster)
     c = _find(checks, "eligible nodes")
@@ -553,9 +496,7 @@ def test_eligible_nodes_follows_the_engine_pool_not_cranes():
 
 
 def test_capacity_does_not_spend_crane_out_of_a_pool_it_is_not_on():
-    """Charging the engine pool for crane understates it by a whole crane. On a
-    small dedicated pool that is the difference between PASS and a FAIL that
-    sends someone resizing nodes they did not need to touch."""
+    """Crane is not charged to an engine pool it cannot land on."""
     cluster = {"nodes": [_node("c1", labels=CRANE_POOL), _engine_node("e1")]}
     agg = _find(doctor.check_capacity(FACTS, SPLIT, cluster), "aggregate")
     assert agg.status == doctor.PASS
@@ -568,9 +509,8 @@ def test_capacity_does_not_spend_crane_out_of_a_pool_it_is_not_on():
 
 # -- check_engine_packing ---------------------------------------------------
 #
-# The check that exists because of the one thing the manifests cannot express:
-# crane stamps engine requests at 250m/256Mi whatever the limits say, and the
-# scheduler places on requests.
+# Crane stamps engine requests from the location (250m/256Mi unset) whatever
+# the limits say, and the scheduler places on requests.
 
 def test_engine_packing_warns_when_requests_let_engines_pile_onto_one_node():
     opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
@@ -585,16 +525,10 @@ def test_engine_packing_warns_when_requests_let_engines_pile_onto_one_node():
 
 
 def test_engine_packing_passes_when_maxpods_caps_the_node():
-    """The lever that actually closes it, as the node reports it. A pool capped
-    at the system pods a node of it actually runs, plus one, takes exactly one
-    engine however little that engine asked for."""
+    """allocatable.pods capped at system pods plus one passes."""
     from bzm_opl_gen import generate as gen
     opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
-    # Derived, not the literal it used to be: the ceiling that admits exactly
-    # one engine is a function of how many system pods land on the node, and a
-    # test that hardcodes the sum silently stops testing the property when that
-    # number is corrected -- which is exactly what happened when measurement
-    # moved it from 8 to 6.
+    # Derived from TYPICAL_SYSTEM_PODS, so the test follows a corrected count.
     caps_at_one = gen.TYPICAL_SYSTEM_PODS + 1
     checks = doctor.check_engine_packing(
         FACTS, opts, {"nodes": [_engine_node("e1", pods=caps_at_one)]})
@@ -602,10 +536,8 @@ def test_engine_packing_passes_when_maxpods_caps_the_node():
 
 
 def test_engine_packing_allows_the_engines_the_pool_was_designed_for():
-    """A node sized for 2 engines is not over-packed by taking 2. Judging it
-    against raw capacity would WARN on a pool built exactly to spec -- and on
-    GKE, whose maxPods floor of 8 forces 2 engines a node, that verdict would
-    fire on every correctly-built pool there is."""
+    """A node taking exactly the engines the pool was designed for is not over-
+    packed."""
     from bzm_opl_gen import generate as gen
     opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi",
                 engines_per_node=2)
@@ -621,10 +553,7 @@ def test_engine_packing_allows_the_engines_the_pool_was_designed_for():
 
 
 def test_the_recipe_builds_a_pool_the_checker_passes():
-    """The generated nodepools.md and this check must agree: a pool built to
-    the recipe's maxPods, on a node sized as the recipe says, has to come back
-    PASS. They share TYPICAL_SYSTEM_PODS precisely so the advice and the
-    verdict cannot drift into contradicting each other."""
+    """A pool built to the generated nodepools recipe passes the packing check."""
     from bzm_opl_gen import generate as gen
     opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
     recipe_max_pods = gen.TYPICAL_SYSTEM_PODS + 1
@@ -647,12 +576,8 @@ def test_engine_packing_is_silent_when_no_node_is_eligible():
 
 
 def test_engine_packing_warns_rather_than_guesses_when_nodes_are_unread():
-    """A denied `list nodes` is not an uncapped pool. Unreadable and empty must
-    not share a verdict.
-
-    Through run_check(), because this check declares the section it reads and
-    the unread branch is opened for it -- calling the body directly is asking a
-    question it is no longer given."""
+    """Unread nodes WARN through the declared section, not a verdict on an
+    empty pool."""
     checks = doctor.run_check(doctor.check_engine_packing, FACTS, SPLIT,
                               {"nodes": None})
     c = _find(checks, "engine packing")
@@ -771,9 +696,7 @@ def test_limitrange_max_below_engine_fails():
 
 
 def test_limitrange_min_above_the_stamped_request_fails():
-    """min rejects from below exactly as max does from above, and it is measured
-    against what crane actually requests (250m/256Mi), not the engine's limits --
-    a namespace that insists on 1 CPU minimum rejects every engine pod."""
+    """A LimitRange min above crane's stamped request FAILs."""
     lr = {"metadata": {"name": "floor"},
           "spec": {"limits": [{"type": "Container", "min": {"cpu": "1", "memory": "1Gi"}}]}}
     c = doctor.check_limitrange(FACTS, {}, {"limitranges": [lr]})[0]
@@ -833,10 +756,7 @@ def _quota(name="team-quota", hard=None, used=None):
 
 
 def test_resourcequota_absent_passes():
-    """Both sections stated, because the check reads both -- `limitranges: []`
-    is "the namespace has none", which is what the quota-defaults WARN turns
-    on. Leaving the key out used to read as a LimitRange list nobody looked at
-    and quietly suppress it."""
+    """No ResourceQuota passes, with both declared sections supplied."""
     checks = doctor.check_resourcequota(FACTS, {},
                                         {"quotas": [], "limitranges": []})
     assert _statuses(checks) == {doctor.PASS}
@@ -888,9 +808,7 @@ NS_RESTRICTED = {"metadata": {"labels":
 
 
 def test_admission_k8s_restricted_passes_now_that_engines_drop_privileges():
-    """Used to be a FAIL, and correctly so: the engine security envs were
-    emitted only for platform=openshift, so restricted PSA rejected the engine
-    pods after crane was online. They are on by default everywhere now."""
+    """Restricted PSA passes with restrict_engines on."""
     c = doctor.check_admission(FACTS, {"platform": "k8s"},
                                {"namespace": NS_RESTRICTED})[0]
     assert c.status == doctor.PASS
@@ -917,15 +835,7 @@ def test_admission_k8s_unlabelled_warns():
 
 
 def test_admission_tells_an_absent_namespace_from_an_unread_one():
-    """Two different facts, and the advice for one is wrong for the other. `{}`
-    is the live path's "asked, it is not there" -- the normal preflight case,
-    answered by creating it. `None` is "nobody looked", which an evidence file
-    says when the collector was refused the namespace; telling that reader to
-    create the namespace sends them after something that is not missing.
-
-    The unread half is the seam's now -- check_admission declares `namespace`,
-    so run_check() answers it and the body below is only reached for `{}`.
-    """
+    """{} (not created yet) and None (not readable) get different advice."""
     absent = doctor.run_check(doctor.check_admission, FACTS, {"platform": "k8s"},
                               {"namespace": {}})[0]
     unread = doctor.run_check(doctor.check_admission, FACTS, {"platform": "k8s"},
@@ -982,11 +892,7 @@ def test_existing_service_account_missing_fails():
 
 
 def test_unreadable_namespace_warns_rather_than_failing():
-    """The one section where empty and unread earn the same sentence: every
-    namespace that exists has `default`, so an empty list is a namespace missing
-    or a read filtered, not an account that is genuinely not there. Null is the
-    declaration's half, `[]` is the check's own, and the sentence is composed
-    once so they cannot drift apart."""
+    """Null and empty ServiceAccount lists give the same unverified WARN."""
     empty = doctor.check_service_account(FACTS, EXISTING_SA,
                                          {"serviceaccounts": []})[0]
     unread = doctor.check_service_account(FACTS, EXISTING_SA,
@@ -1013,9 +919,7 @@ def test_ingress_class_silent_without_service_virtualization():
 
 
 def test_ingress_class_silent_when_the_ingress_was_declined():
-    """`none` is a value, so the unrecognised-value WARN below would claim it
-    otherwise -- telling someone who deliberately took the SV path off that
-    their ingress path is unverified, about an ingress there is not."""
+    """sv_ingress=none produces no verdict."""
     assert doctor.check_ingress_class(
         FACTS, {"sv_ingress": doctor.SV_INGRESS_NONE},
         {"ingressclasses": []}) == []
@@ -1047,10 +951,7 @@ def test_ingress_class_none_at_all_fails():
 
 @pytest.mark.parametrize("ingress", ["istio", "contour", "openshift"])
 def test_ingress_class_crd_based_types_are_never_a_failure(ingress):
-    """istio routes through a Gateway/VirtualService, contour through an
-    HTTPProxy, openshift through a Route; none creates an Ingress, and none of
-    those controllers registers an IngressClass -- so failing on 'none found'
-    would fail every correct install of all three."""
+    """istio, contour and openshift route without an IngressClass and PASS."""
     checks = doctor.check_ingress_class(
         FACTS, {**SV_NGINX, "sv_ingress": ingress}, {"ingressclasses": []})
     assert _statuses(checks) == {doctor.PASS}
@@ -1075,10 +976,7 @@ def test_ingress_class_unreadable_warns_rather_than_fails():
 
 
 def test_ingress_class_with_no_such_key_at_all_is_a_fixture_error():
-    """And the third case, which used to be indistinguishable from the second.
-    A caller that carries no `ingressclasses` key has not said whether it means
-    "unread" or "none"; answering it as either is a verdict about a cluster
-    nobody described, so it is refused rather than reported."""
+    """Cluster data with no ingressclasses key raises MissingSection."""
     with pytest.raises(doctor.MissingSection):
         doctor.check_ingress_class(FACTS, SV_NGINX, {})
 
@@ -1126,12 +1024,12 @@ def test_egress_without_probes_warns():
 
 
 def _crane(monkeypatch, deployed, output=""):
-    monkeypatch.setattr(doctor.livetest, "kget",
+    monkeypatch.setattr(kube, "kget",
                         lambda cli, ns, kind, name=None: {"x": 1} if deployed else {})
-    monkeypatch.setattr(doctor.livetest, "kget_named",
+    monkeypatch.setattr(kube, "kget_named",
                         lambda cli, ns, kind, name=None: {"x": 1} if deployed else {})
     seen = []
-    monkeypatch.setattr(doctor.livetest, "_crane_exec",
+    monkeypatch.setattr(kube, "crane_exec",
                         lambda cli, ns, sh: seen.append(sh) or output)
     return seen
 
@@ -1150,9 +1048,7 @@ def test_probe_egress_uses_one_exec_for_every_target(monkeypatch):
 
 
 def test_curl_script_retries_each_probe_once():
-    """A pod's first DNS lookup can fail before CoreDNS answers for it -- seen
-    live, two of three hosts returning rc=6 and all three passing on a rerun.
-    A doctor that FAILs on that is reporting something it cannot reproduce."""
+    """Each probe is retried once (a fresh pod's first DNS lookup can fail)."""
     script = doctor._curl_script(["https://x/"])
     assert script.count("curl") == 2
     assert "sleep 2" in script
@@ -1185,11 +1081,7 @@ def test_probe_egress_cannot_honour_a_ca_without_crane(monkeypatch):
 
 @pytest.mark.parametrize("mode", sorted(gen.CA_MODES))
 def test_a_bundle_with_any_ca_mode_probes_with_that_ca(monkeypatch, mode):
-    """`--cacert` is decided by whether CA trust is configured at all, and the
-    predicate read three of the four modes: a slot bundle whose PEM had been
-    pasted in probed *without* it, so an intercepting proxy's certificate was
-    rejected and `check_egress` FAILed over a namespace that reaches
-    BlazeMeter. Read off CA_MODES, so a fifth mode cannot repeat it (#250)."""
+    """Every CA mode makes the crane-pod probe pass --cacert."""
     opts = {mode: True if gen.DEFAULT_OPTIONS[mode] is False else "x"}
     targets = doctor.egress_targets(opts)
     seen = _crane(monkeypatch, True, "\n".join(f"{t} rc=0" for t in targets))
@@ -1223,9 +1115,8 @@ SA_ITEM = {"kind": "ServiceAccount", "metadata": {"name": "crane"}}
 
 
 def test_gather_cluster_splits_one_namespaced_get_by_kind(monkeypatch):
-    """LimitRanges, ResourceQuotas and ServiceAccounts come back from a single
-    `get` -- one API round trip instead of three -- so the shape has to be split
-    by kind."""
+    """One namespaced get is split into LimitRanges, ResourceQuotas and
+    ServiceAccounts."""
     calls = []
 
     def fake_kget(cli, namespace, kind, name=None):
@@ -1239,8 +1130,8 @@ def test_gather_cluster_splits_one_namespaced_get_by_kind(monkeypatch):
         return {"items": [dict(LR_MATCHING, kind="LimitRange"), QUOTA_ITEM,
                           SA_ITEM]}
 
-    monkeypatch.setattr(doctor.livetest, "kget", fake_kget)
-    monkeypatch.setattr(doctor.livetest, "kget_named", fake_kget)
+    monkeypatch.setattr(kube, "kget", fake_kget)
+    monkeypatch.setattr(kube, "kget_named", fake_kget)
     data = doctor.gather_cluster("kubectl", "ns1")
     assert [n["metadata"]["name"] for n in data["nodes"]] == ["a"]
     assert data["limitranges"] == [dict(LR_MATCHING, kind="LimitRange")]
@@ -1256,24 +1147,19 @@ def test_gather_cluster_splits_one_namespaced_get_by_kind(monkeypatch):
 def test_gather_cluster_survives_a_missing_namespace(monkeypatch):
     """`get ns` fails on a namespace that does not exist yet -- that is the
     normal pre-flight case, not a crash."""
-    monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
-    monkeypatch.setattr(doctor.livetest, "kget_named", lambda *a, **k: {})
+    monkeypatch.setattr(kube, "kget", lambda *a, **k: {})
+    monkeypatch.setattr(kube, "kget_named", lambda *a, **k: {})
     data = doctor.gather_cluster("kubectl", "ns1")
-    # Every list is None rather than []: kget reports a failed command as {},
-    # and "could not ask" has to stay distinguishable from "asked, none exist"
-    # -- an [] here would fail the capacity check of anyone who is merely not
-    # allowed to list nodes. The namespace stays {}, which is what
-    # check_admission already reads as "not created yet".
+    # A failed get ({} from kget) is None, not [], so a denied list is unread
+    # rather than empty. The namespace stays {}: "not created yet".
     assert data == {"nodes": None, "ingressclasses": None, "limitranges": None,
                     "quotas": None, "serviceaccounts": None, "namespace": {}}
 
 
 def test_a_namespace_nobody_may_read_is_unread_not_absent(monkeypatch):
-    """The live path's half of the rule the evidence path already kept. A
-    refused `get ns` came back from kget as {}, the same as NotFound, and
-    check_admission told somebody to create a namespace they already had."""
-    monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
-    monkeypatch.setattr(doctor.livetest, "kget_named", lambda *a, **k: None)
+    """A refused `get ns` is None (unread), not {} (absent)."""
+    monkeypatch.setattr(kube, "kget", lambda *a, **k: {})
+    monkeypatch.setattr(kube, "kget_named", lambda *a, **k: None)
     data = doctor.gather_cluster("kubectl", "ns1")
     assert data["namespace"] is None
     [check] = doctor.run_check(doctor.check_admission, FACTS, {}, data)
@@ -1288,14 +1174,11 @@ def test_a_namespace_nobody_may_read_is_unread_not_absent(monkeypatch):
 ])
 def test_gather_cluster_keeps_unreadable_ingressclasses_apart_from_empty(
         monkeypatch, served, expected, status):
-    """The two answers reach check_ingress_class as [] and None and it grades
-    them differently. Collapsing both to [] -- which `.get("items", [])` does --
-    turns a cluster whose API server does not serve IngressClass into a hard
-    FAIL with a non-zero exit, for something never actually checked."""
-    monkeypatch.setattr(doctor.livetest, "kget",
+    """An unserved IngressClass read is None, not []."""
+    monkeypatch.setattr(kube, "kget",
                         lambda cli, ns, kind, name=None:
                         served if kind == "ingressclass" else {})
-    monkeypatch.setattr(doctor.livetest, "kget_named",
+    monkeypatch.setattr(kube, "kget_named",
                         lambda cli, ns, kind, name=None:
                         served if kind == "ingressclass" else {})
     data = doctor.gather_cluster("kubectl", "ns1")
@@ -1305,18 +1188,9 @@ def test_gather_cluster_keeps_unreadable_ingressclasses_apart_from_empty(
 
 # -- a check declares the sections it reads ----------------------------------
 #
-# The rule these pin is the one this codebase has broken six times: "could not
-# read" and "there is nothing there" must never share a representation. A check
-# declares the sections it reads, and the declaration travels with the check --
-# so its body is never handed a section nobody could read, whether it is reached
-# through evaluate() or called directly by a test.
-#
-# The third representation is the one this file was carrying: a fixture with no
-# key for the section at all, which `.get()` served as "unread" and which
-# therefore WARNed in a way indistinguishable from an honest unread. Thirty-six
-# partial fixtures could each have been asking a check a question it never
-# answered, and a pinned count of WARNs elsewhere was the only thing watching.
-# Absent is now refused by name.
+# "Could not read" (None) and "there is nothing there" ([]/{}) never share a
+# verdict: a declared check's body only sees sections that were read, and a
+# section with no key at all raises MissingSection.
 
 UNREAD_ALL = {"nodes": None, "ingressclasses": None, "limitranges": None,
               "quotas": None, "serviceaccounts": None, "namespace": None}
@@ -1354,9 +1228,7 @@ def _by_name(check):
                                                key=lambda kv: _by_name(kv[0])),
                          ids=lambda v: v if isinstance(v, tuple) else _by_name(v))
 def test_a_check_declares_the_sections_it_reads_as_data(check, keys):
-    """The sections a check reads are readable off the check, not inferred from
-    its body -- which is what makes them something a new check must supply
-    rather than something its author has to remember."""
+    """The sections a check reads are readable off the check."""
     assert tuple(s.key for s in check.sections) == keys
 
 
@@ -1378,28 +1250,19 @@ def _sections_read(check):
 
 @pytest.mark.parametrize("check", doctor.CHECKS, ids=_by_name)
 def test_every_section_a_check_reads_is_one_it_declares(check):
-    """The half a declaration cannot enforce by itself: a check could declare
-    one section and quietly read another, and that second read would be back to
-    inventing an unread section out of an absent key. Read off the source, so a
-    check added later is held to it without anyone remembering to."""
+    """Every cluster[...] a check body reads is a section it declares."""
     declared = tuple(s.key for s in getattr(check, "sections", ()))
     assert _sections_read(check) == set(declared)
 
 
 @pytest.mark.parametrize("check", doctor.CHECKS, ids=_by_name)
 def test_no_check_reaches_a_cluster_section_with_get(check):
-    """`cluster.get(key)` is how absent came to mean unread: it answers for a
-    key that is not there instead of saying the caller never said. A subscript
-    cannot, which is what makes MissingSection reachable at all."""
+    """No check reads a section with cluster.get()."""
     assert "cluster.get(" not in inspect.getsource(check), check.__name__
 
 
 def test_a_section_missing_from_the_cluster_data_is_refused_by_name():
-    """The headline of this change. A fixture that carries no key for a section
-    a check reads is not a cluster with nothing in that section, and is not a
-    cluster nobody could read either -- it is a caller that has not said. Loud,
-    at the call site, rather than a WARN in a report that reads like every other
-    WARN."""
+    """A missing section key raises MissingSection naming the check and key."""
     with pytest.raises(doctor.MissingSection) as e:
         doctor.check_limitrange(FACTS, {}, {})
     assert "check_limitrange" in str(e.value)
@@ -1410,9 +1273,7 @@ def test_a_section_missing_from_the_cluster_data_is_refused_by_name():
 
 
 def test_the_declaration_travels_with_the_check_not_with_the_loop():
-    """Most of the tests here call a check directly. A seam that only evaluate()
-    went through would hold none of them to anything, which is the whole reason
-    the contract is on the check rather than in the loop."""
+    """Calling a declared check directly applies its declaration."""
     direct = doctor.check_admission(FACTS, {"platform": "k8s"},
                                     {"namespace": None})
     through = doctor.run_check(doctor.check_admission, FACTS,
@@ -1445,9 +1306,7 @@ def test_a_declared_check_runs_its_body_when_the_section_is_merely_empty():
 
 
 def test_an_unread_sentence_may_be_composed_from_the_facts_and_the_options():
-    """Three of the sentences name the location's own numbers -- "slots=2 x 2
-    CPU / 8Gi" -- which is what makes them something to act on. Composed from
-    facts and options only: the cluster is the thing that was not read."""
+    """An unread sentence can be built from facts and options."""
     @doctor.reads("nodes", "composed",
                   lambda facts, opts: f"slots={facts['slots']} unverified")
     def check_composed(facts, opts, cluster):
@@ -1458,10 +1317,8 @@ def test_an_unread_sentence_may_be_composed_from_the_facts_and_the_options():
 
 
 def test_a_section_read_only_when_the_question_arises_is_gated_on_that():
-    """A one-pool bundle asks nothing of crane's pool, so it neither needs the
-    nodes to be there nor pays anything for their being unread. Gating the
-    declaration is what keeps the unread WARN off a question that was never
-    put."""
+    """A `when`-gated section is neither required nor WARNed when the question
+    does not arise."""
     assert doctor.check_crane_pool(FACTS, {}, {}) == []
     assert doctor.check_crane_pool(FACTS, {}, {"nodes": None}) == []
     # Split, the same unread nodes are exactly what it cannot answer without.
@@ -1483,16 +1340,13 @@ def test_an_undeclared_check_is_run_unchanged():
 @pytest.mark.parametrize("carrier", ["evidence", "live"])
 def test_every_declared_section_is_one_the_cluster_data_actually_carries(
         carrier, monkeypatch):
-    """A mistyped section key would now be a MissingSection on every real run,
-    not just in a fixture -- so both producers are held to carrying every key
-    every check names. `probes` is the exception by construction: evaluate()
-    merges it in, and no producer of cluster data has it."""
+    """Both producers carry every declared section except probes."""
     if carrier == "evidence":
         carried = set(doctor.cluster_from_evidence(
             {"schema": evidence.SCHEMA}).cluster)
     else:
-        monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
-        monkeypatch.setattr(doctor.livetest, "kget_named", lambda *a, **k: {})
+        monkeypatch.setattr(kube, "kget", lambda *a, **k: {})
+        monkeypatch.setattr(kube, "kget_named", lambda *a, **k: {})
         carried = set(doctor.gather_cluster("kubectl", "ns1"))
     for check, keys in DECLARING.items():
         for key in keys:
@@ -1500,11 +1354,8 @@ def test_every_declared_section_is_one_the_cluster_data_actually_carries(
 
 
 def test_evaluate_derives_engine_limits_from_the_location(monkeypatch):
-    """The preflight certifies the size the bundle will carry (#132): generate
-    derives unset limits from the location's overrideCPU/overrideMemory, and
-    evaluate applies the same resolution before any check reads engine_size --
-    otherwise doctor would judge the 2/8Gi default against a bundle carrying
-    the location's figure."""
+    """evaluate() resolves unset engine limits from the location's overrides,
+    as generate() does."""
     seen = {}
     monkeypatch.setattr(doctor, "run_check",
                         lambda check, facts, opts, cluster: seen.update(opts) or [])
@@ -1521,10 +1372,7 @@ def test_evaluate_derives_engine_limits_from_the_location(monkeypatch):
 
 
 def test_evaluate_carries_every_section_every_check_declares(monkeypatch):
-    """The one caller that assembles the mapping, against the declarations --
-    a check reading a section evaluate() does not merge in would raise on every
-    run, which is loud but not in a place anybody wants to find it. `probes` is
-    the one that only exists here, so only this says it is supplied."""
+    """evaluate() supplies every declared section, including probes."""
     passed = {}
     monkeypatch.setattr(doctor, "run_check",
                         lambda check, facts, opts, cluster: passed.update(cluster) or [])
@@ -1535,9 +1383,8 @@ def test_evaluate_carries_every_section_every_check_declares(monkeypatch):
 
 
 def test_evaluate_opens_the_unread_branch_for_every_declared_check():
-    """Read through the loop, with every question asked at once: each declared
-    section that is null produces that check's own sentence, and nothing
-    fails."""
+    """All-null cluster data gives each declared check its own WARN and no
+    FAIL."""
     checks = doctor.evaluate(FACTS, ALL_ASKED, "blazemeter",
                              cluster_data=UNREAD_ALL, probes={})
     for check in DECLARING:
@@ -1555,17 +1402,13 @@ def test_evaluate_opens_the_unread_branch_for_every_declared_check():
 # -- what a check leaves to an earlier one -----------------------------------
 
 def test_a_check_that_goes_quiet_declares_what_it_is_leaving_to():
-    """Two checks return [] because an earlier one has already reported the
-    thing they would have said. That was true only by where they sat in CHECKS
-    -- a fact about a tuple rather than about either check."""
+    """Checks that return [] for an earlier verdict declare that check."""
     assert doctor.check_threads_per_engine.defers == (doctor.check_location,)
     assert doctor.check_engine_packing.defers == (doctor.check_capacity,)
 
 
 def test_the_order_of_checks_meets_every_declared_deference():
-    """Held at import, because a reordering that silences a check is invisible
-    in the report: the verdict the quiet one was counting on simply never
-    appears."""
+    """_ordered() refuses an order where a check precedes one it defers to."""
     seen = []
     for check in doctor.CHECKS:
         for owner in getattr(check, "defers", ()):
@@ -1602,11 +1445,9 @@ def test_a_wholly_empty_cluster_can_still_fail():
     assert doctor.has_failures(checks)
 
 
-# Every check whose unread sentence is its own to give, less the two whose
-# section makes the comparison below meaningless: check_egress, whose probes are
-# not part of the cluster data at all, and check_service_account, where an empty
-# read genuinely means what no read means -- argued at its site and pinned
-# above, and the one place these two sentences are deliberately identical.
+# Every check with an unread sentence of its own, less check_egress (probes are
+# not cluster data) and check_service_account (empty and unread deliberately
+# share a sentence).
 SAYS_WHEN_IT_DID_NOT_LOOK = tuple(
     c for c in DECLARING
     if c not in (doctor.check_egress, doctor.check_service_account))
@@ -1660,7 +1501,7 @@ def test_run_gathers_when_nothing_is_injected(monkeypatch):
         called["gather"] = (cli, ns)
         return HEALTHY
 
-    monkeypatch.setattr(doctor.livetest, "cli_tool", lambda: "kubectl")
+    monkeypatch.setattr(kube, "cli_tool", lambda: "kubectl")
     monkeypatch.setattr(doctor, "gather_cluster", fake_gather)
     monkeypatch.setattr(doctor, "probe_egress",
                         lambda cli, ns, opts: {doctor.API_PROBE_URL: 0})
@@ -1671,10 +1512,7 @@ def test_run_gathers_when_nothing_is_injected(monkeypatch):
 
 # -- the verdict list in one sentence ----------------------------------------
 #
-# One sentence with two readers: the line `doctor` prints under its report, and
-# the line the web UI puts beside the imported file's name. The browser used to
-# compose its own from the same counts -- including the consequence and the rule
-# for when to state it -- which is two judgements about one list.
+# Printed under doctor's report and shown by the web UI beside an imported file.
 
 def _checks(**counts):
     return [doctor.Check(f"{status} {i}", status, "")
@@ -1692,9 +1530,7 @@ def test_a_count_of_one_is_not_pluralised():
 
 
 def test_the_consequence_is_stated_only_where_something_failed():
-    """A file whose collector was refused half the cluster is all warnings, and
-    ending that with "a test would not start" turns a thin read into a rejection
-    of a cluster nobody has judged."""
+    """The summary names the consequence only when something FAILed."""
     assert doctor.NO_TEST_WOULD_START not in doctor.summary_line(_checks(WARN=4))
     assert doctor.NO_TEST_WOULD_START in doctor.summary_line(_checks(WARN=4, FAIL=1))
 

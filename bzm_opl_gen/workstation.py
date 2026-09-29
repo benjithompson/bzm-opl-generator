@@ -1,16 +1,9 @@
-"""Pre-flight the *workstation*, not the cluster.
+"""Pre-flight the workstation: does it have what `livetest` shells out to
+(kubectl/oc, docker, kind or minikube, two pinned images) before a 12-20
+minute run finds out?
 
-`doctor` asks whether the customer's cluster can run the location. This asks
-the question that comes first for anyone working on the code: does this laptop
-have what `livetest` shells out to, before a 12-20 minute run discovers it the
-hard way. The rig calls kubectl/oc, docker, kind or minikube, and pulls two
-pinned images; every one of those was a bare FileNotFoundError partway through
-a run until this existed.
-
-Same shape as doctor: gather() is the only impure part, every check is a pure
-function over what it returned, so the whole thing is testable offline.
-
-FAIL = the run cannot start. WARN = it starts and then bites you.
+gather() is the only impure part; every check is a pure function over its
+result. FAIL = the run cannot start. WARN = it starts and then bites you.
 """
 
 import os
@@ -20,14 +13,14 @@ import socket
 import subprocess
 import sys
 
-from .doctor import Check, PASS, WARN, FAIL
+from . import verdict
 from .livetest import PROXY_IMAGE, REGISTRY_IMAGE
+from .verdict import Check, PASS, WARN, FAIL
 
 MIN_PYTHON = (3, 9)             # the floor declared in pyproject.toml
 
-# minikube pulls the engine image (~2GB) plus crane and the mirror copies; the
-# VM disk filling up surfaces as minikube's RSRC_DOCKER_STORAGE, which does not
-# mention disk at all.
+# minikube pulls the engine image (~2GB) plus crane and the mirror copies; a
+# full VM disk surfaces as RSRC_DOCKER_STORAGE, which does not mention disk.
 DISK_WARN_GB = 20
 DISK_FAIL_GB = 5
 
@@ -53,13 +46,9 @@ def _port_busy(port):
 def _free_gb():
     """Free space docker can still grow into, and where that number came from.
 
-    Which number binds depends on how the provider stores its disk, not on
-    which provider it is. A preallocated VM disk (colima and friends) is capped
-    regardless of host free space, so the VM's own df is the answer; a sparse
-    disk image on the host filesystem (Docker Desktop, and the default for most
-    others) grows until the host fills, so host free space is. Host free space
-    is the fallback because it is right for every provider we can't interrogate
-    directly -- and it is never an *under*-estimate of the constraint.
+    A preallocated VM disk (colima) is bounded by the VM's own df; a sparse
+    image (Docker Desktop and most others) by host free space, which is also
+    the fallback and never under-estimates the constraint.
     """
     if shutil.which("colima"):
         r = subprocess.run(["colima", "ssh", "--", "df", "-Pk", "/"],
@@ -119,8 +108,7 @@ def check_python(opts, env):
 
 
 def check_kube_cli(opts, env):
-    """livetest.cli_tool() prefers oc, falls back to kubectl, and raises if
-    neither is there -- after the cluster is already up."""
+    """kube.cli_tool() prefers oc and falls back to kubectl."""
     for name in ("oc", "kubectl"):
         if env[name]:
             other = "kubectl" if name == "oc" else "oc"
@@ -208,8 +196,7 @@ def check_rig_images(opts, env):
 
 
 def check_disk(opts, env):
-    # Nothing to say about the docker VM's disk when there is no reachable
-    # docker -- check_docker already reported the failure that matters.
+    # No reachable docker: check_docker has already reported it.
     if not _needs_docker(opts) or not env["docker_running"]:
         return []
     free, where = env["free_gb"]
@@ -233,21 +220,16 @@ CHECKS = (check_python, check_kube_cli, check_docker, check_cluster_tool,
 
 
 def evaluate(opts, env=None):
-    """Every verdict as data, and nothing printed.
-
-    Split out of run() for the reason doctor.evaluate was: a caller that is not
-    a terminal needs the Check list without capturing stdout. Here that caller
-    is the MCP server, where stdout is the JSON-RPC channel -- a report printed
-    down it does not garble the output, it desynchronises the session.
-    """
+    """Every verdict as data, nothing printed: the MCP server's stdout is its
+    JSON-RPC channel."""
     opts = dict(opts or {})
     env = gather(opts) if env is None else env
     return [c for check in CHECKS for c in check(opts, env)]
 
 
 def run(opts, env=None):
-    """evaluate() plus the printed report, for a command line. Returns the
-    Check list; the caller decides the exit code (doctor.has_failures)."""
+    """evaluate() plus the printed report. Returns the Check list; the caller
+    decides the exit code (verdict.has_failures)."""
     opts = dict(opts or {})
     checks = evaluate(opts, env)
     report(opts, checks)
@@ -260,12 +242,5 @@ def report(opts, checks):
         intent.append(f"--local-registry {opts['local_registry']}")
     if opts.get("local_proxy"):
         intent.append("--local-proxy")
-    print("toolcheck: " + " ".join(intent))
-    width = max((len(c.name) for c in checks), default=0)
-    for c in checks:
-        print(f"{c.status:<4}  {c.name:<{width}}  {c.detail}")
-    fails = sum(1 for c in checks if c.status == FAIL)
-    warns = sum(1 for c in checks if c.status == WARN)
-    print(f"{len(checks) - fails - warns} passed, {warns} warning(s), "
-          f"{fails} failure(s)"
-          + ("" if not fails else " -- livetest would not get as far as deploying"))
+    verdict.report("toolcheck: " + " ".join(intent), checks,
+                   "livetest would not get as far as deploying")

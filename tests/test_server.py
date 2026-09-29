@@ -1473,7 +1473,7 @@ def test_a_malformed_request_is_refused_before_the_missing_key_is():
 
 import json  # noqa: E402
 
-from bzm_opl_gen import livetest  # noqa: E402
+from bzm_opl_gen import kube  # noqa: E402
 # The faked kubectl lives with the other cluster-reading tests; reused rather
 # than re-declared so both layers exercise the same stand-in binary.
 from test_livetest import _fake_kubectl, _sv_pod  # noqa: E402
@@ -1491,7 +1491,7 @@ def fake_cluster(monkeypatch):
         _fake_kubectl(monkeypatch, **kw)
     install()
     yield install
-    livetest.cli_tool.cache_clear()
+    kube.cli_tool.cache_clear()
 
 
 def test_no_cluster_access_leaves_the_rest_of_the_api_working(fake_cluster):

@@ -1,16 +1,6 @@
-"""Preflighting a cluster nobody here can reach, from an evidence file.
-
-The cluster-side twin of `tests/test_manual_facts.py`: `bzm-cluster-evidence.sh`
-collects what `doctor.gather_cluster()` would have read, and this file is where
-the two paths are held to producing the *same* verdicts. A check must not be
-able to tell which way the data arrived -- so the parity test below compares
-whole Check lists, not a sample of them.
-
-The other half is the distinction the script exists to preserve: a section it
-could not read arrives as `null`, and `null` must stay a WARN ("we did not
-look") rather than becoming the FAIL an empty list means ("we looked, there are
-none").
-"""
+"""Preflighting from an evidence file: the imported and live paths give
+identical Check lists, and a null section stays an unverified WARN, never a
+FAIL."""
 
 import json
 import os
@@ -20,7 +10,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from bzm_opl_gen import cli, doctor, evidence, facts as facts_mod  # noqa: E402
+from bzm_opl_gen import cli, doctor, evidence, facts as facts_mod, kube  # noqa: E402
 # One document for every test that reads one, and the files a collector really
 # wrote. The cluster objects inside it are `test_doctor`'s, so the imported and
 # the live paths are fed literally the same objects.
@@ -43,9 +33,9 @@ def _live(monkeypatch, **served):
     answers = {"nodes": NODES, "ingressclass": CLASSES, "ns": NS_BASELINE,
                "limitrange,resourcequota,serviceaccount": SCOPED}
     answers.update(served)
-    monkeypatch.setattr(doctor.livetest, "kget",
+    monkeypatch.setattr(kube, "kget",
                         lambda cli, ns, kind, name=None: answers[kind])
-    monkeypatch.setattr(doctor.livetest, "kget_named",
+    monkeypatch.setattr(kube, "kget_named",
                         lambda cli, ns, kind, name=None: answers[kind])
     return doctor.gather_cluster("kubectl", "blazemeter")
 
@@ -76,9 +66,7 @@ def test_run_reports_exactly_what_evaluate_decided(capsys):
 
 
 def test_run_prints_extra_checks_the_caller_already_made(capsys):
-    """Provenance is decided before the checks run -- where the data came from,
-    whether it is for this namespace -- so it arrives as verdicts rather than as
-    a second output channel the UI would have to collect separately."""
+    """extra_checks lead the printed report."""
     mine = doctor.Check("cluster evidence", doctor.WARN, "collected elsewhere")
     checks = doctor.run(FACTS, OPTS, "blazemeter", cluster_data=_evidence_cluster(),
                         probes={}, extra_checks=[mine])
@@ -87,11 +75,7 @@ def test_run_prints_extra_checks_the_caller_already_made(capsys):
 
 
 def test_an_evidence_is_passed_whole_rather_than_taken_apart():
-    """#57/#58: the three things a file contributes are one Evidence from
-    cluster_from_evidence to here, so a caller holding one hands it over rather
-    than unpacking it into three keywords and hoping each lands in its slot.
-    The spelled-out form stays -- the live path supplies no evidence at all --
-    so the two have to agree."""
+    """evidence= and the three spelled-out parts give the same result."""
     imported = doctor.cluster_from_evidence(document(), "blazemeter")
     assert doctor.evaluate(FACTS, OPTS, "blazemeter", evidence=imported) == \
         doctor.evaluate(FACTS, OPTS, "blazemeter", cluster_data=imported.cluster,
@@ -108,10 +92,8 @@ def test_an_evidence_and_the_parts_it_carries_are_not_combined():
 
 
 def test_an_empty_evidence_still_means_go_and_look(monkeypatch):
-    """What `doctor` without --cluster-evidence passes: an Evidence carrying
-    nothing says exactly what the parameters' own defaults say, so the live
-    path still runs rather than being told there is no cluster."""
-    monkeypatch.setattr(doctor.livetest, "cli_tool", lambda: "kubectl")
+    """An Evidence of Nones still reads the live cluster."""
+    monkeypatch.setattr(kube, "cli_tool", lambda: "kubectl")
     monkeypatch.setattr(doctor, "gather_cluster",
                         lambda cli, ns: _evidence_cluster())
     monkeypatch.setattr(doctor, "probe_egress",
@@ -132,10 +114,7 @@ def test_imported_evidence_normalises_to_what_gather_cluster_returns(monkeypatch
 
 
 def test_the_same_cluster_produces_the_same_verdicts_either_way(monkeypatch):
-    """The property this whole feature rests on, and the one `facts.manual()`
-    keeps on the account side: nothing downstream learns which way the data
-    arrived. Compared as whole Check lists -- name, status and detail -- because
-    a difference in any of them is a difference in what the customer is told."""
+    """The same cluster gives identical Check lists live and from evidence."""
     live = doctor.evaluate(FACTS, SV_NGINX, "blazemeter",
                            cluster_data=_live(monkeypatch), probes={})
     imported = doctor.evaluate(FACTS, SV_NGINX, "blazemeter",
@@ -152,9 +131,7 @@ def test_the_same_cluster_produces_the_same_verdicts_either_way(monkeypatch):
 ])
 def test_a_section_that_could_not_be_read_warns_rather_than_failing(
         monkeypatch, section, check, live_kind):
-    """`null` is "we did not look", and a preflight that cannot look must not
-    hand back a FAIL and a non-zero exit for it. The live path collapses the
-    same way -- kget's {} -- so both are asserted here."""
+    """A null section WARNs on both paths."""
     imported = doctor.evaluate(FACTS, SV_NGINX, "blazemeter", probes={},
                                cluster_data=doctor.cluster_from_evidence(
                                    document(raw=raw(**{section: None}))).cluster)
@@ -178,12 +155,7 @@ def test_an_empty_section_still_fails_where_it_should(monkeypatch):
 
 
 def test_a_namespace_nobody_could_read_is_not_reported_as_one_that_is_absent():
-    """The same null-vs-empty distinction, on the one section that used to lose
-    it: `raw.namespace: null` was collapsed to `{}` on the way in, and `{}` is
-    what check_admission reads as "the namespace does not exist yet -- create
-    it". A collector that was refused `get ns` described nothing of the sort,
-    and that advice sends its reader after something that is not missing.
-    """
+    """`raw.namespace: null` is unread, not "does not exist yet"."""
     doc = document(raw=raw(namespace=None),
                    notes=["namespace: Error from server (Forbidden)"])
     imported = doctor.cluster_from_evidence(doc, "blazemeter")
@@ -207,10 +179,7 @@ def test_an_unreadable_quota_is_not_a_pass(monkeypatch):
 # -- the fully degraded file -------------------------------------------------
 
 def test_the_script_output_from_a_machine_with_no_cluster_is_usable():
-    """The hardest path, and a real file: every section null, notes populated.
-    It has to parse, warn about each thing it could not see, and fail on none of
-    them -- an evidence file collected by someone with less access than we hoped
-    is still worth reading."""
+    """The all-null collector output parses and only warns."""
     with open(DEGRADED) as fh:
         doc = json.load(fh)
     imported = doctor.cluster_from_evidence(doc, "some-ns")
@@ -233,11 +202,7 @@ def test_the_script_output_from_a_machine_with_no_cluster_is_usable():
 
 
 def test_no_account_and_no_cluster_reports_nothing_as_broken():
-    """The path both halves of this feature exist for: facts typed in from what
-    BlazeMeter shows the customer, cluster read from a file collected by someone
-    else. Everything unknown is a WARN and nothing is a failure -- the report
-    used to open with two failures about slots and threadsPerEngine, values no
-    one on this side of the account could have supplied."""
+    """Hand-entered facts plus an all-null evidence file report no failures."""
     with open(DEGRADED) as fh:
         imported = doctor.cluster_from_evidence(json.load(fh), "some-ns")
     checks = doctor.evaluate(facts_mod.manual("aaa111", "bbb222"), OPTS, "some-ns",
@@ -250,12 +215,8 @@ def test_no_account_and_no_cluster_reports_nothing_as_broken():
 
 # -- the half-read files -----------------------------------------------------
 #
-# The degraded file is all-null, which is the easy half: a reader that had lost
-# the null-vs-empty distinction entirely would still come out of it looking
-# right, because there is nothing there to be right about. These two carry both
-# answers at once -- the shape a real customer's token produces -- so what was
-# read has to reach a verdict and what was not has to reach a WARN saying so,
-# in the same report.
+# Some sections read, some refused (a real customer token's shape): what was
+# read reaches a verdict and what was not a WARN, in the same report.
 
 def _checks(path, opts, namespace="blazemeter"):
     return doctor.evaluate(FACTS, opts, namespace,
@@ -276,10 +237,8 @@ def test_a_half_read_file_fails_on_nothing_it_could_not_read(path):
 
 
 def test_a_token_with_namespaced_rbac_only_still_judges_the_namespace():
-    """The common customer token: `list nodes` and IngressClasses refused, the
-    namespace read whole. The cluster-scoped verdicts go unverified and the
-    namespaced ones are as real as on a live cluster -- half a report, and the
-    half that is there is not hedged."""
+    """Cluster-scoped reads refused: those verdicts WARN, namespaced ones are
+    real."""
     checks = _checks(CLUSTER_SCOPED_DENIED, {**OPTS, **SV_NGINX})
     for name in ("capacity", "engine packing", "node disk", "sv ingress class"):
         c = _find(checks, name)
@@ -290,10 +249,7 @@ def test_a_token_with_namespaced_rbac_only_still_judges_the_namespace():
 
 
 def test_a_reader_outside_the_namespace_does_not_report_it_as_absent():
-    """The mirror image, and the failure it exists to pin: `raw.namespace` null
-    with the nodes read is exactly the file where "the namespace does not exist
-    yet -- create it" would look plausible, because the rest of the report is
-    full of real verdicts. The namespace was refused, not missing."""
+    """Namespace refused with nodes read: the namespace is unread, not absent."""
     checks = _checks(NAMESPACE_DENIED, OPTS)
     admission = _find(checks, "admission")
     assert admission.status == doctor.WARN
@@ -333,18 +289,14 @@ def test_an_unrecognised_schema_is_refused_by_name(doc, found):
 
 
 def test_a_hand_edited_section_is_refused_by_name():
-    """The file is mailed in and sometimes trimmed on the way. Every section is
-    a kubectl document or null; anything else is said out loud rather than
-    reaching a check as an AttributeError."""
+    """A raw section that is neither a document nor null is a named ValueError."""
     with pytest.raises(ValueError) as e:
         doctor.cluster_from_evidence(document(raw=raw(nodes=[_big("a")])))
     assert "raw.nodes" in str(e.value) and "list" in str(e.value)
 
 
 def test_evidence_for_another_namespace_is_reported_not_quietly_used():
-    """LimitRanges, quotas, ServiceAccounts and the PSA labels are all
-    per-namespace, so evidence from one namespace says little about another --
-    but it is not nothing, so this reports rather than refuses."""
+    """Evidence for another namespace WARNs rather than refusing."""
     imported = doctor.cluster_from_evidence(document(namespace="their-ns"),
                                             "blazemeter")
     c = _find(imported.checks, "evidence")
@@ -361,10 +313,7 @@ def test_matching_namespace_just_says_where_the_data_came_from():
 
 
 def test_the_summary_reports_the_same_mismatch_the_verdict_states():
-    """One decision, two renderings. A caller that puts the file's facts in a
-    header rather than in a verdict list gets the mismatch as a field -- and the
-    browser used to re-derive it by comparing the two namespaces itself, which
-    is a second opinion about the same file."""
+    """evidence_summary's `elsewhere` agrees with the verdict."""
     doc = document(namespace="their-ns")
     assert doctor.evidence_summary(doc, "blazemeter")["elsewhere"] is True
     assert doctor.evidence_summary(doc, "their-ns")["elsewhere"] is False
@@ -375,9 +324,7 @@ def test_the_summary_reports_the_same_mismatch_the_verdict_states():
 
 
 def test_a_file_naming_no_namespace_is_not_a_mismatch():
-    """There is nothing to mismatch with. A warning nobody can act on is one
-    more line between the reader and the ones they can -- and the header still
-    says the file named no namespace, so the two are not collapsed."""
+    """A file naming no namespace is not a mismatch."""
     doc = document(namespace=None)
     summary = doctor.evidence_summary(doc, "blazemeter")
     assert summary["elsewhere"] is False
@@ -394,10 +341,8 @@ def test_a_summary_nobody_named_a_namespace_for_claims_no_mismatch():
 
 
 def test_notes_reach_the_report_because_they_explain_the_nulls():
-    """Six WARNs and no reason for any of them is a worse report than one that
-    says the collector was denied. The script writes "<section>: <error>" and
-    repeats the same error per section, so the sections are listed and each
-    distinct reason given once."""
+    """Collector notes list the unreadable sections and each distinct reason
+    once."""
     imported = doctor.cluster_from_evidence(document(
         raw=raw(nodes=None, ingressclasses=None),
         notes=["nodes: forbidden", "ingressclasses: forbidden"]))
@@ -413,7 +358,7 @@ def _run(monkeypatch, *args):
     monkeypatch.setattr("sys.argv", ["bzm-opl-gen", *args])
     # Nothing may reach for a cluster on this path: the point is a preflight
     # from a laptop with no kubeconfig at all.
-    monkeypatch.setattr(doctor.livetest, "cli_tool",
+    monkeypatch.setattr(kube, "cli_tool",
                         lambda: pytest.fail("doctor went looking for a cluster"))
     with pytest.raises(SystemExit) as e:
         cli.main()
@@ -422,9 +367,7 @@ def _run(monkeypatch, *args):
 
 def test_doctor_runs_from_an_evidence_file_with_no_cluster(monkeypatch, capsys,
                                                            tmp_path):
-    """The whole command as a user runs it: a facts file, an evidence file, no
-    kubeconfig, no bundle. Every section of this evidence is null, so there is
-    nothing to fail on -- exit 0 with warnings, not a false alarm."""
+    """`doctor --cluster-evidence` over an all-null file exits 0 with warnings."""
     monkeypatch.chdir(tmp_path)            # no out/profile.json anywhere near
     code = _run(monkeypatch, "doctor", "--facts", EXAMPLE_FACTS,
                 "--cluster-evidence", DEGRADED)
@@ -432,19 +375,8 @@ def test_doctor_runs_from_an_evidence_file_with_no_cluster(monkeypatch, capsys,
     assert code == 0
     assert "cluster evidence" in out and "some-ns" in out
     assert "WARN" in out and "FAIL" not in out
-    # The count, not just the presence: a refactor that dropped a check's
-    # unread branch would still leave *some* WARN in the output and pass an
-    # "is there a WARN" assertion. Every section of this file is null, so the
-    # number is what says each one was noticed.
-    #
-    # This is no longer the thing *protecting* that -- @reads and the two
-    # source-level guards in test_doctor.py are, and they name the check rather
-    # than leaving you to work out which of nine went missing. It stays as a
-    # plain regression pin over the whole degraded run; update it deliberately
-    # when a check is added.
-    # 9: +1 for check_engine_packing, which reads the same unread `nodes`
-    # section as capacity and disk and says so separately rather than borrowing
-    # theirs, and +1 for check_engine_heap, which has no engineXmx to read.
+    # The count pins that every null section was noticed (@reads and the source
+    # guards in test_doctor.py name the check). Update it when a check is added.
     assert out.count("WARN") == 9, out
 
 
@@ -487,16 +419,8 @@ def _find_line(out, needle):
 
 # -- the collector and the table it writes to --------------------------------
 #
-# The document's keys used to be written out longhand everywhere they were
-# read, the collector included, so the script could rename a section and the
-# only thing that noticed was a runtime WARN about a section that "could not be
-# read" -- which is exactly the sentence a section nobody was allowed to read
-# produces. `bzm_opl_gen/evidence.py` states them once; these two tests are what
-# hold the shell script and the fixtures to that statement.
-#
-# A shell script cannot import a Python table, so the script is parsed. That is
-# the honest version of the claim a comment in either file would have made, and
-# this repo already reads sources in tests (test_doctor's two @reads guards).
+# The shell script and the fixtures are held to `evidence.DOCUMENT`; a script
+# cannot import a Python table, so it is parsed.
 
 COLLECTOR = os.path.join(os.path.dirname(__file__), "..", "scripts",
                          "bzm-cluster-evidence.sh")
@@ -540,13 +464,8 @@ def _collector_paths():
 
 
 def test_the_collector_writes_exactly_the_document_the_table_states():
-    """Rename a section in either place and this names it.
-
-    The set is compared both ways on purpose: a key the script writes and the
-    table does not know is a section every reader will treat as absent, and a
-    key the table states and the script does not write is a reader waiting for
-    something that never arrives.
-    """
+    """The collector script writes exactly evidence.DOCUMENT's keys, compared
+    both ways."""
     written, stated = _collector_paths(), set(evidence.collector_paths())
     assert not stated - written, (
         f"bzm_opl_gen/evidence.py states {sorted(stated - written)}, which "
@@ -559,19 +478,14 @@ def test_the_collector_writes_exactly_the_document_the_table_states():
 
 
 def test_no_key_in_the_document_carries_a_dot():
-    """The paths readers cite are the keys joined with one, so a key holding a
-    dot would split into two that are not there -- and `known()` would report
-    the path as one the document does not define, which is the one answer that
-    is never about the file."""
+    """No document key contains a dot."""
     for path in evidence.paths():
         assert evidence.known(*path.split(".")), path
 
 
 @pytest.mark.parametrize("path", sorted(FIXTURES), ids=os.path.basename)
 def test_every_evidence_fixture_carries_the_document_the_table_states(path):
-    """The fixtures are files a collector wrote, so they answer to the same
-    table -- otherwise a rename leaves them describing the old shape and every
-    test over them keeps passing while the readers see nothing."""
+    """Every collected fixture file matches evidence.DOCUMENT."""
     with open(path) as fh:
         doc = json.load(fh)
     assert _paths_in(doc) == set(evidence.collector_paths())
@@ -584,9 +498,7 @@ def test_the_built_document_carries_the_same_shape_as_a_collected_one():
 
 
 def _paths_in(doc, prefix=()):
-    """Every dotted path a fixture carries, walked exactly as deep as the table
-    goes -- below that a section is the kubectl document it copied, which is
-    nobody's to name here."""
+    """Every dotted path a fixture carries, as deep as the table goes."""
     stated = set(evidence.collector_paths())
     paths = set()
     for key, value in doc.items():

@@ -48,8 +48,8 @@ import zipfile
 
 from . import (agent_env as agent_env_mod, api, doctor,
                evidence as evidence_mod, facts as facts_mod,
-               generate as gen_mod, livetest, options as options_mod, plan,
-               suggest as suggest_mod, workstation)
+               generate as gen_mod, options as options_mod, plan,
+               suggest as suggest_mod, sv_read, workstation)
 
 
 # -- failures ------------------------------------------------------------------
@@ -1579,7 +1579,7 @@ def delete_location(client, harbor_id):
 # What each unreadable cluster means, in the user's terms -- a reason without a
 # way forward is the dead panel the watch list must never become.
 SV_READ_MESSAGES = {
-    livetest.SV_READ_NO_CLI:
+    sv_read.SV_READ_NO_CLI:
         "No kubectl or oc on this machine, so the namespace cannot be read "
         "from here. Nothing else in this tool needs one.",
     # One message for several causes -- no kubeconfig, no current context, a
@@ -1587,13 +1587,13 @@ SV_READ_MESSAGES = {
     # parse. The way forward is the same for all of them, and the raw reason
     # travels alongside as `detail`; what it must not do is name only one of
     # them, which reads as false to anyone whose context is fine but slow.
-    livetest.SV_READ_NO_CONTEXT:
+    sv_read.SV_READ_NO_CONTEXT:
         "kubectl/oc is installed, but no cluster could be read -- no context "
         "is configured, or the one that is did not answer.",
-    livetest.SV_READ_DENIED:
+    sv_read.SV_READ_DENIED:
         "The cluster refused the read -- this context is not allowed to list "
         "pods in that namespace.",
-    livetest.SV_READ_NO_MOCKS:
+    sv_read.SV_READ_NO_MOCKS:
         "That namespace holds no virtual-service pods. Deploy the virtual "
         "service in BlazeMeter first; this list refreshes on the poll.",
 }
@@ -1602,7 +1602,7 @@ SV_READ_MESSAGES = {
 def sv_read_message(read):
     """The sentence shown for an unreadable cluster.
 
-    `.get`, not `[]`, because livetest owns the set of reasons -- a fifth one
+    `.get`, not `[]`, because sv_read owns the set of reasons -- a fifth one
     should degrade to the raw detail, not raise out of the one call whose
     contract is that it never returns a bare error.
     """
@@ -1623,7 +1623,7 @@ def sv_mocks(namespace, sv_subdomain=None):
     catch and silently reads as "nothing deployed", which is the one answer
     this must never fake.
     """
-    read = livetest.sv_read(namespace)
+    read = sv_read.sv_read(namespace)
     return {
         "status": read.status,
         "mocks": [{"name": m["name"], "port": m["port"],
@@ -1699,7 +1699,7 @@ SV_CHECK_503 = (
 
 def sv_check_reason(err):
     """Classify a probe that never got a status line, in the same terms as
-    livetest._sv_read_reason: by inspecting what came back, because these four
+    sv_read._sv_read_reason: by inspecting what came back, because these four
     have four different fixes and "could not connect" has none."""
     e = getattr(err, "reason", err)      # URLError wraps; a read timeout does not
     if isinstance(e, ssl.SSLError):
