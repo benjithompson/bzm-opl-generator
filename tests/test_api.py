@@ -1,5 +1,8 @@
 import json
 import os
+import socket
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -50,10 +53,12 @@ def test_list_calls_ask_for_more_than_one_page():
     c = FakeClient({})
     c.workspaces(123456)
     c.private_locations(account_id=123456)
+    c.accounts()
 
     paths = [p for _, p, _ in c.calls]
     assert paths[0] == "/workspaces?accountId=123456&limit=1000"
     assert "limit=1000" in paths[1]
+    assert paths[2] == "/accounts?limit=1000"
 
 
 def test_the_account_is_asked_what_its_functionalities_are_called():
@@ -95,6 +100,43 @@ def test_the_location_is_asked_which_images_its_agent_runs():
         "version": "2.4.454-reduced", "reducedVersion": "2.4.454-reduced",
         "imageRelativePath": "blazemeter/v4", "restartPolicy": "Never",
         "minSlots": 1, "dockerRegistry": "gcr.io/verdant-bulwark-278"}
+
+
+class _Body:
+    def __init__(self, raw):
+        self._raw = raw
+
+    def read(self):
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.mark.parametrize("answer", [
+    urllib.error.URLError(socket.gaierror(-2, "Name or service not known")),
+    urllib.error.URLError(ConnectionRefusedError(61, "Connection refused")),
+    TimeoutError("timed out"),
+    _Body(b"<html>502 Bad Gateway</html>"),
+    _Body(b"[1, 2]"),
+])
+def test_every_failure_to_answer_is_a_bzm_api_error(monkeypatch, answer):
+    """Not only an HTTP status. Anything else escapes `core._upstream` as its
+    own type: a 500 with a traceback on the page, and a withheld sentence in an
+    MCP session. None of these has a status to judge, so `status` is None."""
+    def urlopen(req, timeout=None, **kw):
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    c = api.BzmClient(credentials=("id", "secret"))
+    with pytest.raises(api.BzmApiError) as e:
+        c.user()
+    assert e.value.status is None
+    assert "GET /user" in str(e.value)
 
 
 def test_update_private_location_omits_unset_fields():
