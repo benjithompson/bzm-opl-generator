@@ -16,7 +16,7 @@ import zipfile
 import pytest
 import yaml
 
-from bzm_opl_gen import api, core, footprint, generate as gen, kube, quantity
+from bzm_opl_gen import api, core, generate as gen, kube
 from test_generate import FACTS
 
 
@@ -106,13 +106,11 @@ class FakeClient:
 
     def create_private_location(self, name, account_id, workspace_ids,
                                 func_ids=("performance",), slots=1,
-                                threads_per_engine=None, override_cpu=None,
-                                override_memory=None):
+                                threads_per_engine=None):
         self.calls.append(("create_private_location", name, account_id))
         # A fresh harbor has no ships, which is why create_ship exists.
         return {"id": "h9", "name": name, "slots": slots,
-                "funcIds": list(func_ids), "ships": [],
-                "overrideCPU": override_cpu, "overrideMemory": override_memory}
+                "funcIds": list(func_ids), "ships": []}
 
     def delete_private_location(self, harbor_id):
         self.calls.append(("delete", harbor_id))
@@ -148,10 +146,10 @@ class _RunnableClient(FakeClient):
 
     def create_private_location(self, name, account_id, workspace_ids,
                                 func_ids=("performance",), slots=1,
-                                threads_per_engine=None, **overrides):
+                                threads_per_engine=None):
         return dict(super().create_private_location(
-            name, account_id, workspace_ids, func_ids=func_ids, slots=slots,
-            **overrides), threadsPerEngine=threads_per_engine)
+            name, account_id, workspace_ids, func_ids=func_ids, slots=slots),
+            threadsPerEngine=threads_per_engine)
 
 
 def test_a_location_that_cannot_start_a_test_says_so_when_it_is_created():
@@ -1640,24 +1638,3 @@ def test_a_location_with_no_agents_rates_nothing():
     out = core.account_capacity(client, 7)
     assert out["locations"][0]["engines"] == 0
     assert out["locations"][0]["rated_vus"] == 0
-
-
-def test_a_new_engine_location_requests_what_its_engines_are_limited_to():
-    """No agent variable sets engine requests, so a location that runs engines
-    is created with overrides equal to the default engine size."""
-    c = FakeClient()
-    made = core.create_location(c, "loc", 1, 2, func_ids=["performance"])
-    assert made["location"]["overrideCPU"] == footprint.ENGINE_OVERRIDE_CPU
-    assert made["location"]["overrideMemory"] == footprint.ENGINE_OVERRIDE_MEMORY_MB
-    sv = core.create_location(c, "sv", 1, 2, func_ids=["mockServices"])
-    assert sv["location"]["overrideCPU"] is None
-    given = core.create_location(c, "big", 1, 2, func_ids=["performance"],
-                                 override_cpu=4, override_memory=16384)
-    assert given["location"]["overrideCPU"] == 4
-
-
-def test_the_engine_overrides_are_the_engine_default_size():
-    assert quantity.parse_cpu(footprint.ENGINE_DEFAULT_CPU) == \
-        footprint.ENGINE_OVERRIDE_CPU * 1000
-    assert quantity.parse_memory(footprint.ENGINE_DEFAULT_MEM) == \
-        footprint.ENGINE_OVERRIDE_MEMORY_MB * 1024 ** 2

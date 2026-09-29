@@ -1244,24 +1244,3 @@ def test_the_cluster_defaults_to_kubernetes_and_openshift_has_a_flag(
 def test_openshift_and_not_openshift_are_exclusive(monkeypatch, tmp_path):
     with pytest.raises(SystemExit):
         _generate(monkeypatch, tmp_path, "--openshift", "--not-openshift")
-
-
-def test_update_location_sets_the_engine_requests_and_prints_before_and_after(
-        monkeypatch, capsys):
-    """The one command that fixes an existing location's engine requests."""
-    seen = {}
-
-    def update(client, harbor_id, **settings):
-        seen.update(settings, harbor_id=harbor_id)
-        return {"before": {k: None for k in core.LOCATION_SETTINGS},
-                "after": {"slots": None, "threads_per_engine": None,
-                          "override_cpu": 2, "override_memory": 8192},
-                "ignored": []}
-    _account(monkeypatch, FakeClient())
-    monkeypatch.setattr(cli.core, "update_location", update)
-    _run(monkeypatch, "update-location", "--api-key", "k.json", "--harbor-id",
-         "h1", "--override-cpu", "2", "--override-memory", "8192")
-    assert seen["override_cpu"] == 2 and seen["override_memory"] == 8192
-    assert seen["slots"] is None
-    out = capsys.readouterr().out
-    assert "overrideCPU       not set -> 2  (changed)" in out

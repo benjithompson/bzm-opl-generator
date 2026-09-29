@@ -171,8 +171,7 @@ class BzmClient:
 
     def create_private_location(self, name, account_id, workspace_ids,
                                 func_ids=DEFAULT_FUNC_IDS, slots=1,
-                                threads_per_engine=DEFAULT_THREADS_PER_ENGINE,
-                                override_cpu=None, override_memory=None):
+                                threads_per_engine=DEFAULT_THREADS_PER_ENGINE):
         h = self.post("/private-locations", {
             "name": name,
             "accountId": account_id,
@@ -181,11 +180,9 @@ class BzmClient:
             "slots": slots,
         })
         # POST ignores threadsPerEngine, and a location without it 403s every
-        # test start, so PATCH it in (with the engine overrides) before
-        # handing the location back.
+        # test start, so PATCH it in before handing the location back.
         return self.update_private_location(
-            h["id"], slots=slots, threads_per_engine=threads_per_engine,
-            override_cpu=override_cpu, override_memory=override_memory)
+            h["id"], slots=slots, threads_per_engine=threads_per_engine)
 
     def update_private_location(self, harbor_id, slots=None,
                                 threads_per_engine=None,

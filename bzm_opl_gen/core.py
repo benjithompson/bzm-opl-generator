@@ -284,34 +284,20 @@ def slots_refusal(func_ids, slots):
     return None
 
 
-def default_engine_overrides(func_ids):
-    """(overrideCPU, overrideMemory) a new location gets: the engine size for
-    one that runs engines, so engines request what they are limited to, and
-    (None, None) for one that does not (its pods are not engines)."""
-    if any(facts_mod.runs_engine(f) for f in func_ids or ()):
-        return footprint.ENGINE_OVERRIDE_CPU, footprint.ENGINE_OVERRIDE_MEMORY_MB
-    return None, None
-
-
 def create_location(client, name, account_id, workspace_id,
                     func_ids=api.DEFAULT_FUNC_IDS, slots=1,
-                    threads_per_engine=footprint.DEFAULT_THREADS_PER_ENGINE,
-                    override_cpu=None, override_memory=None):
+                    threads_per_engine=footprint.DEFAULT_THREADS_PER_ENGINE):
     """Create a private location, and say whether a test can start on it.
 
     Returns {location, runnable, warning}; `warning` is None for a runnable
-    location. A slot minimum is refused before the POST. Overrides left None
-    take `default_engine_overrides`.
+    location. A slot minimum is refused before the POST.
     """
     refusal = slots_refusal(func_ids, slots)
     if refusal:
         raise BadRequest(refusal)
-    cpu, mem = default_engine_overrides(func_ids)
     loc = _upstream(client.create_private_location, name, account_id,
                     [workspace_id], func_ids=list(func_ids), slots=slots,
-                    threads_per_engine=threads_per_engine,
-                    override_cpu=cpu if override_cpu is None else override_cpu,
-                    override_memory=mem if override_memory is None else override_memory)
+                    threads_per_engine=threads_per_engine)
     runnable = location_runnable(loc)
     return {"location": loc, "runnable": runnable,
             "warning": None if runnable else LOCATION_UNRUNNABLE}

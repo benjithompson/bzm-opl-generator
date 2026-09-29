@@ -13,18 +13,6 @@ anything that breaks.
 
 ### Added
 
-- **New engine locations request what their engines are limited to.**
-  `create-location` (and the web page and MCP `opl_location create`) now sets
-  `overrideCPU=2` and `overrideMemory=8192` on a location that runs engines,
-  matching the default 2 CPU / 8Gi engine limit; `--override-cpu` and
-  `--override-memory` change them. BlazeMeter has no agent variable for engine
-  requests, so the location is the only place they can be set.
-- **`bzm-opl-gen update-location`** changes an existing location's slots,
-  threadsPerEngine or engine requests and prints before and after (MCP:
-  `opl_location update`). The manifests and Helm READMEs print the exact
-  command when the location's requests differ from the bundle's limits, and
-  say so when they already match.
-
 - **`generate --openshift`** says the target cluster is OpenShift: commands
   use `oc`, `sv_ingress=openshift` (a Route) is allowed, and the injected
   cluster trust bundle is offered. The cluster defaults to plain Kubernetes, so

@@ -188,10 +188,6 @@ class LocationIn(BaseModel):
     func_ids: list[str] = list(api.DEFAULT_FUNC_IDS)
     slots: int = 1
     threads_per_engine: int = footprint.DEFAULT_THREADS_PER_ENGINE
-    # None takes core.default_engine_overrides (the engine size for a location
-    # that runs engines).
-    override_cpu: Optional[int] = None
-    override_memory: Optional[int] = None
 
 @app.post("/api/locations")
 @_writes
@@ -199,9 +195,7 @@ def location_create(loc: LocationIn, client: Client):
     made = core.create_location(client, loc.name, loc.account_id,
                                 loc.workspace_id, func_ids=loc.func_ids,
                                 slots=loc.slots,
-                                threads_per_engine=loc.threads_per_engine,
-                                override_cpu=loc.override_cpu,
-                                override_memory=loc.override_memory)
+                                threads_per_engine=loc.threads_per_engine)
     # The location document with the warning beside it (null when runnable).
     return {**made["location"], "warning": made["warning"]}
 
