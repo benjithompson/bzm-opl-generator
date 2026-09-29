@@ -774,3 +774,172 @@ def test_no_credential_is_a_flag(monkeypatch, capsys):
     flags = re.findall(r"--[a-z-]+", capsys.readouterr().out)
     assert "--verify" in flags
     assert not [f for f in flags if re.search("pass|user|token|secret", f)]
+
+
+# -- facts without an account: pinned to the newest release ---------------------
+
+GCR = "verdant-bulwark-278"
+
+# Tag lists shaped like BlazeMeter's registry: a floating `latest`, branch
+# builds, CI build numbers on the mock images.
+RELEASE_TAGS = {
+    f"{GCR}/blazemeter/crane": ["3.7.44", "3.8.0", "3.8.1", "3.5.1-2", "1672",
+                                "latest", "latest-master"],
+    f"{GCR}/blazemeter/apm": ["1.7.110", "1.7.126", "MOB-46286-workload-data",
+                              "1.7.115-mob52709-himanshu", "latest"],
+    f"{GCR}/blazemeter/v4": ["1.24.169", "2.0.38", "2.4.538-reduced",
+                             "2.4.538-jmeter",
+                             "2.4.539-MOB-53689_playwright_fix-22-reduced",
+                             "latest"],
+    f"{GCR}/blazemeter/doduo": ["0.0.144", "0.0.145", "latest"],
+    f"{GCR}/blazemeter/proxy-recorder": ["2.2.2", "1.11.63-BZTR-1689-2-16"],
+    f"{GCR}/blazemeter/service-mock": ["6.0.30.4", "6.0.34.3", "6.0.35.2347",
+                                       "6.0.34", "latest"],
+    f"{GCR}/blazemeter/group-gateway": ["6.0.34.3", "6.0.35.2347"],
+    f"{GCR}/blazemeter/mock-pc-service": ["6.0.34.3", "6.0.35.2347"],
+}
+PINNED = {"blazemeter/crane": "3.8.1", "blazemeter/apm": "1.7.126",
+          "blazemeter/v4": "2.4.538-reduced", "blazemeter/doduo": "0.0.145",
+          "blazemeter/proxy-recorder": "2.2.2",
+          "blazemeter/service-mock": "6.0.34.3",
+          "blazemeter/group-gateway": "6.0.34.3",
+          "blazemeter/mock-pc-service": "6.0.34.3"}
+
+
+@pytest.fixture
+def releases(registry):
+    """BlazeMeter's registry with RELEASE_TAGS, overridable per repo."""
+    def install(**over):
+        tags = {**RELEASE_TAGS, **over}
+        return registry(tags={p: [t] for p, t in tags.items() if t is not None})
+    return install
+
+
+@pytest.mark.parametrize("path,tags,want", [
+    ("blazemeter/crane", RELEASE_TAGS[f"{GCR}/blazemeter/crane"], "3.8.1"),
+    ("blazemeter/v4", RELEASE_TAGS[f"{GCR}/blazemeter/v4"], "2.4.538-reduced"),
+    ("blazemeter/service-mock", RELEASE_TAGS[f"{GCR}/blazemeter/service-mock"],
+     "6.0.34.3"),
+    ("blazemeter/apm", ["latest", "1.7.115-mob52709-himanshu"], None),
+    ("blazemeter/torero", ["4.6.192", "latest"], None),
+])
+def test_a_release_is_the_repository_s_own_release_shape(path, tags, want):
+    """Branch builds, CI build numbers and `latest` never count as a release,
+    and a repository with no series here has none."""
+    assert image_catalog.release_tag(path, tags) == want
+
+
+def test_crane_asks_for_torero_and_richrach_by_latest_so_neither_is_pinned():
+    assert "blazemeter/torero" not in image_catalog.RELEASE_SERIES
+    assert "blazemeter/richrach" not in image_catalog.RELEASE_SERIES
+
+
+def test_release_pins_tell_pinned_no_release_and_unread_apart(releases):
+    """Invariant 1: three answers, three states."""
+    releases(**{f"{GCR}/blazemeter/apm": ["latest"],
+                f"{GCR}/blazemeter/doduo": None})
+    pins = core.release_pins()
+    by = {image_catalog.repo_path(r): p for r, p in pins["images"].items()}
+    assert by["blazemeter/crane"] == {"state": "pinned", "tag": "3.8.1",
+                                      "detail": None}
+    assert by["blazemeter/apm"]["state"] == "no-release"
+    assert by["blazemeter/doduo"]["state"] == "unread"
+    assert by["blazemeter/doduo"]["detail"]
+    assert pins["state"] == "partial" and "1 of 8" in pins["detail"]
+
+
+def test_release_pins_never_wait_past_their_budget(monkeypatch):
+    import time as time_mod
+
+    def slow(method, url, *a, **kw):
+        time_mod.sleep(0.5)
+        raise registry_client.Unreachable("slow")
+    monkeypatch.setattr(registry_client, "http_request", slow)
+    started = time_mod.monotonic()
+    pins = core.release_pins(budget_s=0.05)
+    assert time_mod.monotonic() - started < 0.4
+    assert pins["state"] == "unread"
+    assert all("no answer within" in p["detail"] for p in pins["images"].values())
+
+
+def test_manual_facts_pin_every_image_with_a_release(releases):
+    releases()
+    made = core.manual_facts("h", "s", func_ids=["performance", "mockServices"])
+    f = made["facts"]
+    assert f["crane_image"] == f"{PUBLIC}/blazemeter/crane:3.8.1"
+    assert f["crane_source"] == "registry-newest"
+    for i in f["images"]:
+        path = image_catalog.repo_path(i["repo"])
+        if path in PINNED:
+            assert (i["tag"], i["source"]) == (PINNED[path], "registry-newest")
+        else:
+            assert (i["tag"], i["source"]) == ("latest", "catalogue"), path
+    # The key crane resolves an override by is the catalogue's, unchanged.
+    assert {i["key"] for i in f["images"]} == {
+        i["key"] for i in facts_mod.FALLBACK_IMAGES}
+    said = " ".join(made["warnings"])
+    assert "not read from your location" in said
+    assert "could not be read" not in said
+
+
+def test_manual_facts_keep_the_old_tags_and_say_so_when_the_registry_is_down():
+    made = core.manual_facts("h", "s")
+    f = made["facts"]
+    assert f["crane_image"].endswith(":latest") and f["crane_source"] == "catalogue"
+    assert {i["source"] for i in f["images"]} == {"catalogue"}
+    assert f["release_pins"]["state"] == "unread"
+    assert {p["state"] for p in f["release_pins"]["images"].values()} == {"unread"}
+    said = " ".join(made["warnings"])
+    assert "could not be read" in said and "far older than the newest" in said
+
+
+def test_pin_warnings_are_plain_prose(releases):
+    """Shown in Markdown and in a terminal alike."""
+    releases(**{f"{GCR}/blazemeter/doduo": None})
+    for w in core.manual_facts("h", "s")["warnings"]:
+        assert not re.search(r"`|--|->|\*", w), w
+
+
+def test_gathered_facts_record_that_nothing_was_pinned():
+    f = facts_mod.gather(_Account(VERSIONS_PERFORMANCE), "H1")
+    assert f["release_pins"]["state"] == "not-asked"
+    assert not [w for w in core.facts_warnings(f) if "BlazeMeter's registry" in w]
+
+
+def test_generating_from_pinned_facts_asks_no_registry(releases, monkeypatch):
+    """The pins live in the facts; generate never reaches the network."""
+    releases()
+    f = core.manual_facts("h", "s")["facts"]
+    monkeypatch.setattr(registry_client, "http_request",
+                        lambda *a, **k: pytest.fail("generate read a registry"))
+    files = gen.generate(f, {"namespace": "n", "auth_token": "t"})
+    assert "blazemeter/crane:3.8.1" in files["bzm_deployment.yaml"]
+    md = files[bundle_names.IMAGES_FILE]
+    assert "not read from your location" in md
+    assert "is not the newest release" not in md
+
+
+def test_images_md_says_latest_is_old_when_nothing_was_pinned():
+    md = gen.generate(facts_mod.manual("h", "s"),
+                      {"namespace": "n", "auth_token": "t"})[bundle_names.IMAGES_FILE]
+    assert "is not the newest release" in md
+    assert "`blazemeter/v4`" in md and "`blazemeter/torero`" not in md.split(
+        "is not the newest release")[1].split("##")[0]
+
+
+def test_images_md_from_a_location_s_own_list_carries_neither_note():
+    md = gen.generate(FACTS, FORMAT_BASE["manifests"])[bundle_names.IMAGES_FILE]
+    assert "not read from your location" not in md
+    assert "is not the newest release" not in md
+
+
+def test_the_catalogue_view_pins_only_when_it_asks_the_registry(releases):
+    fake = releases()
+    rows = core.image_catalog(None, lookup=False)["images"]
+    assert {r["source"] for r in rows} == {"catalogue"}
+    assert not fake.calls
+    rows = {image_catalog.repo_path(r["repo"]): r
+            for r in core.image_catalog(None, lookup=True)["images"]}
+    assert rows["blazemeter/crane"]["tag"] == "3.8.1"
+    assert rows["blazemeter/crane"]["source"] == "registry-newest"
+    assert rows["blazemeter/torero"]["source"] == "catalogue"

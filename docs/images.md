@@ -47,8 +47,36 @@ What is known about each image:
 ## Versions, digests and sizes
 
 The versions come from the location's own image list when `facts` could read
-it, else from a running agent's inventory, else from the built-in catalogue
-(which floats on `latest`). Each row says which (`source`).
+it, else from a running agent's inventory, else from the built-in catalogue.
+Each row says which (`source`: `location-versions`, `agent-inventory`,
+`registry-newest` or `catalogue`).
+
+### Without an account
+
+`facts --manual`, the web UI's manual entry, and the whole-catalogue view
+cannot read the location's list. They pin each image to the **newest release
+in BlazeMeter's registry** instead (`source: registry-newest`), crane
+included, so a bundle deploys a current agent.
+
+- `latest` is not used, because on BlazeMeter's registry it names releases far
+  older than the newest. For the test engine it was an earlier major version
+  when this was checked.
+- A release is the repository's own release shape: `X.Y.Z` for crane, apm,
+  doduo and the proxy recorder, `X.Y.Z-reduced` for the engine, and `X.Y.Z.N`
+  with a small `N` for the virtual-service images. Branch builds such as
+  `-MOB-...` never match.
+- torero and richrach keep `latest`: the agent asks for them by that tag.
+- If the registry does not answer within a few seconds, the images keep the
+  catalogue's tags (`source: catalogue`) and the facts carry a warning.
+- A location can ask for an older release than the newest (one was seen
+  listing engine `2.4.533-reduced` while `2.4.538-reduced` was the newest).
+  A mirror built without an account can then lack the image the agent asks
+  for. Connect an API key for the exact list, put a pull-through cache in
+  front of BlazeMeter's registry, or run `images --verify` once the agent is
+  online.
+
+The whole-catalogue view pins only when it asks the registry anyway
+(`--lookup`, or `lookup=true` on `/api/images`).
 
 `--lookup` asks BlazeMeter's public registry, anonymously, for each image's
 digest, its compressed size for linux/amd64, and the newest tag published in

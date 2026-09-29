@@ -307,7 +307,7 @@ def test_facts_warnings_name_blank_ids_by_marker():
     said = " ".join(core.facts_warnings(core.manual_facts()["facts"]))
     assert "harbor_id (<HARBOR_ID>) and ship_id (<SHIP_ID>)" in said
     assert "not a legal label value" in said
-    assert core.facts_warnings(core.manual_facts("H1", "S1")["facts"]) == []
+    assert core.facts_warnings(core.manual_facts("H1", "S1", pin=False)["facts"]) == []
 
 
 def test_facts_warnings_name_a_gui_location_with_no_browser_image():

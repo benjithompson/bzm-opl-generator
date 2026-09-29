@@ -376,15 +376,67 @@ def gather_facts(client, harbor_id):
     return _upstream(facts_mod.gather, client, harbor_id)
 
 
-def manual_facts(harbor_id=None, ship_id=None, func_ids=api.DEFAULT_FUNC_IDS):
+# The whole of pinning to the newest releases, however many repositories.
+PIN_BUDGET_S = 8
+
+
+def release_pins(budget_s=None):
+    """facts.release_pins: the newest release tag of each repository with a
+    release series, read from BlazeMeter's registry in parallel. Never raises
+    and never waits past the budget: an unanswered read is unread."""
+    budget_s = PIN_BUDGET_S if budget_s is None else budget_s
+    repos = image_catalog_mod.release_repos()
+
+    def one(repo):
+        reg, path, _ = registry_client.registry_for(f"{repo}:latest")
+        t = reg.tags(path)
+        if t["state"] != registry_client.READ:
+            return {"state": facts_mod.PIN_UNREAD, "tag": None,
+                    "detail": t["detail"]}
+        tag = image_catalog_mod.release_tag(
+            image_catalog_mod.repo_path(repo), t["tags"])
+        if tag is None:
+            return {"state": facts_mod.PIN_NO_RELEASE, "tag": None,
+                    "detail": "the registry lists no release tag for it"}
+        return {"state": facts_mod.PIN_PINNED, "tag": tag, "detail": None}
+
+    pool = concurrent.futures.ThreadPoolExecutor(REGISTRY_WORKERS)
+    futures = {repo: pool.submit(one, repo) for repo in repos}
+    concurrent.futures.wait(futures.values(), timeout=budget_s)
+    # Not waiting for a read still in flight: its thread ends on its own timeout.
+    pool.shutdown(wait=False, cancel_futures=True)
+    images = {}
+    for repo, fut in futures.items():
+        if fut.done() and not fut.cancelled() and fut.exception() is None:
+            images[repo] = fut.result()
+        else:
+            images[repo] = {"state": facts_mod.PIN_UNREAD, "tag": None,
+                            "detail": f"no answer within {budget_s}s"}
+    unread = [r for r, p in images.items() if p["state"] == facts_mod.PIN_UNREAD]
+    if not unread:
+        state, detail = registry_client.READ, None
+    else:
+        state = (registry_client.UNREAD if len(unread) == len(images)
+                 else "partial")
+        detail = (f"{len(unread)} of {len(images)} repositories could not be "
+                  f"read; the first: {images[unread[0]]['detail']}")
+    return {"state": state, "detail": detail, "images": images}
+
+
+def manual_facts(harbor_id=None, ship_id=None, func_ids=api.DEFAULT_FUNC_IDS,
+                 pin=True):
     """Facts from ids read off the BlazeMeter UI, with no API key.
 
     Neither id is required or validated: a blank one becomes its marker (see
-    facts.manual), for a location that does not exist yet.
+    facts.manual), for a location that does not exist yet. With `pin`, each
+    image is pinned to its newest release in BlazeMeter's registry (bounded
+    by PIN_BUDGET_S); `warnings` says what that cannot tell.
     """
-    facts = facts_mod.manual(harbor_id, ship_id, func_ids=list(func_ids))
+    facts = facts_mod.manual(harbor_id, ship_id, func_ids=list(func_ids),
+                             release_pins=release_pins() if pin else None)
     return {"facts": facts,
-            "gui_images_incomplete": facts_mod.gui_images_incomplete(facts)}
+            "gui_images_incomplete": facts_mod.gui_images_incomplete(facts),
+            "warnings": facts_warnings(facts)}
 
 
 def facts_warnings(facts):
@@ -407,6 +459,7 @@ def facts_warnings(facts):
             "The account names the pinned build: gather facts with an API key, "
             "or add the key to IMAGE_OVERRIDES by hand. Fine against the public "
             "registry; against a private one the browser engines fail to pull.")
+    out += _pin_warnings(facts.get("release_pins") or {})
     blank = [f"{k} ({markers.marker(k)})" for k, v in
              (("harbor_id", facts.get("harbor_id")),
               ("ship_id", sole_ship_id(facts))) if markers.is_placeholder(v)]
@@ -417,6 +470,33 @@ def facts_warnings(facts):
             f"a marker is not a legal label value -- so the bundle is for "
             f"review until the ids are filled in, or the facts re-made once the "
             f"location exists.")
+    return out
+
+
+def _pin_warnings(pins):
+    """What pinning to the newest releases leaves unsaid. Plain prose: these
+    are shown in Markdown and in a terminal."""
+    out = []
+    unread = [r.rsplit("/", 1)[-1] for r, p in (pins.get("images") or {}).items()
+              if p.get("state") == facts_mod.PIN_UNREAD]
+    if unread:
+        out.append(
+            f"BlazeMeter's registry could not be read ({pins.get('detail')}), "
+            f"so {', '.join(unread)} keep the tag latest. On BlazeMeter's "
+            f"registry latest names releases far older than the newest; for "
+            f"the test engine it was an earlier major version when this was "
+            f"checked. Connect an API key: the location's own image list "
+            f"gives the exact versions.")
+    if any(p.get("state") == facts_mod.PIN_PINNED
+           for p in (pins.get("images") or {}).values()):
+        out.append(
+            "The image versions are the newest releases in BlazeMeter's "
+            "registry, not read from your location. A location can ask for an "
+            "older release than the newest, so a mirror built from these facts "
+            "can lack the image the agent asks for. Connect an API key for the "
+            "exact list, put a pull-through cache in front of BlazeMeter's "
+            "registry, or check the mirror with the verify option of "
+            "bzm-opl-gen images once the agent is online.")
     return out
 
 
@@ -840,7 +920,9 @@ def image_catalog(facts=None, lookup=True, all_images=False):
     image, and `registry_lookup.state` is read, unread, partial or not-asked.
     """
     if facts is None:
-        rows = image_catalog_mod.catalogue_rows()
+        # Pinned only when the registry is asked anyway.
+        rows = image_catalog_mod.catalogue_rows(
+            release_pins() if lookup else None)
         head = {"source": "catalogue", "location": None,
                 "image_list_state": facts_mod.IMAGE_LIST_NOT_ASKED}
     else:

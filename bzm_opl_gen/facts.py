@@ -155,6 +155,29 @@ ENTRY_SOURCE = {VERSIONS_SOURCE: "location-versions",
                 INVENTORY_SOURCE: "agent-inventory",
                 CATALOGUE_SOURCE: "catalogue"}
 
+# An entry's `source` when facts made without an account pinned it to the
+# newest release in BlazeMeter's registry: not read from the location.
+REGISTRY_NEWEST_SOURCE = "registry-newest"
+
+# How pinning to the newest releases went (`release_pins.state`), and per
+# image (`release_pins.images[repo].state`). Unread, no release series and
+# pinned are three answers; not-asked is a location's own facts.
+PINS_NOT_ASKED = "not-asked"
+PIN_PINNED = "pinned"
+PIN_NO_RELEASE = "no-release"
+PIN_UNREAD = "unread"
+
+
+def no_pins(detail):
+    """A release_pins record for facts nothing was pinned for."""
+    return {"state": PINS_NOT_ASKED, "detail": detail, "images": {}}
+
+
+def pinned_tag(release_pins, repo):
+    """The newest-release tag pinned for `repo`, or None."""
+    p = ((release_pins or {}).get("images") or {}).get(repo) or {}
+    return p.get("tag") if p.get("state") == PIN_PINNED else None
+
 
 def image_list_state(facts):
     """Which image-list state these facts record; absent is `not-asked`."""
@@ -300,6 +323,8 @@ def gather(client, harbor_id):
         (f"{CRANE_REPO}:latest", ENTRY_SOURCE[CATALOGUE_SOURCE]))
     facts["images"] = list(entries.values())
     facts["images_source"] = " + ".join(sources)
+    facts["release_pins"] = no_pins(
+        "the versions come from the location, not from BlazeMeter's registry")
     return facts
 
 
@@ -331,10 +356,23 @@ def gui_images_incomplete(facts):
                 and not browser_images(facts))
 
 
-def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
+def _pinned(entry, release_pins):
+    tag = pinned_tag(release_pins, entry["repo"])
+    if tag is None:
+        return dict(entry, size_mb=None, source=ENTRY_SOURCE[CATALOGUE_SOURCE])
+    return dict(entry, size_mb=None, tag=tag, source=REGISTRY_NEWEST_SOURCE)
+
+
+def manual(harbor_id, ship_id, func_ids=None, harbor_name=None,
+           release_pins=None):
     """Facts from typed ids, for an account this tool cannot reach: the shape
-    `gather` returns, with catalogue images and crane `:latest`. Ids are not
-    validated; a blank one becomes its marker (`<HARBOR_ID>`, `<SHIP_ID>`)."""
+    `gather` returns, with catalogue images. `release_pins` (read from
+    BlazeMeter's registry by the caller) moves each image it pins, crane
+    included, to that release; without it the tags are the catalogue's. Ids
+    are not validated; a blank one becomes its marker (`<HARBOR_ID>`,
+    `<SHIP_ID>`)."""
+    pins = release_pins or no_pins("nothing asked BlazeMeter's registry")
+    crane_tag = pinned_tag(pins, CRANE_REPO)
     return {
         "harbor_id": or_marker(harbor_id, "harbor_id"),
         "harbor_name": harbor_name or None,
@@ -349,14 +387,15 @@ def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
         "ships": [{"id": or_marker(ship_id, "ship_id"), "name": None,
                    "state": None, "installed_version": None,
                    "last_heartbeat": None}],
-        "images": [dict(i, size_mb=None, source=ENTRY_SOURCE[CATALOGUE_SOURCE])
-                   for i in FALLBACK_IMAGES],
+        "images": [_pinned(i, pins) for i in FALLBACK_IMAGES],
         "images_source": MANUAL_SOURCE,
         "image_list": {"state": IMAGE_LIST_NOT_ASKED, "count": None,
                        "detail": "no account access, so the location's image "
                                  "list was never asked for"},
-        "crane_image": f"{CRANE_REPO}:latest",
-        "crane_source": ENTRY_SOURCE[CATALOGUE_SOURCE],
+        "crane_image": f"{CRANE_REPO}:{crane_tag or 'latest'}",
+        "crane_source": (REGISTRY_NEWEST_SOURCE if crane_tag
+                         else ENTRY_SOURCE[CATALOGUE_SOURCE]),
+        "release_pins": pins,
     }
 
 

@@ -119,8 +119,10 @@ def cmd_facts(a):
     """Gather facts from the account, or -- with --manual -- build them from the
     ids BlazeMeter shows on the agent, for an account nobody here can reach."""
     if a.manual:
-        # Either id may be blank; facts.manual writes its marker instead.
-        f = facts_mod.manual(a.harbor_id, a.ship_id, func_ids=a.func_ids)
+        # Either id may be blank; facts.manual writes its marker instead. The
+        # images are pinned to BlazeMeter's newest releases where it answers.
+        f = core.manual_facts(a.harbor_id, a.ship_id,
+                              func_ids=a.func_ids)["facts"]
     else:
         if not a.api_key:
             sys.exit("facts needs --api-key, or --manual to build them from "

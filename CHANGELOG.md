@@ -134,6 +134,19 @@ anything that breaks.
 
 ### Fixed
 
+- **A bundle made without an account deployed an old agent.** Manual-entry
+  facts named crane and the other images by `latest`, and on BlazeMeter's
+  registry `latest` names releases far older than the newest, so the agent
+  started far behind the current release and, with auto-update off, stayed
+  there. Facts made without an account now pin each image to its newest
+  release in BlazeMeter's
+  registry (`source: registry-newest`). torero and richrach keep `latest`,
+  which is what the agent asks for. If the registry does not answer, the old
+  tags stay and the facts say so. A location can still ask for an older
+  release than the newest: connect an API key for the exact list, or check a
+  mirror with `images --verify` once the agent is online. Re-make manual
+  facts to pick this up.
+
 - **The web UI showed an unanswered cluster as OpenShift** while the bundle
   was generated for plain Kubernetes. The Advanced selector now shows what the
   generator does, and the generator's own fallback for a partially resolved

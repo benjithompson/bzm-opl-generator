@@ -8,9 +8,11 @@ inferred from its name, the location's image list or a direct probe, and says
 so. No network here: registry reads are registry_client's.
 """
 
+from . import registry_client
 from .facts import (BROWSER_DIR, CATALOGUE_SOURCE, CATEGORY_BY_FUNC,
                     CRANE_REPO, ENTRY_SOURCE, FALLBACK_IMAGES,
-                    INVENTORY_SOURCE, VERSIONS_SOURCE, image_category,
+                    INVENTORY_SOURCE, REGISTRY_NEWEST_SOURCE,
+                    VERSIONS_SOURCE, image_category, pinned_tag,
                     select_images)
 from .bundle_names import MIRROR_SCRIPT_FILE, PROFILE_FILE
 from .bundle_options import ignored_options
@@ -29,6 +31,48 @@ HOOK_REPO = f"{PUBLIC_REGISTRY}/{HOOK_IMAGE_REPO}"
 FROM_VERSIONS = ENTRY_SOURCE[VERSIONS_SOURCE]
 FROM_INVENTORY = ENTRY_SOURCE[INVENTORY_SOURCE]
 FROM_CATALOGUE = ENTRY_SOURCE[CATALOGUE_SOURCE]
+
+# What a release tag looks like per repository, read off BlazeMeter's
+# registry: version parts, the exact suffix (so `-MOB-...` branch builds never
+# match), and for the mock images a last part below a bound. `latest` is not
+# one: measured, it names releases far older than the newest. torero and
+# richrach are absent on purpose: crane asks for them by their `latest` key.
+RELEASE_SERIES = {
+    "blazemeter/crane": {"parts": 3, "suffix": ""},
+    "blazemeter/apm": {"parts": 3, "suffix": ""},
+    # Location lists name `-reduced`; the plain 2.4.x engine tag does not exist.
+    "blazemeter/v4": {"parts": 3, "suffix": "-reduced"},
+    "blazemeter/doduo": {"parts": 3, "suffix": ""},
+    "blazemeter/proxy-recorder": {"parts": 3, "suffix": ""},
+    # A location listed 6.0.30.4 while CI builds 6.0.30.2221 and up existed,
+    # so a four-digit last part is a build, not a release (inferred).
+    "blazemeter/service-mock": {"parts": 4, "suffix": "", "last_below": 1000},
+    "blazemeter/group-gateway": {"parts": 4, "suffix": "", "last_below": 1000},
+    "blazemeter/mock-pc-service": {"parts": 4, "suffix": "", "last_below": 1000},
+}
+
+
+def release_tag(path, tags):
+    """The newest tag in `path`'s release series, or None when the repository
+    has no series here or no tag in it."""
+    rule = RELEASE_SERIES.get(path)
+    if rule is None:
+        return None
+    best = None
+    for t in tags or []:
+        s = registry_client.series(t)
+        if not s or s[1] != rule["suffix"] or len(s[0]) != rule["parts"]:
+            continue
+        if "last_below" in rule and s[0][-1] >= rule["last_below"]:
+            continue
+        if best is None or s[0] > best[0]:
+            best = (s[0], t)
+    return best[1] if best else None
+
+
+def release_repos():
+    """The full repositories that have a release series, crane first."""
+    return [f"{PUBLIC_REGISTRY}/{p}" for p in RELEASE_SERIES]
 
 UNDESCRIBED = {
     "purpose": "Named by this location's image list. No description is "
@@ -238,13 +282,16 @@ def location_rows(facts, all_images=False):
     return rows
 
 
-def catalogue_rows():
+def catalogue_rows(release_pins=None):
     """Every image the catalogue knows, for no location in particular:
-    `required` is None. Browser images are pinned per location, so none."""
-    rows = [row("blazemeter/crane:latest", CRANE_REPO, "latest",
-                FROM_CATALOGUE, None)]
-    rows += [row(i["key"], i["repo"], i["tag"], FROM_CATALOGUE, None)
-             for i in FALLBACK_IMAGES]
+    `required` is None. `release_pins` moves each pinned image to the newest
+    release. Browser images are pinned per location, so none."""
+    def pinned(key, repo, tag):
+        newest = pinned_tag(release_pins, repo)
+        return (row(key, repo, newest, REGISTRY_NEWEST_SOURCE, None) if newest
+                else row(key, repo, tag, FROM_CATALOGUE, None))
+    rows = [pinned("blazemeter/crane:latest", CRANE_REPO, "latest")]
+    rows += [pinned(i["key"], i["repo"], i["tag"]) for i in FALLBACK_IMAGES]
     rows.append(_hook_row(None))
     return rows
 
@@ -264,7 +311,41 @@ def _cell(text):
 # How IMAGES.md names where the versions came from.
 ORIGIN_WORDS = {FROM_VERSIONS: "the location's own image list",
                 FROM_INVENTORY: "a running agent's image inventory",
+                REGISTRY_NEWEST_SOURCE: "the newest releases in BlazeMeter's "
+                                        "registry, not your location",
                 FROM_CATALOGUE: "this tool's built-in list"}
+
+
+def _not_from_location(rows):
+    """IMAGES.md paragraphs for versions that were not read from the
+    location: pinned to the newest release, or left on a stale `latest`."""
+    out = ""
+    if any(r["source"] == REGISTRY_NEWEST_SOURCE for r in rows):
+        out += (
+            "\n**These versions were not read from your location.** They are "
+            "the newest releases\nin BlazeMeter's registry when the facts were "
+            "made. A location can ask for an\nolder release than the newest (a "
+            "location has been seen listing an engine several\nreleases "
+            "behind), and then a mirror built from this file lacks the image "
+            "the\nagent asks for. Before you rely on a mirror, do one of "
+            "these: connect an API key\nand re-generate (the location's own "
+            "image list is exact), put a pull-through\ncache in front of "
+            "BlazeMeter's registry, or run the `--verify` check below once\n"
+            "the agent is online.\n")
+    stale = [r for r in rows if r["tag_mutable"]
+             and repo_path(r["repo"]) in RELEASE_SERIES]
+    if stale:
+        out += (
+            "\n**`latest` is not the newest release.** On BlazeMeter's registry "
+            "`latest` names\nreleases far older than the newest; for the test "
+            "engine it was an earlier major\nversion when this was checked. "
+            "These facts name no release for\n"
+            + ", ".join(f"`{repo_path(r['repo'])}`" for r in stale)
+            + ", so they keep `latest` (BlazeMeter's registry\ndid not answer "
+            "when the facts were made, or was not asked). Connect an API key\n"
+            "and re-generate: the "
+            "location's own image list gives\nthe exact versions.\n")
+    return out
 
 
 def _origin(rows):
@@ -326,7 +407,7 @@ The images the BlazeMeter agent for location `{harbor_arg}` pulls. The location
 is enabled for {funcs}. The versions come from {_origin(rows)}.
 
 {chr(10).join(table)}
-{floating_note}
+{floating_note}{_not_from_location(rows)}
 ## Mirroring
 
 {mirror}

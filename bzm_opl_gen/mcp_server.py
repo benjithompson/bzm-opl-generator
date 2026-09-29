@@ -484,7 +484,9 @@ DESCRIPTIONS["opl_facts"] = (
     "cannot be applied\n"
     "func_ids decide which images the bundle carries, so `manual` needs the "
     f"ones the location really runs -- {', '.join(core.covered_func_ids())} "
-    "are the ones this tool configures for, and the default is performance.\n"
+    "are the ones this tool configures for, and the default is performance. "
+    "`manual` pins each image to its newest release in BlazeMeter's "
+    "registry, which the location may not use yet; `warnings` says so.\n"
     "Pass the `facts` object straight to opl_bundle and opl_preflight.")
 
 

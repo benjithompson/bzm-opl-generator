@@ -174,7 +174,9 @@ bzm-opl-gen generate --auth-token <token> --namespace their-ns -o out/
 ```
 
 Nothing is validated and nothing is sent to BlazeMeter. What you give up: the
-crane tag floats on `latest`, `IMAGE_OVERRIDES` comes from the built-in catalogue
+image versions are the newest releases in BlazeMeter's registry rather than the
+ones the location asks for ([docs/images.md](docs/images.md#without-an-account)),
+`IMAGE_OVERRIDES` comes from the built-in catalogue
 rather than the location — complete except for **GUI browser images**, where the
 account names one of 60+ pinned repos and nothing here can guess which — and
 `doctor` has no concurrency numbers. With a key none of that applies, and it
