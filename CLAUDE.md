@@ -14,7 +14,7 @@ needs). Read it before naming anything new.
 |---|---|---|
 | Offline | `.venv/bin/python -m pytest tests -q` | ~15s. Must end **`N passed`, nothing skipped** — install `pip install -e ".[dev]"`; `test_server`/`test_mcp` skip without fastapi/mcp and CI asserts the extras import. |
 | Helm parity | `python tests/helm_parity.py` | Renders option sets as manifests and as the chart and requires the same objects. Not pytest on purpose (needs the `helm` binary). Offline counterpart: `tests/test_helm.py`. Touch the chart or the manifests → add to both. |
-| Frontend | `cd frontend && npx vitest run && npx tsc --noEmit && npm run lint` | Then `npm run build` — it rewrites `bzm_opl_gen/ui_dist` and its source fingerprint, which `tests/test_ui_build.py` checks. Commit the rebuilt `ui_dist` with any `frontend/` change. |
+| Frontend | `cd frontend && npx vitest run && npx tsc --noEmit && npm run lint` | Node 22, as CI: under Node 26 `App.test.tsx` fails (its global `localStorage` hides jsdom's). Then `npm run build` — it rewrites `bzm_opl_gen/ui_dist` and its source fingerprint, which `tests/test_ui_build.py` checks. Commit the rebuilt `ui_dist` with any `frontend/` change. |
 | Live rig | `livetest` — see `LIVE_RIG.md` | 12–20 min, needs a cluster and an account. |
 
 Every live-rig check has an offline counterpart that fakes the cluster/API; add
@@ -69,6 +69,8 @@ cli.py  server.py  mcp_server.py      three front doors, thin
    footprint.py (leaf: sizes, hosts)   quantity.py (leaf: k8s quantities)
    kube.py (kubectl primitives)   agent_env.py (BlazeMeter's env-var reference)
    bundle_check.py  sv_read.py  verdict.py  evidence.py  cert.py  options.py
+   image_catalog.py (what each image is; release rules)   registry_client.py
+   ca_check.py (TLS chain against the network)   triage.py (post-deploy rules)
 frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
 ```
 
@@ -101,7 +103,8 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
   descriptions, `INSTRUCTIONS` and `docs/*.md` are all the documentation there
   is. It never returns an AUTH_TOKEN (`reveal_token` is its own action), never
   takes a secret as an argument, and never writes to a cluster except gated
-  `opl_agent livetest` (`BZM_OPL_ENABLE_LIVETEST`). Anticipated failures raise
+  `opl_agent livetest` (`BZM_OPL_ENABLE_LIVETEST`); `opl_agent triage` only
+  reads one. Anticipated failures raise
   the SDK's `ToolError`; anything else reaches the client as a bare
   "Error executing tool".
 - **Options:** a new option needs a row in `options.py` (`summary` ≤20 words,
@@ -126,7 +129,9 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
    `kube.kget_named` ({} = NotFound, None = unread; `kget` flattens both and is
    only for lists), `facts.image_list` states, `cert.dns_names` (None = did not
    parse, [] = no names), `ui_build.staleness`, `ca_trust.CA_UNRESOLVED`,
-   `core.NotFound` (404 only), frontend `stale.ts` (status, never message).
+   `core.NotFound` (404 only), `registry_client` states (read / unread /
+   not-asked; present / missing / unread), `doctor.Unprobed`, `triage.gather`
+   sections (None = unread), frontend `stale.ts` (status, never message).
    A denied read is a WARN and exits 0; an empty result can be a FAIL. The
    evidence document's section names live once in `evidence.py`, and
    `test_cluster_evidence` holds the shell collector to them.
@@ -208,6 +213,13 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
   inventories. Image sources, per key: the location's `/versions` list (works
   with no agent), then a live agent's inventory (adds `torero`, `richrach`),
   then the catalogue. `facts.manual()` returns the same shape as `gather()`.
+- **`latest` on BlazeMeter's registry is stale** (measured: v4 `latest` is
+  1.24.169, crane `latest` 3.7.44), and no other moving tag is reliable. With
+  an account the location's `/versions` list is exact. Without one,
+  `core.release_pins` pins each repo to its newest release by
+  `image_catalog.RELEASE_SERIES` (the SV `X.Y.Z.N` rule is inferred); a
+  location can still ask for an older release, and every surface says so.
+  Generating a bundle makes no network call: the pins live in the facts.
 
 ## Conventions
 
