@@ -13,6 +13,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 from bzm_opl_gen import cert  # noqa: E402
 from bzm_opl_gen import facts as facts_mod  # noqa: E402
 from bzm_opl_gen import generate as gen  # noqa: E402
+from bzm_opl_gen import (bundle_env, bundle_names, bundle_options,  # noqa: E402
+                         ca_trust, footprint, markers as markers_mod,
+                         nodepools, render_docker, required_fields,
+                         service_virt)
 from tls_fixtures import (  # noqa: E402
     SV_CERT, SV_CERT_NO_NAMES, SV_HOST, SV_KEY, SV_KEY_PKCS1, SV_NAMES,
     SV_WILDCARD_HOST, SV_WRONG_HOST)
@@ -306,7 +310,7 @@ def test_unnamed_service_account_becomes_a_placeholder(name):
     files = gen.generate(FACTS, {"namespace": "ns1",
                                  "service_account_name": name,
                                  "service_account_create": False})
-    assert set(_sa_refs(files).values()) == {gen.marker("service_account_name")}
+    assert set(_sa_refs(files).values()) == {markers_mod.marker("service_account_name")}
     # ...and the person handed the bundle is told, rather than finding out from
     # a rejected apply.
     assert "service_account_name" in files["README.md"]
@@ -317,7 +321,7 @@ def test_service_account_round_trips_through_the_profile():
     files = gen.generate(FACTS, {"namespace": "ns1",
                                  "service_account_name": "platform-sa",
                                  "service_account_create": False})
-    prof = json.loads(files[gen.PROFILE_FILE])
+    prof = json.loads(files[bundle_names.PROFILE_FILE])
     assert prof["service_account_name"] == "platform-sa"
     assert prof["service_account_create"] is False
     replayed = gen.generate(FACTS, prof)
@@ -406,20 +410,20 @@ def test_nodepool_recipe_only_when_the_pools_differ():
     bundle gaining a file about node pools it does not have is one more thing to
     read before reaching the part that applies."""
     one_pool = gen.generate(FACTS, {"namespace": "ns1", "node_selector": CRANE_POOL})
-    assert gen.NODEPOOLS_FILE not in one_pool
+    assert bundle_names.NODEPOOLS_FILE not in one_pool
 
     two_pool = gen.generate(FACTS, {"namespace": "ns1", "node_selector": CRANE_POOL,
                                     "engine_node_selector": ENGINE_POOL,
                                     "engine_tolerations": ENGINE_TOL,
                                     "engine_cpu_limit": "2",
                                     "engine_mem_limit": "8Gi"})
-    md = two_pool[gen.NODEPOOLS_FILE]
+    md = two_pool[bundle_names.NODEPOOLS_FILE]
     # The label and taint the manifests actually use, so the commands create the
     # pool this bundle selects rather than a worked example of a different one.
     assert "pool=bzm-engines" in md
     assert "bzm.io/engines=true:NoSchedule" in md
     # The stamped-request trap and the only lever that closes it.
-    assert gen.ENGINE_STAMPED_REQUEST_CPU in md and "maxPods" in md
+    assert footprint.ENGINE_DEFAULT_REQUEST_CPU in md and "maxPods" in md
     for flavour in ("GKE", "EKS", "AKS", "OpenShift", "kubeadm"):
         assert flavour in md
 
@@ -432,14 +436,14 @@ def test_gke_maxpods_respects_the_floor_the_api_enforces():
     files = gen.generate(FACTS, {"namespace": "ns1",
                                  "engine_node_selector": ENGINE_POOL,
                                  "engine_cpu_limit": "2", "engine_mem_limit": "8Gi"})
-    md = files[gen.NODEPOOLS_FILE]
+    md = files[bundle_names.NODEPOOLS_FILE]
     gke = md[md.index("### GKE"):md.index("### EKS")]
     emitted = int(re.search(r"--max-pods-per-node (\d+)", gke).group(1))
-    assert emitted >= gen.GKE_MIN_MAX_PODS
+    assert emitted >= footprint.GKE_MIN_MAX_PODS
     # And having been forced up, it says what that costs rather than still
     # claiming one engine per node.
     assert "will not go below" in gke
-    assert f"{gen._engines_per_node(gen.TYPICAL_SYSTEM_PODS + 1, gen.GKE_MIN_MAX_PODS)} engines a node" in gke
+    assert f"{nodepools._engines_per_node(footprint.TYPICAL_SYSTEM_PODS + 1, footprint.GKE_MIN_MAX_PODS)} engines a node" in gke
 
 
 def test_gke_node_is_sized_for_the_engines_the_floor_permits():
@@ -448,9 +452,9 @@ def test_gke_node_is_sized_for_the_engines_the_floor_permits():
     files = gen.generate(FACTS, {"namespace": "ns1",
                                  "engine_node_selector": ENGINE_POOL,
                                  "engine_cpu_limit": "2", "engine_mem_limit": "8Gi"})
-    md = files[gen.NODEPOOLS_FILE]
+    md = files[bundle_names.NODEPOOLS_FILE]
     gke = md[md.index("### GKE"):md.index("### EKS")]
-    per_node = gen._engines_per_node(gen.TYPICAL_SYSTEM_PODS + 1, gen.GKE_MIN_MAX_PODS)
+    per_node = nodepools._engines_per_node(footprint.TYPICAL_SYSTEM_PODS + 1, footprint.GKE_MIN_MAX_PODS)
     cpu = int(re.search(r"--machine-type <at least (\d+) vCPU", gke).group(1))
     assert cpu >= 2 * per_node          # 2 CPU of engine each, plus overhead
 
@@ -462,7 +466,7 @@ def test_nodepool_recipe_emits_no_dangling_continuations():
     files = gen.generate(FACTS, {"namespace": "ns1",
                                  "engine_node_selector": {},
                                  "engine_tolerations": []})
-    md = files[gen.NODEPOOLS_FILE]
+    md = files[bundle_names.NODEPOOLS_FILE]
     in_block, blocks = False, []
     for line in md.splitlines():
         if line.startswith("```"):
@@ -509,14 +513,14 @@ def test_crane_ephemeral_storage_request_equals_limit_by_default():
     # smaller of the two ships a ceiling the customer never chose -- at 100Mi
     # that evicted crane in ~12s, forever, because each replacement repeated it.
     req, lim = _crane_ephemeral(gen.generate(FACTS, {"namespace": "ns1"}))
-    assert req == lim == gen.CRANE_EPHEMERAL_STORAGE
+    assert req == lim == footprint.CRANE_EPHEMERAL_STORAGE
 
 
 def test_crane_ephemeral_storage_clears_measured_usage():
     # Crane sits at ~161MiB, 107MiB of it /tmp, within seconds of starting.
     # A default below that is the bug this constant exists to prevent, so pin
     # the floor rather than the exact value -- raising it stays fine.
-    assert parse_memory(gen.CRANE_EPHEMERAL_STORAGE) >= 512 * 1024 * 1024
+    assert parse_memory(footprint.CRANE_EPHEMERAL_STORAGE) >= 512 * 1024 * 1024
 
 
 def test_crane_ephemeral_storage_override_moves_both_fields():
@@ -739,8 +743,8 @@ def test_limits_env_is_always_carried_defaults_included():
     for platform in ("k8s", "openshift"):
         files = gen.generate(FACTS, {"namespace": "ns1", "platform": platform})
         cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
-        assert cm["KUBERNETES_RESOURCES_LIMITS_CPU"] == gen.ENGINE_DEFAULT_CPU
-        assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == gen.ENGINE_DEFAULT_MEM
+        assert cm["KUBERNETES_RESOURCES_LIMITS_CPU"] == footprint.ENGINE_DEFAULT_CPU
+        assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == footprint.ENGINE_DEFAULT_MEM
     # The ephemeral pair stays opt-in: engine_size() vouches for CPU and
     # memory only, and there is no documented ephemeral default to state.
     assert "KUBERNETES_LIMITS_EPHEMERAL_STORAGE" not in cm
@@ -762,7 +766,7 @@ def test_engine_limits_derive_from_the_location():
                        {"namespace": "ns1"})
     cm = yaml.safe_load(odd["bzm_configmap.yaml"])["data"]
     assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == "8196Mi"
-    assert cm["KUBERNETES_RESOURCES_LIMITS_CPU"] == gen.ENGINE_DEFAULT_CPU
+    assert cm["KUBERNETES_RESOURCES_LIMITS_CPU"] == footprint.ENGINE_DEFAULT_CPU
     # An explicit option outranks the location: the CLI, a livetest overlay
     # and a replayed profile all speak through options.
     explicit = gen.generate(facts, {"namespace": "ns1",
@@ -784,7 +788,7 @@ def test_an_override_memory_below_an_engines_floor_is_not_derived():
             {**FACTS, "override_cpu": 1, "override_memory": mb},
             {"namespace": "ns1"})
         cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
-        assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == gen.ENGINE_DEFAULT_MEM, mb
+        assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == footprint.ENGINE_DEFAULT_MEM, mb
         assert cm["KUBERNETES_RESOURCES_LIMITS_CPU"] == "1"
     at_floor = gen.generate({**FACTS, "override_memory": 1024},
                             {"namespace": "ns1"})
@@ -839,9 +843,9 @@ def test_unparseable_engine_quantity_rejected():
 
 
 def test_engine_size_helper():
-    o = {**gen.DEFAULT_OPTIONS, "engine_cpu_limit": "500m", "engine_mem_limit": "1Gi"}
-    assert gen.engine_size(o) == (500, 1024 ** 3)
-    assert gen.engine_size(dict(gen.DEFAULT_OPTIONS)) == (2000, 8 * 1024 ** 3)
+    o = {**bundle_options.DEFAULT_OPTIONS, "engine_cpu_limit": "500m", "engine_mem_limit": "1Gi"}
+    assert bundle_options.engine_size(o) == (500, 1024 ** 3)
+    assert bundle_options.engine_size(dict(bundle_options.DEFAULT_OPTIONS)) == (2000, 8 * 1024 ** 3)
 
 
 def test_crane_resources_come_from_the_constants():
@@ -849,10 +853,10 @@ def test_crane_resources_come_from_the_constants():
     CRANE_*_LIMIT; the deployment must be the same numbers, not a second copy."""
     d = yaml.safe_load(gen.generate(FACTS, {"namespace": "ns1"})["bzm_deployment.yaml"])
     res = d["spec"]["template"]["spec"]["containers"][0]["resources"]
-    assert res["limits"]["cpu"] == gen.CRANE_CPU_LIMIT
-    assert res["limits"]["memory"] == gen.CRANE_MEM_LIMIT
-    assert res["requests"]["cpu"] == gen.CRANE_CPU_REQUEST
-    assert res["requests"]["memory"] == gen.CRANE_MEM_REQUEST
+    assert res["limits"]["cpu"] == footprint.CRANE_CPU_LIMIT
+    assert res["limits"]["memory"] == footprint.CRANE_MEM_LIMIT
+    assert res["requests"]["cpu"] == footprint.CRANE_CPU_REQUEST
+    assert res["requests"]["memory"] == footprint.CRANE_MEM_REQUEST
 
 
 
@@ -860,13 +864,13 @@ def test_crane_resources_come_from_the_constants():
 
 def _hook_docs(out):
     return {d["metadata"]["name"]: d
-            for d in yaml.safe_load_all(out[gen.HOOK_FILE])}
+            for d in yaml.safe_load_all(out[bundle_names.HOOK_FILE])}
 
 
 def test_no_cluster_check_unless_asked_for():
     """Off by default. It is a check, not part of the agent, and a bundle that
     quietly carried an extra Pod would surprise whoever applies it."""
-    assert gen.HOOK_FILE not in gen.generate(FACTS, {"ship_id": "s1"})
+    assert bundle_names.HOOK_FILE not in gen.generate(FACTS, {"ship_id": "s1"})
 
 
 def test_the_cluster_check_is_told_what_the_bundle_decided():
@@ -1014,7 +1018,7 @@ def test_readme_is_short_and_actionable():
     assert "apply -f bzm_deployment.yaml" in readme
     assert "rollout status deploy/crane" in readme
     assert "online" in readme
-    assert gen.ENGINE_STAMPED_REQUEST_CPU in readme     # the engine request gap
+    assert footprint.ENGINE_DEFAULT_REQUEST_CPU in readme     # the engine request gap
     assert "bzm_limitrange.yaml" not in readme
 
 
@@ -1133,8 +1137,8 @@ def test_the_cluster_decides_oc_or_kubectl_not_the_posture():
 
 def test_a_finished_bundle_carries_no_marker():
     files = gen.generate(FACTS, {"namespace": "ns1", "auth_token": "de" * 32})
-    assert gen.placeholder_options(json.loads(files[gen.PROFILE_FILE])) == []
-    assert not gen.MARKER_RE.search("".join(files.values()))
+    assert required_fields.placeholder_options(json.loads(files[bundle_names.PROFILE_FILE])) == []
+    assert not markers_mod.MARKER_RE.search("".join(files.values()))
 
 
 # Which field each marker belongs to, built from the rule rather than listed: the
@@ -1143,8 +1147,8 @@ def test_a_finished_bundle_carries_no_marker():
 # this map knows are
 # judged below, so `MARKER_PATTERN` appearing in a bundle as a *pattern* (the
 # README's grep, the docker script's own check) is not read as a field.
-FIELD_BY_MARKER = {gen.marker(k): k for k in
-                   list(gen.DEFAULT_OPTIONS) + ["harbor_id", "ship_id"]}
+FIELD_BY_MARKER = {markers_mod.marker(k): k for k in
+                   list(bundle_options.DEFAULT_OPTIONS) + ["harbor_id", "ship_id"]}
 
 
 def _markers_carried(files):
@@ -1161,8 +1165,8 @@ def _markers_carried(files):
     """
     return {FIELD_BY_MARKER[m]
             for name, text in files.items()
-            if name != "README.md" and not name.startswith(gen.CHART_DIR + "/")
-            for m in gen.MARKER_RE.findall(text) if m in FIELD_BY_MARKER}
+            if name != "README.md" and not name.startswith(bundle_names.CHART_DIR + "/")
+            for m in markers_mod.MARKER_RE.findall(text) if m in FIELD_BY_MARKER}
 
 
 def _fields_named(readme):
@@ -1231,7 +1235,7 @@ def test_the_summary_table_never_says_a_missing_credential_is_there(use_secret):
         row, = [ln for ln in readme.splitlines() if ln.startswith("| AUTH_TOKEN")]
         assert where in row
         assert ("not supplied" in row) is not supplied
-        assert (gen.marker("auth_token") in row) is not supplied
+        assert (markers_mod.marker("auth_token") in row) is not supplied
 
 
 def test_the_marker_reaches_the_objects_that_name_the_field():
@@ -1242,7 +1246,7 @@ def test_the_marker_reaches_the_objects_that_name_the_field():
     files = gen.generate(FACTS, {"namespace": "", "ship_id": "bbb222"})
     assert yaml.safe_load(
         files["bzm_deployment.yaml"])["metadata"]["namespace"] \
-        == gen.marker("namespace")
+        == markers_mod.marker("namespace")
     assert "apply -f" in files["README.md"]
 
 
@@ -1256,8 +1260,8 @@ def test_the_marker_is_recognised_around_whitespace(given):
     being one on a stray space would be carried into the bundle as a value
     somebody meant, which is the single failure this whole mechanism exists to
     prevent."""
-    assert gen.is_placeholder(given)
-    assert gen.placeholder_options({"namespace": given}) == ["namespace"]
+    assert markers_mod.is_placeholder(given)
+    assert required_fields.placeholder_options({"namespace": given}) == ["namespace"]
 
 
 def test_docker_does_not_mark_the_fields_it_ignores():
@@ -1268,7 +1272,7 @@ def test_docker_does_not_mark_the_fields_it_ignores():
     files = gen.generate(FACTS, {**DOCKER, "namespace": "",
                                  "service_account_name": "",
                                  "auth_token": "de" * 32})
-    assert gen.placeholder_options(json.loads(files[gen.PROFILE_FILE])) == []
+    assert required_fields.placeholder_options(json.loads(files[bundle_names.PROFILE_FILE])) == []
     assert "not finished" not in files["README.md"]
 
 
@@ -1278,11 +1282,11 @@ def test_a_marker_the_page_supplied_is_reported_too():
     marker itself. Found by reading the value, not by consulting REQUIRED_TEXT,
     which is what lets the two halves share one report."""
     o = {"namespace": "ns1", "auth_token": "de" * 32,
-         "private_registry": gen.marker("private_registry"),
-         "proxy": {"https": gen.marker("proxy.https"),
+         "private_registry": markers_mod.marker("private_registry"),
+         "proxy": {"https": markers_mod.marker("proxy.https"),
                    "no_proxy": "localhost"}}
     files = gen.generate(FACTS, o)
-    assert gen.placeholder_options(json.loads(files[gen.PROFILE_FILE])) == [
+    assert required_fields.placeholder_options(json.loads(files[bundle_names.PROFILE_FILE])) == [
         "private_registry", "proxy.https"]
     readme = files["README.md"]
     assert "`private_registry`" in readme and "`proxy.https`" in readme
@@ -1308,12 +1312,12 @@ def test_a_marker_survives_a_profile_round_trip():
     re-defaulting the field would produce a *different* bundle from the same
     profile, and the marker is precisely the value nobody chose."""
     files = gen.generate(FACTS, {"namespace": "", "ship_id": "bbb222"})
-    prof = json.loads(files[gen.PROFILE_FILE])
-    assert prof["namespace"] == gen.marker("namespace")
+    prof = json.loads(files[bundle_names.PROFILE_FILE])
+    assert prof["namespace"] == markers_mod.marker("namespace")
     replayed = gen.generate(FACTS, prof)
     assert yaml.safe_load(
         replayed["bzm_deployment.yaml"])["metadata"]["namespace"] \
-        == gen.marker("namespace")
+        == markers_mod.marker("namespace")
 
 
 def test_no_limitrange_is_emitted():
@@ -1329,7 +1333,7 @@ def test_no_limitrange_is_emitted():
 
 def test_profile_json_round_trips_new_options():
     files = gen.generate(FACTS, {"namespace": "ns1", "engine_cpu_limit": "1"})
-    prof = json.loads(files[gen.PROFILE_FILE])
+    prof = json.loads(files[bundle_names.PROFILE_FILE])
     assert prof["engine_cpu_limit"] == "1"
     assert prof["engine_mem_limit"] is None
     assert "emit_limitrange" not in prof
@@ -1414,7 +1418,7 @@ def test_sv_location_without_ingress_refuses():
         gen.generate(SV_FACTS, {"namespace": "ns1"})
     # ...and names the way out, because "not answered" is the only state that
     # blocks and the answer "no" is not obvious from a list of four backends.
-    assert f"sv_ingress={gen.SV_INGRESS_NONE}" in str(e.value)
+    assert f"sv_ingress={service_virt.SV_INGRESS_NONE}" in str(e.value)
 
 
 def test_sv_location_declining_an_ingress_generates_the_performance_bundle():
@@ -1426,7 +1430,7 @@ def test_sv_location_declining_an_ingress_generates_the_performance_bundle():
     decision leaks into the bundle except the profile that records it.
     """
     declined = gen.generate(SV_FACTS, {"namespace": "ns1",
-                                       "sv_ingress": gen.SV_INGRESS_NONE})
+                                       "sv_ingress": service_virt.SV_INGRESS_NONE})
     data = yaml.safe_load(declined["bzm_configmap.yaml"])["data"]
     assert "KUBERNETES_WEB_EXPOSE_TYPE" not in data
     assert "networking.k8s.io" not in _role_groups(declined)
@@ -1436,7 +1440,7 @@ def test_sv_location_declining_an_ingress_generates_the_performance_bundle():
     # The images still follow the location, not the option: what this location
     # runs is a fact about the account, whatever this bundle publishes.
     mirrored = gen.generate(SV_FACTS, {"namespace": "ns1", "private_registry": "reg.local",
-                                       "sv_ingress": gen.SV_INGRESS_NONE})
+                                       "sv_ingress": service_virt.SV_INGRESS_NONE})
     ov = json.loads(yaml.safe_load(
         mirrored["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
     assert "blazemeter/service-mock:latest" in ov
@@ -1446,15 +1450,15 @@ def test_declining_an_ingress_is_recorded_in_the_profile():
     """livetest and the UI re-render from profile.json, so a decision that only
     lived in the session would come back as the refusal on the next render."""
     files = gen.generate(SV_FACTS, {"namespace": "ns1",
-                                    "sv_ingress": gen.SV_INGRESS_NONE})
-    assert json.loads(files[gen.PROFILE_FILE])["sv_ingress"] == gen.SV_INGRESS_NONE
+                                    "sv_ingress": service_virt.SV_INGRESS_NONE})
+    assert json.loads(files[bundle_names.PROFILE_FILE])["sv_ingress"] == service_virt.SV_INGRESS_NONE
 
 
 def test_declining_an_ingress_on_a_location_that_never_asked_is_accepted():
     """No funcId demands it, so the value says nothing -- and must not be a new
     way to fail. A profile carrying it moves between locations freely."""
     files = gen.generate(FACTS, {"namespace": "ns1",
-                                 "sv_ingress": gen.SV_INGRESS_NONE})
+                                 "sv_ingress": service_virt.SV_INGRESS_NONE})
     assert "KUBERNETES_WEB_EXPOSE_TYPE" not in yaml.safe_load(
         files["bzm_configmap.yaml"])["data"]
 
@@ -1468,7 +1472,7 @@ def test_retired_sv_bridge_funcid_demands_nothing():
     files = gen.generate(retired, {"namespace": "ns1"})          # no ingress needed
     assert "KUBERNETES_WEB_EXPOSE_TYPE" not in yaml.safe_load(
         files["bzm_configmap.yaml"])["data"]
-    assert not [i for i in gen.select_images(retired)
+    assert not [i for i in facts_mod.select_images(retired)
                 if "sv-bridge" in i["repo"]]
 
 
@@ -1479,15 +1483,15 @@ def test_sv_ingress_marks_a_missing_subdomain_and_tls_secret():
     neither of which the API server will accept, so the combination that used to
     fail silently on a cluster still cannot reach one."""
     files = gen.generate(SV_FACTS, {"namespace": "ns1", "sv_ingress": "nginx"})
-    assert gen.placeholder_options(json.loads(files[gen.PROFILE_FILE])) == [
+    assert required_fields.placeholder_options(json.loads(files[bundle_names.PROFILE_FILE])) == [
         "sv_subdomain", "sv_tls_secret"]
     readme = files["README.md"]
     assert "sv_subdomain" in readme and "sv_tls_secret" in readme
     # ...and one supplied is one not marked.
     files = gen.generate(SV_FACTS, {"namespace": "ns1", "sv_ingress": "nginx",
                                     "sv_subdomain": "apps.example.com"})
-    assert gen.placeholder_options(
-        json.loads(files[gen.PROFILE_FILE])) == ["sv_tls_secret"]
+    assert required_fields.placeholder_options(
+        json.loads(files[bundle_names.PROFILE_FILE])) == ["sv_tls_secret"]
 
 
 def test_sv_ingress_allows_nodeport_where_it_was_measured_working():
@@ -1496,7 +1500,7 @@ def test_sv_ingress_allows_nodeport_where_it_was_measured_working():
     A rewrite would be worse than the refusal it replaced: the customer asked
     for NODEPORT, the manifests would say CLUSTERIP, and nothing would say why.
     """
-    for ingress in [i for i, b in gen.SV_INGRESS_BACKENDS.items() if b.nodeport_ok]:
+    for ingress in [i for i, b in service_virt.SV_INGRESS_BACKENDS.items() if b.nodeport_ok]:
         opts = _sv(service_type="NODEPORT", sv_ingress=ingress)
         data = yaml.safe_load(
             gen.generate(SV_FACTS, opts)["bzm_configmap.yaml"])["data"]
@@ -1510,7 +1514,7 @@ def test_sv_ingress_refuses_nodeport_where_it_was_measured_broken():
     does not serve -- the silent failure every other guard in _sv_cfg exists to
     stop. Asserted per backend off the table, so a fifth backend added without a
     measured `nodeport_ok` shows up here rather than on someone's cluster."""
-    for ingress in [i for i, b in gen.SV_INGRESS_BACKENDS.items()
+    for ingress in [i for i, b in service_virt.SV_INGRESS_BACKENDS.items()
                     if not b.nodeport_ok]:
         with pytest.raises(ValueError, match="requires service_type=CLUSTERIP"):
             gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT",
@@ -1578,7 +1582,7 @@ def test_sv_readme_names_the_tls_secret_and_the_namespace_it_goes_in():
     assert "kubectl -n bzm-agent create secret tls wildcard-tls" in md
     assert "`*.apps.example.com`" in md
     # The bundle is read as one document, so this line follows whichever CLI the
-    # rest of it applies with -- see gen.cli(). Which is `openshift_cluster` and
+    # rest of it applies with -- see bundle_options.cli(). Which is `openshift_cluster` and
     # not `platform`: the posture installs on vanilla Kubernetes too, so it
     # cannot decide which binary the reader has.
     oc = gen.generate(SV_FACTS, dict(SV_OPTS, namespace="bzm-agent",
@@ -1689,7 +1693,7 @@ def _expose_docs(mocks, opts):
     """Goes through sv_publish_cfg the way the CLI does, so these exercise the
     resolution as well as the rendering."""
     return [d for d in yaml.safe_load_all(
-        gen.sv_expose(mocks, opts["namespace"], gen.sv_publish_cfg(opts))) if d]
+        service_virt.sv_expose(mocks, opts["namespace"], service_virt.sv_publish_cfg(opts))) if d]
 
 
 def test_sv_expose_service_port_equals_target_port():
@@ -1755,16 +1759,16 @@ def test_sv_expose_renders_every_mock():
 
 def test_sv_publish_cfg_requires_a_subdomain():
     with pytest.raises(ValueError, match="sv_subdomain"):
-        gen.sv_publish_cfg({"namespace": "ns1"})
+        service_virt.sv_publish_cfg({"namespace": "ns1"})
 
 
 def test_sv_publish_cfg_keeps_tls_optional_unlike_generate():
     """_sv_cfg refuses without a TLS secret because crane crash-loops on the
     empty name. This Ingress is ours and never reaches crane, so a plain-HTTP
     pair is a legitimate thing to ask for."""
-    cfg = gen.sv_publish_cfg({"sv_subdomain": "apps.example.com"})
+    cfg = service_virt.sv_publish_cfg({"sv_subdomain": "apps.example.com"})
     assert cfg.tls_secret is None
-    assert cfg.ingress_class == gen.SV_EXPOSE_DEFAULT_INGRESS_CLASS
+    assert cfg.ingress_class == service_virt.SV_EXPOSE_DEFAULT_INGRESS_CLASS
 
 
 # --- contributor onboarding: the no-account path ------------------------------
@@ -1811,13 +1815,13 @@ def test_endpoint_host_is_built_in_one_place():
     sv-expose puts it on an Ingress and the watch panel shows it to a human; a
     second copy of the formula would let those two disagree about the one
     string the whole feature is judged by."""
-    host = gen.sv_endpoint_host("vs1", 8080, "ns1", "apps.example.com")
+    host = service_virt.sv_endpoint_host("vs1", 8080, "ns1", "apps.example.com")
     assert host == "vs1-8080-ns1.apps.example.com"
     # No subdomain means there is no host to show yet, not a broken one.
-    assert gen.sv_endpoint_host("vs1", 8080, "ns1", None) is None
+    assert service_virt.sv_endpoint_host("vs1", 8080, "ns1", None) is None
     # ...and sv-expose's Ingress must use exactly that.
-    out = gen.sv_expose([{"name": "vs1", "port": 8080, "harbor": "h", "ship": "s"}],
-                        "ns1", gen.SvPublish("apps.example.com", None, "nginx"))
+    out = service_virt.sv_expose([{"name": "vs1", "port": 8080, "harbor": "h", "ship": "s"}],
+                        "ns1", service_virt.SvPublish("apps.example.com", None, "nginx"))
     assert f"host: {host}" in out
 
 
@@ -1983,19 +1987,36 @@ def test_generate_never_asks_how_the_facts_arrived():
     nothing here may branch on it.
 
     Over the *parsed* source rather than its text, so the rule can be explained
-    in a comment -- as it is at _location_bullet -- without the explanation
-    tripping it. A docstring naming the marker is a Constant; reading it is a
-    Name or an Attribute.
+    in a comment without the explanation tripping it. A docstring naming the
+    marker is a Constant; reading it is a Name or an Attribute.
+
+    Every package module generate() loads is walked, not generate.py alone:
+    the rendering lives in the modules it hands off to. facts defines the
+    marker and api is the client, so those two are the exceptions.
     """
     import ast
-    tree = ast.parse(pathlib.Path(gen.__file__).read_text())
+    import importlib
+    import subprocess
+    code = ("import sys, bzm_opl_gen.generate\n"
+            "print(' '.join(m for m in sys.modules "
+            "if m.startswith('bzm_opl_gen.')))")
+    loaded = subprocess.run(
+        [sys.executable, "-c", code], check=True, capture_output=True,
+        text=True, cwd=os.path.join(os.path.dirname(__file__), "..")
+    ).stdout.split()
+    walked = sorted(set(loaded) - {"bzm_opl_gen.facts", "bzm_opl_gen.api"})
+    assert {"bzm_opl_gen.render_manifests", "bzm_opl_gen.render_helm",
+            "bzm_opl_gen.render_docker", "bzm_opl_gen.readme_parts"} <= set(walked)
     banned = {"from_manual_entry", "MANUAL_SOURCE"}
-    read = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
-    read |= {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
-    assert not (read & banned), (
-        f"generate reads {sorted(read & banned)} -- the manifests are identical "
-        f"however the facts arrived, and that is the property facts.manual() "
-        f"exists to preserve. The marker is doctor's to read.")
+    for name in walked:
+        path = importlib.import_module(name).__file__
+        tree = ast.parse(pathlib.Path(path).read_text())
+        read = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+        read |= {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        assert not (read & banned), (
+            f"{name} reads {sorted(read & banned)} -- the manifests are "
+            f"identical however the facts arrived, and that is the property "
+            f"facts.manual() exists to preserve. The marker is doctor's to read.")
 
 
 # -- the docker format --------------------------------------------------------
@@ -2014,7 +2035,7 @@ def docker_sh(**opts):
 
 
 def docker_compose(**opts):
-    return gen.generate(FACTS, {**DOCKER, **opts})[gen.DOCKER_COMPOSE_FILE]
+    return gen.generate(FACTS, {**DOCKER, **opts})[bundle_names.DOCKER_COMPOSE_FILE]
 
 
 def test_docker_command_is_the_documented_shape():
@@ -2073,10 +2094,10 @@ def test_docker_hands_its_engines_a_port_range():
     defaults to -- which is not visible in the bundle, and so is not a thing the
     operator whose host it is can check or change."""
     for sh in (docker_sh(), docker_sh(use_secret=False)):
-        assert f"DOCKER_PORT_RANGE={gen.DOCKER_PORT_RANGE}" in sh
+        assert f"DOCKER_PORT_RANGE={render_docker.DOCKER_PORT_RANGE}" in sh
     # In the command, not the env file: it is configuration, not a credential.
     bundle = gen.generate(FACTS, DOCKER)
-    assert "DOCKER_PORT_RANGE" not in bundle[gen.DOCKER_ENV_FILE]
+    assert "DOCKER_PORT_RANGE" not in bundle[bundle_names.DOCKER_ENV_FILE]
 
 
 def test_docker_scripts_are_valid_shell():
@@ -2093,7 +2114,7 @@ def test_docker_scripts_are_valid_shell():
             # a character class while the message carries quotes, which is
             # exactly
             # the shape a quoting mistake hides in.
-            o["auth_token"] = gen.marker("auth_token")
+            o["auth_token"] = markers_mod.marker("auth_token")
         if ca:
             o["ca_bundle"] = "-----BEGIN CERTIFICATE-----\nx\n"
         if proxy:
@@ -2115,7 +2136,7 @@ def test_docker_scripts_are_valid_shell():
                   {"sv_hostname": SV_HOST, "sv_tls_cert": SV_CERT,
                    "sv_tls_key": ""},
                   {"sv_hostname": SV_HOST, "sv_tls_key": SV_KEY},
-                  {"ca_bundle": gen.marker("ca_bundle")}):
+                  {"ca_bundle": markers_mod.marker("ca_bundle")}):
         sh = gen.generate(FACTS, {**DOCKER, **extra})["bzm-opl-agent.sh"]
         r = subprocess.run(["sh", "-n", "-"], input=sh, text=True,
                            capture_output=True)
@@ -2128,7 +2149,7 @@ def test_docker_scripts_are_valid_shell():
     import bzm_opl_gen.facts as facts_mod
     sh = gen.generate(facts_mod.manual("", ""),
                       {**DOCKER, "ship_id": ""})["bzm-opl-agent.sh"]
-    assert gen.marker("ship_id") in sh, "the case did not arise"
+    assert markers_mod.marker("ship_id") in sh, "the case did not arise"
     r = subprocess.run(["sh", "-n", "-"], input=sh, text=True,
                        capture_output=True)
     assert r.returncode == 0, r.stderr
@@ -2201,7 +2222,7 @@ def test_docker_script_refuses_an_inline_placeholder_too(tmp_path):
     files = gen.generate(FACTS, {**DOCKER, "use_secret": False,
                                  "auth_token": "",
                                  "private_registry":
-                                     gen.marker("private_registry")})
+                                     markers_mod.marker("private_registry")})
     r, made = _run_bundle(tmp_path, files)
     assert r.returncode == 1
     assert "AUTH_TOKEN carries <AUTH_TOKEN>" in r.stderr
@@ -2238,9 +2259,9 @@ def test_a_finished_docker_bundle_carries_no_refusal(tmp_path):
     per variable that carries the marker, so the ordinary bundle is the script
     it was before this existed."""
     files = gen.generate(FACTS, DOCKER)
-    assert not gen.MARKER_RE.search(files["bzm-opl-agent.sh"])
-    assert not gen.MARKER_RE.search(files[gen.DOCKER_COMPOSE_FILE])
-    assert "BZM_OPL_UNSET" not in files[gen.DOCKER_ENV_FILE]
+    assert not markers_mod.MARKER_RE.search(files["bzm-opl-agent.sh"])
+    assert not markers_mod.MARKER_RE.search(files[bundle_names.DOCKER_COMPOSE_FILE])
+    assert "BZM_OPL_UNSET" not in files[bundle_names.DOCKER_ENV_FILE]
     r, made = _run_bundle(tmp_path, files)
     assert r.returncode == 0, r.stderr
     assert made == ["ps", "run"], made
@@ -2329,8 +2350,8 @@ COMPOSE_CASES = [
     # A field left blank, in each of the two files it can land in: the guard is
     # a `${...:?}` carrying a sentence with punctuation in it, which is the
     # shape a YAML quoting mistake hides in.
-    {"auth_token": gen.marker("auth_token")},
-    {"auth_token": gen.marker("auth_token"), "use_secret": False},
+    {"auth_token": markers_mod.marker("auth_token")},
+    {"auth_token": markers_mod.marker("auth_token"), "use_secret": False},
     # Service virtualization, which is two more mounted files and three more
     # variables -- the case #182 added and the one a parity check written
     # before it would have passed vacuously.
@@ -2356,11 +2377,11 @@ def test_the_docker_bundle_carries_both_routes_to_one_container():
     take a script, so which file they use is theirs and the bundle carries
     both."""
     files = gen.generate(FACTS, DOCKER)
-    assert gen.DOCKER_RUN_FILE in files and gen.DOCKER_COMPOSE_FILE in files
+    assert bundle_names.DOCKER_RUN_FILE in files and bundle_names.DOCKER_COMPOSE_FILE in files
     # The script leads everywhere it is listed -- BlazeMeter's own shape is the
     # one their documentation describes, which is the tie-break this repo uses.
     order = gen.preview_order(list(files))
-    assert order.index(gen.DOCKER_RUN_FILE) < order.index(gen.DOCKER_COMPOSE_FILE)
+    assert order.index(bundle_names.DOCKER_RUN_FILE) < order.index(bundle_names.DOCKER_COMPOSE_FILE)
 
 
 def test_compose_is_valid_yaml_in_every_branch():
@@ -2370,7 +2391,7 @@ def test_compose_is_valid_yaml_in_every_branch():
     a space or a backslash out of a proxy password or a free-form variable."""
     for extra in COMPOSE_CASES:
         doc = yaml.safe_load(docker_compose(**extra))
-        svc = doc["services"][gen.DOCKER_COMPOSE_SERVICE]
+        svc = doc["services"][bundle_names.DOCKER_COMPOSE_SERVICE]
         assert svc["image"] == FACTS["crane_image"] or extra.get("private_registry")
         assert svc["environment"]["HARBOR_ID"] == "aaa111"
 
@@ -2383,8 +2404,8 @@ def test_compose_is_v2_and_names_its_own_project():
     text = docker_compose()
     assert "version:" not in text
     doc = yaml.safe_load(text)
-    assert doc["name"] == gen.docker_container_name("bbb222")
-    assert set(doc["services"]) == {gen.DOCKER_COMPOSE_SERVICE}
+    assert doc["name"] == bundle_names.docker_container_name("bbb222")
+    assert set(doc["services"]) == {bundle_names.DOCKER_COMPOSE_SERVICE}
 
 
 def test_both_routes_carry_the_same_container_name():
@@ -2394,26 +2415,26 @@ def test_both_routes_carry_the_same_container_name():
     `compose up` with the name in the message. Verified live in both directions
     against a real daemon: `Conflict. The container name "/bzm-crane-..." is
     already in use`, and the script's own guard the other way round."""
-    name = gen.docker_container_name("bbb222")
+    name = bundle_names.docker_container_name("bbb222")
     files = gen.generate(FACTS, DOCKER)
-    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]
-    assert svc[gen.DOCKER_COMPOSE_SERVICE]["container_name"] == name
-    assert f'NAME="{name}"' in files[gen.DOCKER_RUN_FILE]
+    svc = yaml.safe_load(files[bundle_names.DOCKER_COMPOSE_FILE])["services"]
+    assert svc[bundle_names.DOCKER_COMPOSE_SERVICE]["container_name"] == name
+    assert f'NAME="{name}"' in files[bundle_names.DOCKER_RUN_FILE]
 
 
 def test_compose_reads_the_credential_file_the_script_does():
     """One credential file, not a copy: `use_secret` decides where the token is
     written and both routes read whatever that answer was."""
     files = gen.generate(FACTS, DOCKER)
-    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
-    assert svc["env_file"] == [f"./{gen.DOCKER_ENV_FILE}"]
+    svc = yaml.safe_load(files[bundle_names.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    assert svc["env_file"] == [f"./{bundle_names.DOCKER_ENV_FILE}"]
     # The value, like the script: with use_secret on it is in neither file.
-    assert "de" * 32 not in files[gen.DOCKER_COMPOSE_FILE]
+    assert "de" * 32 not in files[bundle_names.DOCKER_COMPOSE_FILE]
     assert "AUTH_TOKEN" not in svc["environment"]
     # Off, there is no env file to point at and the token is inline in both --
     # BlazeMeter's own shape, and the same shape twice.
     plain = gen.generate(FACTS, {**DOCKER, "use_secret": False})
-    svc = yaml.safe_load(plain[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    svc = yaml.safe_load(plain[bundle_names.DOCKER_COMPOSE_FILE])["services"]["crane"]
     assert "env_file" not in svc
     assert svc["environment"]["AUTH_TOKEN"] == "de" * 32
 
@@ -2432,7 +2453,7 @@ def test_no_docker_bundle_holds_a_file_called_dot_env():
         # ...and the compose file says why, in both branches -- with the
         # credential split out there is a file sitting there to be renamed,
         # without it there is only the one somebody is about to create.
-        assert "`.env`" in files[gen.DOCKER_COMPOSE_FILE]
+        assert "`.env`" in files[bundle_names.DOCKER_COMPOSE_FILE]
 
 
 def test_compose_escapes_a_dollar_so_it_reaches_the_container():
@@ -2463,19 +2484,19 @@ def test_compose_restates_the_fixed_half_of_the_command():
     test_compose_and_docker_run_describe_the_same_container holds the two
     against each other over the whole option matrix."""
     svc = yaml.safe_load(docker_compose())["services"]["crane"]
-    assert svc["user"] == gen.DOCKER_USER
-    assert svc["restart"] == gen.DOCKER_RESTART
-    assert svc["network_mode"] == gen.DOCKER_NETWORK
-    assert svc["working_dir"] == gen.DOCKER_WORKDIR
-    assert svc["command"] == gen.DOCKER_ENTRYPOINT
-    assert svc["volumes"] == gen.DOCKER_MOUNTS
+    assert svc["user"] == render_docker.DOCKER_USER
+    assert svc["restart"] == render_docker.DOCKER_RESTART
+    assert svc["network_mode"] == render_docker.DOCKER_NETWORK
+    assert svc["working_dir"] == render_docker.DOCKER_WORKDIR
+    assert svc["command"] == render_docker.DOCKER_ENTRYPOINT
+    assert svc["volumes"] == render_docker.DOCKER_MOUNTS
     # The CA mount is conditional in the script and conditional here, and it
     # keeps the same override: a host may already keep the trust bundle its
     # platform team maintains. Compose resolves the relative default against
     # this file's directory, which is what `$DIR` means in the script.
     with_ca = yaml.safe_load(docker_compose(ca_bundle="PEM\n"))["services"]["crane"]
     assert with_ca["volumes"][-1] == (
-        f"${{CA_BUNDLE:-./{gen.DOCKER_CA_FILE}}}:{gen.DOCKER_CA_PATH}:ro")
+        f"${{CA_BUNDLE:-./{bundle_names.DOCKER_CA_FILE}}}:{render_docker.DOCKER_CA_PATH}:ro")
 
 
 def test_compose_refuses_a_placeholder_in_the_same_words_as_the_script():
@@ -2493,46 +2514,46 @@ def test_compose_refuses_a_placeholder_in_the_same_words_as_the_script():
 
     One wording for both routes, so a customer reads the same sentence about the
     same variable and the same file whichever file they started from."""
-    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", gen.DOCKER_ENV_FILE,
-                                          gen.marker("auth_token"))
+    wrong, todo = render_docker._docker_blank_lines("AUTH_TOKEN", bundle_names.DOCKER_ENV_FILE,
+                                          markers_mod.marker("auth_token"))
     files = gen.generate(FACTS, {**DOCKER, "auth_token": ""})
     # Split out, the credential is in the one file both routes read -- so that
     # is where the guard sits. Compose interpolates env_file values; docker's
     # own --env-file does not, and the script refuses the marker inside the
     # message before that literal could reach a container.
-    env = files[gen.DOCKER_ENV_FILE]
+    env = files[bundle_names.DOCKER_ENV_FILE]
     assert env.startswith("# Read by docker --env-file")
     assert f"AUTH_TOKEN=${{BZM_OPL_UNSET_AUTH_TOKEN:?{wrong} {todo}}}" in env
     for line in (wrong, todo):
-        assert line in files[gen.DOCKER_RUN_FILE]
+        assert line in files[bundle_names.DOCKER_RUN_FILE]
     # A guard in compose.yaml over a value living in the env file would go on
     # refusing after somebody had filled it in -- nothing in that file can see
     # that they had, and a check that outlives its own fix is worse than none.
     assert "AUTH_TOKEN" not in yaml.safe_load(
-        files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]["environment"]
+        files[bundle_names.DOCKER_COMPOSE_FILE])["services"]["crane"]["environment"]
 
 
 def test_compose_refuses_an_inline_placeholder_at_the_value_itself():
     """Inline, the value is compose's own, so the guard is the value -- and both
     files name both files, because an inline value is in both of the two that
     start this container."""
-    where = f"{gen.DOCKER_RUN_FILE} and {gen.DOCKER_COMPOSE_FILE}"
-    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", where,
-                                          gen.marker("auth_token"))
+    where = f"{bundle_names.DOCKER_RUN_FILE} and {bundle_names.DOCKER_COMPOSE_FILE}"
+    wrong, todo = render_docker._docker_blank_lines("AUTH_TOKEN", where,
+                                          markers_mod.marker("auth_token"))
     files = gen.generate(FACTS, {**DOCKER, "auth_token": "", "use_secret": False})
-    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    svc = yaml.safe_load(files[bundle_names.DOCKER_COMPOSE_FILE])["services"]["crane"]
     assert svc["environment"]["AUTH_TOKEN"] == (
         f"${{BZM_OPL_UNSET_AUTH_TOKEN:?{wrong} {todo}}}")
     for line in (wrong, todo):
-        assert line in files[gen.DOCKER_RUN_FILE]
+        assert line in files[bundle_names.DOCKER_RUN_FILE]
     # The guard's variable is one nobody has. `${AUTH_TOKEN:?...}` would read the
     # ambient environment, and `${HTTP_PROXY:?...}` would resolve itself away on
     # the host most likely to have one -- leaving compose starting a bundle the
     # script beside it refuses, which is the two routes disagreeing about
     # whether the bundle is finished.
     proxy = gen.generate(FACTS, {**DOCKER, "use_secret": False,
-                                 "proxy": {"http": gen.marker("proxy.http")}})
-    svc = yaml.safe_load(proxy[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+                                 "proxy": {"http": markers_mod.marker("proxy.http")}})
+    svc = yaml.safe_load(proxy[bundle_names.DOCKER_COMPOSE_FILE])["services"]["crane"]
     assert svc["environment"]["HTTP_PROXY"].startswith("${BZM_OPL_UNSET_HTTP_PROXY:?")
 
 
@@ -2549,19 +2570,19 @@ def test_docker_refuses_an_identity_nobody_supplied():
     # generated for one agent out of several.
     files = gen.generate(facts_mod.manual("", ""),
                          {**DOCKER, "ship_id": ""})
-    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    svc = yaml.safe_load(files[bundle_names.DOCKER_COMPOSE_FILE])["services"]["crane"]
     for name, key in (("HARBOR_ID", "harbor_id"), ("SHIP_ID", "ship_id")):
-        wrong, todo = gen._docker_blank_lines(
-            name, f"{gen.DOCKER_RUN_FILE} and {gen.DOCKER_COMPOSE_FILE}",
-            gen.marker(key))
+        wrong, todo = render_docker._docker_blank_lines(
+            name, f"{bundle_names.DOCKER_RUN_FILE} and {bundle_names.DOCKER_COMPOSE_FILE}",
+            markers_mod.marker(key))
         assert svc["environment"][name] == (
             f"${{BZM_OPL_UNSET_{name}:?{wrong} {todo}}}")
         for line in (wrong, todo):
-            assert line in files[gen.DOCKER_RUN_FILE]
+            assert line in files[bundle_names.DOCKER_RUN_FILE]
     # ...and the container name carries it too, which is what makes the two
     # routes exclusive whether the bundle is finished or not.
-    assert svc["container_name"] == gen.docker_container_name(
-        gen.marker("ship_id"))
+    assert svc["container_name"] == bundle_names.docker_container_name(
+        markers_mod.marker("ship_id"))
 
 
 # -- ...and the two files are held equal, over the whole option matrix --------
@@ -2608,7 +2629,7 @@ def _blank_mount_vars(sh):
     file (`"$0"`, `"$ENV_FILE"`) and this one names the mount's own variable,
     which is exactly the difference between the two halves of the check."""
     return set(re.findall(
-        r"^if grep -q '" + re.escape(gen.MARKER_PATTERN)
+        r"^if grep -q '" + re.escape(markers_mod.MARKER_PATTERN)
         + r"' \"\$([A-Z][A-Z0-9_]*)\"; then$", sh, re.M))
 
 
@@ -2628,7 +2649,7 @@ def _env_file_env(files):
     """The credential file as {name: value}. Docker parses it itself -- one
     NAME=value per line, no quoting and no shell -- and compose reads the same
     file through `env_file:`, so this half is one text read twice."""
-    text = files.get(gen.DOCKER_ENV_FILE)
+    text = files.get(bundle_names.DOCKER_ENV_FILE)
     return dict(line.split("=", 1) for line in (text or "").splitlines()
                 if line and not line.startswith("#"))
 
@@ -2645,7 +2666,7 @@ def _script_paths(sh):
     """
     out = {}
     # Every variable the script assigns at the top, rather than three named
-    # ones: each mounted file adds one (generate.docker_file_mounts), and a
+    # ones: each mounted file adds one (render_docker.docker_file_mounts), and a
     # pattern that had to be extended per file is one that silently stops
     # resolving the mount it was not told about -- which reads here as a
     # difference between the two files rather than as a gap in this parser.
@@ -2667,7 +2688,7 @@ def _container_from_script(files):
     to one side fails loudly on `image` rather than being skipped -- the same
     rule the compose key set above states from the other direction.
     """
-    sh = files[gen.DOCKER_RUN_FILE]
+    sh = files[bundle_names.DOCKER_RUN_FILE]
     lines = sh.splitlines()
     i = lines.index("docker run -d \\")
     text = ""
@@ -2728,12 +2749,12 @@ def _container_from_compose(files):
     script. A guarded value is left as it stands -- it is not a value at all,
     and comparing it is the caller's business below.
     """
-    doc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])
+    doc = yaml.safe_load(files[bundle_names.DOCKER_COMPOSE_FILE])
     assert set(doc) == {"name", "services"}, sorted(doc)
-    svc = doc["services"][gen.DOCKER_COMPOSE_SERVICE]
+    svc = doc["services"][bundle_names.DOCKER_COMPOSE_SERVICE]
     assert set(svc) - {"env_file"} == COMPOSE_SERVICE_KEYS, (
         f"compose says {sorted(set(svc) - COMPOSE_SERVICE_KEYS - {'env_file'})} "
-        f"about this container and nothing holds it against {gen.DOCKER_RUN_FILE}")
+        f"about this container and nothing holds it against {bundle_names.DOCKER_RUN_FILE}")
     inline = {k: v if v.startswith(COMPOSE_GUARD) else v.replace("$$", "$")
               for k, v in svc["environment"].items()}
     c = {"name": svc["container_name"], "image": svc["image"],
@@ -2761,8 +2782,8 @@ def _container_from_compose(files):
 def _container_diffs(files):
     """Every way the bundle's two files describe different containers."""
     run, comp = _container_from_script(files), _container_from_compose(files)
-    diffs = [f"{f}: {gen.DOCKER_RUN_FILE}={run.get(f)!r} "
-             f"{gen.DOCKER_COMPOSE_FILE}={comp.get(f)!r}"
+    diffs = [f"{f}: {bundle_names.DOCKER_RUN_FILE}={run.get(f)!r} "
+             f"{bundle_names.DOCKER_COMPOSE_FILE}={comp.get(f)!r}"
              for f in ("image", "name", "user", "restart", "network", "workdir",
                        "command", "mounts", "env_files")
              if run.get(f) != comp.get(f)]
@@ -2776,16 +2797,16 @@ def _container_diffs(files):
         # that stopped refusing while the other went on doing so is exactly the
         # one-sided change this walks the matrix for.
         blank_here = k in comp["inline"] and str(cv).startswith(COMPOSE_GUARD)
-        blank_there = k in run["inline"] and gen.marker_in(rv) is not None
+        blank_there = k in run["inline"] and markers_mod.marker_in(rv) is not None
         if blank_here or blank_there:
             if not (blank_here and blank_there):
                 diffs.append(
                     f"env {k}: left blank, and only "
-                    f"{gen.DOCKER_COMPOSE_FILE if blank_here else gen.DOCKER_RUN_FILE}"
+                    f"{bundle_names.DOCKER_COMPOSE_FILE if blank_here else bundle_names.DOCKER_RUN_FILE}"
                     f" refuses it")
         elif rv != cv:
-            diffs.append(f"env {k}: {gen.DOCKER_RUN_FILE}={rv!r} "
-                         f"{gen.DOCKER_COMPOSE_FILE}={cv!r}")
+            diffs.append(f"env {k}: {bundle_names.DOCKER_RUN_FILE}={rv!r} "
+                         f"{bundle_names.DOCKER_COMPOSE_FILE}={cv!r}")
     return diffs
 
 
@@ -2835,15 +2856,15 @@ def test_the_parity_check_reads_both_files_rather_than_agreeing_vacuously():
                                  "proxy": {"http": "http://p:1"}})
     run = _container_from_script(files)
     assert run["image"] == FACTS["crane_image"]
-    assert run["name"] == gen.docker_container_name("bbb222")
-    assert run["user"] == gen.DOCKER_USER
-    assert run["restart"] == gen.DOCKER_RESTART
-    assert run["network"] == gen.DOCKER_NETWORK
-    assert run["workdir"] == gen.DOCKER_WORKDIR
-    assert run["command"] == gen.DOCKER_ENTRYPOINT
-    assert run["mounts"] == gen.DOCKER_MOUNTS + [
-        f"{gen.DOCKER_CA_FILE}:{gen.DOCKER_CA_PATH}:ro"]
-    assert run["env_files"] == [gen.DOCKER_ENV_FILE]
+    assert run["name"] == bundle_names.docker_container_name("bbb222")
+    assert run["user"] == render_docker.DOCKER_USER
+    assert run["restart"] == render_docker.DOCKER_RESTART
+    assert run["network"] == render_docker.DOCKER_NETWORK
+    assert run["workdir"] == render_docker.DOCKER_WORKDIR
+    assert run["command"] == render_docker.DOCKER_ENTRYPOINT
+    assert run["mounts"] == render_docker.DOCKER_MOUNTS + [
+        f"{bundle_names.DOCKER_CA_FILE}:{render_docker.DOCKER_CA_PATH}:ro"]
+    assert run["env_files"] == [bundle_names.DOCKER_ENV_FILE]
     # The credential is in the file both routes read and in neither inline set,
     # and the environment the container ends up with is the union.
     assert "AUTH_TOKEN" not in run["inline"]
@@ -2858,7 +2879,7 @@ def test_docker_readme_offers_both_routes_and_says_to_pick_one():
     -- docker refuses the second, but only after they have tried."""
     readme = gen.generate(FACTS, DOCKER)["README.md"]
     run = readme.split("## Run it")[1].split("##")[0]
-    assert run.index(f"./{gen.DOCKER_RUN_FILE}") < run.index("docker compose up -d")
+    assert run.index(f"./{bundle_names.DOCKER_RUN_FILE}") < run.index("docker compose up -d")
     assert "not both" in run
     assert "docker compose version" in run          # the version requirement
     # ...and the file people would tidy into a `.env` is named where it exists.
@@ -2895,7 +2916,7 @@ def test_docker_names_the_two_options_that_used_to_go_quiet():
 
 # The smallest options a bundle of each format generates from, so the two rules
 # below can be walked over every format rather than over the one that happens to
-# ignore anything today. Keyed by gen.OUTPUT_FORMATS, and the assertion in
+# ignore anything today. Keyed by bundle_options.OUTPUT_FORMATS, and the assertion in
 # test_every_format_has_an_ignored_entry is what keeps a fourth from being
 # tested by nobody.
 FORMAT_BASE = {
@@ -2916,14 +2937,14 @@ def test_every_format_has_an_ignored_entry():
     core.ignored_options). So a fourth format cannot arrive without somebody
     deciding what it drops -- which is this assertion, and the FORMAT_BASE above
     it, which is what would then walk it."""
-    assert set(gen.IGNORED_BY_FORMAT) == set(gen.OUTPUT_FORMATS)
-    assert set(FORMAT_BASE) == set(gen.OUTPUT_FORMATS)
+    assert set(bundle_options.IGNORED_BY_FORMAT) == set(bundle_options.OUTPUT_FORMATS)
+    assert set(FORMAT_BASE) == set(bundle_options.OUTPUT_FORMATS)
     # Named so a table that silently emptied itself fails here rather than
     # passing every rule below vacuously. Two of them now: since #182 the
     # cluster formats drop the docker agent's own way of publishing a virtual
     # service, which is what made this table symmetric for the first time.
-    assert gen.IGNORED_BY_FORMAT["docker"]["namespace"]
-    assert gen.IGNORED_BY_FORMAT["manifests"]["sv_hostname"]
+    assert bundle_options.IGNORED_BY_FORMAT["docker"]["namespace"]
+    assert bundle_options.IGNORED_BY_FORMAT["manifests"]["sv_hostname"]
 
 
 def test_a_format_never_refuses_what_it_says_it_ignores():
@@ -2942,7 +2963,7 @@ def test_a_format_never_refuses_what_it_says_it_ignores():
     which is the other half of the promise and the assertion below. Walked per
     format so the day a cluster format ignores something, its own README is
     held to the same promise without this test being rewritten first."""
-    for fmt, ignored in gen.IGNORED_BY_FORMAT.items():
+    for fmt, ignored in bundle_options.IGNORED_BY_FORMAT.items():
         junk = {k: "nonsense" for k in ignored}
         out = gen.generate(FACTS, {**FORMAT_BASE[fmt], **junk})
         for key in ignored:
@@ -2952,10 +2973,10 @@ def test_a_format_never_refuses_what_it_says_it_ignores():
     # the ConfigMap it was switched away from is ignored, not a second mode.
     both = gen.generate(FACTS, {**DOCKER, "ca_existing_configmap": "corp-trust",
                                 "ca_bundle": "-----BEGIN CERTIFICATE-----"})
-    assert both[gen.DOCKER_CA_FILE] == "-----BEGIN CERTIFICATE-----"
+    assert both[bundle_names.DOCKER_CA_FILE] == "-----BEGIN CERTIFICATE-----"
 
 
-@pytest.mark.parametrize("fmt", sorted(gen.IGNORED_BY_FORMAT))
+@pytest.mark.parametrize("fmt", sorted(bundle_options.IGNORED_BY_FORMAT))
 def test_a_format_never_lets_an_ignored_option_reach_a_generated_file(fmt):
     """The other half of the promise above, and the half nothing was checking.
 
@@ -2977,10 +2998,10 @@ def test_a_format_never_lets_an_ignored_option_reach_a_generated_file(fmt):
     compared: without one it is not emitted at all, and the leak this test was
     written for lived in a file the sweep would not have generated.
     """
-    named_by_design = {"README.md", gen.PROFILE_FILE}
+    named_by_design = {"README.md", bundle_names.PROFILE_FILE}
     base = {**FORMAT_BASE[fmt], "private_registry": "reg.corp/bzm"}
     plain = gen.generate(FACTS, base)
-    for key in gen.IGNORED_BY_FORMAT[fmt]:
+    for key in bundle_options.IGNORED_BY_FORMAT[fmt]:
         out = gen.generate(FACTS, {**base, key: "nonsense"})
         for name in sorted(set(plain) | set(out)):
             if name in named_by_design:
@@ -3044,7 +3065,7 @@ def test_docker_no_longer_refuses_a_service_virtualization_location():
                                     "sv_subdomain": "apps.example.com",
                                     "sv_tls_secret": "wild"})
     assert "`sv_ingress`" in files["README.md"]
-    assert "KUBERNETES_WEB_EXPOSE" not in files[gen.DOCKER_RUN_FILE]
+    assert "KUBERNETES_WEB_EXPOSE" not in files[bundle_names.DOCKER_RUN_FILE]
     # ...and a mockServices location with nothing configured is not refused
     # either: the demand `_sv_cfg` raises on is a demand for an *ingress*, and
     # this format has no field for one.
@@ -3065,25 +3086,25 @@ def test_a_docker_agent_publishes_virtual_services_under_its_own_three():
     bundle cannot be generated for a host nobody here can see if the option
     names a file on it."""
     files = gen.generate(FACTS, SV_DOCKER)
-    assert files[gen.DOCKER_SV_CERT_FILE] == SV_CERT
-    assert files[gen.DOCKER_SV_KEY_FILE] == SV_KEY
-    sh = files[gen.DOCKER_RUN_FILE]
+    assert files[bundle_names.DOCKER_SV_CERT_FILE] == SV_CERT
+    assert files[bundle_names.DOCKER_SV_KEY_FILE] == SV_KEY
+    sh = files[bundle_names.DOCKER_RUN_FILE]
     assert f"--env HOSTNAME_OVERRIDE={SV_HOST}" in sh
-    assert f"--env TLS_CERT={gen.DOCKER_SV_CERT_PATH}" in sh
-    assert f"--env TLS_KEY={gen.DOCKER_SV_KEY_PATH}" in sh
-    assert f'-v "$SV_TLS_CERT":{gen.DOCKER_SV_CERT_PATH}:ro' in sh
-    assert f'-v "$SV_TLS_KEY":{gen.DOCKER_SV_KEY_PATH}:ro' in sh
+    assert f"--env TLS_CERT={render_docker.DOCKER_SV_CERT_PATH}" in sh
+    assert f"--env TLS_KEY={render_docker.DOCKER_SV_KEY_PATH}" in sh
+    assert f'-v "$SV_TLS_CERT":{render_docker.DOCKER_SV_CERT_PATH}:ro' in sh
+    assert f'-v "$SV_TLS_KEY":{render_docker.DOCKER_SV_KEY_PATH}:ro' in sh
     # ...and each keeps `ca_bundle`'s escape hatch: a host may already have the
     # certificate its platform team maintains.
-    assert f'SV_TLS_CERT="${{SV_TLS_CERT:-$DIR/{gen.DOCKER_SV_CERT_FILE}}}"' in sh
+    assert f'SV_TLS_CERT="${{SV_TLS_CERT:-$DIR/{bundle_names.DOCKER_SV_CERT_FILE}}}"' in sh
     assert "virtual-service certificate not found" in sh
     # The compose file mounts the same pair at the same paths -- held over the
     # whole matrix by test_compose_and_docker_run_describe_the_same_container,
     # and stated here so the two files can be read side by side.
-    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    svc = yaml.safe_load(files[bundle_names.DOCKER_COMPOSE_FILE])["services"]["crane"]
     assert svc["volumes"][-2:] == [
-        f"${{SV_TLS_CERT:-./{gen.DOCKER_SV_CERT_FILE}}}:{gen.DOCKER_SV_CERT_PATH}:ro",
-        f"${{SV_TLS_KEY:-./{gen.DOCKER_SV_KEY_FILE}}}:{gen.DOCKER_SV_KEY_PATH}:ro"]
+        f"${{SV_TLS_CERT:-./{bundle_names.DOCKER_SV_CERT_FILE}}}:{render_docker.DOCKER_SV_CERT_PATH}:ro",
+        f"${{SV_TLS_KEY:-./{bundle_names.DOCKER_SV_KEY_FILE}}}:{render_docker.DOCKER_SV_KEY_PATH}:ro"]
     assert svc["environment"]["HOSTNAME_OVERRIDE"] == SV_HOST
 
 
@@ -3094,8 +3115,8 @@ def test_the_hostname_alone_is_a_configuration():
     whole of what HOSTNAME_OVERRIDE is for. Refusing it would be inventing a
     requirement they do not state."""
     files = gen.generate(FACTS, {**DOCKER, "sv_hostname": SV_HOST})
-    assert gen.DOCKER_SV_CERT_FILE not in files
-    sh = files[gen.DOCKER_RUN_FILE]
+    assert bundle_names.DOCKER_SV_CERT_FILE not in files
+    sh = files[bundle_names.DOCKER_RUN_FILE]
     assert f"--env HOSTNAME_OVERRIDE={SV_HOST}" in sh
     assert "TLS_CERT" not in sh
     # ...and the README says which of the two it is, because "no certificate"
@@ -3185,12 +3206,12 @@ def test_the_private_key_is_never_in_the_profile_and_the_certificate_is():
     without the key the replayed bundle carries a marker and says so.
     """
     files = gen.generate(FACTS, SV_DOCKER)
-    profile = json.loads(files[gen.PROFILE_FILE])
+    profile = json.loads(files[bundle_names.PROFILE_FILE])
     assert "sv_tls_key" not in profile
     assert profile["sv_tls_cert"] == SV_CERT
     assert profile["sv_hostname"] == SV_HOST
     replayed = gen.generate(FACTS, {**profile, "auth_token": "de" * 32})
-    assert replayed[gen.DOCKER_SV_KEY_FILE] == gen.marker("sv_tls_key")
+    assert replayed[bundle_names.DOCKER_SV_KEY_FILE] == markers_mod.marker("sv_tls_key")
     assert "`sv_tls_key`" in replayed["README.md"]
 
 
@@ -3204,13 +3225,13 @@ def test_half_a_tls_pair_is_a_blank_field_rather_than_a_refusal():
     variable, where #183's guard is what refuses it before the agent starts."""
     only_cert = gen.generate(FACTS, {**DOCKER, "sv_hostname": SV_HOST,
                                      "sv_tls_cert": SV_CERT})
-    assert only_cert[gen.DOCKER_SV_KEY_FILE] == gen.marker("sv_tls_key")
+    assert only_cert[bundle_names.DOCKER_SV_KEY_FILE] == markers_mod.marker("sv_tls_key")
     assert "`sv_tls_key`" in only_cert["README.md"]
     blank_host = gen.generate(FACTS, {**SV_DOCKER, "sv_hostname": ""})
-    assert "HOSTNAME_OVERRIDE" in gen._blank_env_by_name(FACTS, {
-        **gen.DEFAULT_OPTIONS, **SV_DOCKER,
-        "sv_hostname": gen.marker("sv_hostname")})
-    assert "HOSTNAME_OVERRIDE carries" in blank_host[gen.DOCKER_RUN_FILE]
+    assert "HOSTNAME_OVERRIDE" in render_docker._blank_env_by_name(FACTS, {
+        **bundle_options.DEFAULT_OPTIONS, **SV_DOCKER,
+        "sv_hostname": markers_mod.marker("sv_hostname")})
+    assert "HOSTNAME_OVERRIDE carries" in blank_host[bundle_names.DOCKER_RUN_FILE]
 
 
 def test_the_script_refuses_a_blank_mounted_file_before_starting_anything(tmp_path):
@@ -3227,7 +3248,7 @@ def test_the_script_refuses_a_blank_mounted_file_before_starting_anything(tmp_pa
     finishing the bundle clear it.
     """
     files = gen.generate(FACTS, {**SV_DOCKER, "sv_tls_key": ""})
-    assert files[gen.DOCKER_SV_KEY_FILE] == gen.marker("sv_tls_key")
+    assert files[bundle_names.DOCKER_SV_KEY_FILE] == markers_mod.marker("sv_tls_key")
     r, made = _run_bundle(tmp_path, files)
     assert r.returncode == 1
     assert "sv-tls.key carries <SV_TLS_KEY>" in r.stderr
@@ -3239,7 +3260,7 @@ def test_the_script_refuses_a_blank_mounted_file_before_starting_anything(tmp_pa
 
     # Filled in, the same bundle runs: the check reads the file as it stands,
     # so there is nothing to delete afterwards.
-    (tmp_path / gen.DOCKER_SV_KEY_FILE).write_text(SV_KEY)
+    (tmp_path / bundle_names.DOCKER_SV_KEY_FILE).write_text(SV_KEY)
     r, made = _run_bundle(tmp_path)
     assert r.returncode == 0, r.stderr
     assert made == ["ps", "ps", "run"], made
@@ -3273,25 +3294,25 @@ def test_compose_refuses_a_blank_mounted_file_in_the_same_words():
     a name nobody has would refuse a bundle finished the way its own README
     asks.
     """
-    m = [m for m in gen.docker_file_mounts({**gen.DEFAULT_OPTIONS, **SV_DOCKER,
+    m = [m for m in render_docker.docker_file_mounts({**bundle_options.DEFAULT_OPTIONS, **SV_DOCKER,
                                             "sv_tls_key":
-                                                gen.marker("sv_tls_key")})
+                                                markers_mod.marker("sv_tls_key")})
          if m.var == "SV_TLS_KEY"][0]
-    wrong, todo = gen._docker_blank_file_lines(m)
+    wrong, todo = render_docker._docker_blank_file_lines(m)
     files = gen.generate(FACTS, {**SV_DOCKER, "sv_tls_key": ""})
-    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    svc = yaml.safe_load(files[bundle_names.DOCKER_COMPOSE_FILE])["services"]["crane"]
     assert svc["volumes"][-1] == (
-        f"${{SV_TLS_KEY:?{wrong} {todo}}}:{gen.DOCKER_SV_KEY_PATH}:ro")
-    assert "BZM_OPL_UNSET" not in files[gen.DOCKER_COMPOSE_FILE]
+        f"${{SV_TLS_KEY:?{wrong} {todo}}}:{render_docker.DOCKER_SV_KEY_PATH}:ro")
+    assert "BZM_OPL_UNSET" not in files[bundle_names.DOCKER_COMPOSE_FILE]
     # One wording for both routes, so a customer reads the same sentence about
     # the same file whichever of the two they started from.
     for line in (wrong, todo):
-        assert line in files[gen.DOCKER_RUN_FILE]
+        assert line in files[bundle_names.DOCKER_RUN_FILE]
     # The certificate beside it was supplied, so it keeps its default and
     # neither route says anything about it: the guard is per file left blank.
     assert svc["volumes"][-2] == (
-        f"${{SV_TLS_CERT:-./{gen.DOCKER_SV_CERT_FILE}}}:"
-        f"{gen.DOCKER_SV_CERT_PATH}:ro")
+        f"${{SV_TLS_CERT:-./{bundle_names.DOCKER_SV_CERT_FILE}}}:"
+        f"{render_docker.DOCKER_SV_CERT_PATH}:ro")
 
 
 def test_a_finished_tls_pair_carries_no_file_guard(tmp_path):
@@ -3299,9 +3320,9 @@ def test_a_finished_tls_pair_carries_no_file_guard(tmp_path):
     the variable-level guard follows: the ordinary bundle is the pair of files
     it was before either check existed."""
     files = gen.generate(FACTS, SV_DOCKER)
-    assert not gen.MARKER_RE.search(files[gen.DOCKER_RUN_FILE])
-    assert not gen.MARKER_RE.search(files[gen.DOCKER_COMPOSE_FILE])
-    assert ":?" not in files[gen.DOCKER_COMPOSE_FILE]
+    assert not markers_mod.MARKER_RE.search(files[bundle_names.DOCKER_RUN_FILE])
+    assert not markers_mod.MARKER_RE.search(files[bundle_names.DOCKER_COMPOSE_FILE])
+    assert ":?" not in files[bundle_names.DOCKER_COMPOSE_FILE]
     r, made = _run_bundle(tmp_path, files)
     assert r.returncode == 0, r.stderr
     assert made == ["ps", "run"], made
@@ -3315,7 +3336,7 @@ def test_a_finished_tls_pair_carries_no_file_guard(tmp_path):
 # facts carry mockServices and the options mostly do not.
 
 MOCK_FACTS = {**FACTS, "func_ids": ["mockServices"]}
-MOCK_LATEST = f"{gen.PUBLIC_REGISTRY}/blazemeter/service-mock:latest"
+MOCK_LATEST = f"{footprint.PUBLIC_REGISTRY}/blazemeter/service-mock:latest"
 
 
 def test_a_docker_sv_bundle_names_the_images_crane_will_not_pull():
@@ -3471,7 +3492,7 @@ def test_the_cluster_formats_carry_no_pre_pull_note():
     helm = gen.generate(MOCK_FACTS, {"namespace": "ns1", "ship_id": "bbb222",
                                      "auth_token": "de" * 32,
                                      "output_format": "helm",
-                                     "sv_ingress": gen.SV_INGRESS_NONE})
+                                     "sv_ingress": service_virt.SV_INGRESS_NONE})
     for files in (manifests, helm):
         for name, body in files.items():
             if name.endswith(".md"):
@@ -3521,7 +3542,7 @@ def test_the_docker_mirror_pushes_exactly_what_the_readme_says_to_pull():
     # version that is. Nothing pushes the pinned tag as a second destination --
     # that would be a reference in this file the pull list does not name.
     sources = {s for s, d in _mirror_pairs(files) if "/blazemeter/" in d}
-    assert f"{gen.PUBLIC_REGISTRY}/blazemeter/service-mock:1.0" in sources
+    assert f"{footprint.PUBLIC_REGISTRY}/blazemeter/service-mock:1.0" in sources
     assert not [d for _, d in _mirror_pairs(files) if d.endswith(":1.0")]
 
 
@@ -3533,7 +3554,7 @@ def test_cranes_own_mirror_target_is_the_reference_the_bundle_runs():
     files = gen.generate(MOCK_FACTS, {**DOCKER, "private_registry": REG})
     crane = f"{REG}/crane:3.7.55"
     assert crane in files["bzm-opl-agent.sh"]
-    assert crane in files[gen.DOCKER_COMPOSE_FILE]
+    assert crane in files[bundle_names.DOCKER_COMPOSE_FILE]
     assert crane in [d for _, d in _mirror_pairs(files)]
 
 
@@ -3543,7 +3564,7 @@ def _cluster_overrides(files):
     if "bzm_configmap.yaml" in files:
         return json.loads(yaml.safe_load(
             files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
-    return yaml.safe_load(files[gen.HELM_VALUES_FILE])["imageOverrides"]
+    return yaml.safe_load(files[bundle_names.HELM_VALUES_FILE])["imageOverrides"]
 
 
 CLUSTER_FORMATS = ("manifests", "helm")
@@ -3573,7 +3594,7 @@ def test_the_cluster_map_and_its_mirror_name_one_set():
         # location rather than the option, so this is the widest image set
         # either way -- it was written when the chart refused a configured
         # ingress, and it is still the case that says so about the images.
-        files = _cluster_bundle(fmt, MOCK_FACTS, sv_ingress=gen.SV_INGRESS_NONE)
+        files = _cluster_bundle(fmt, MOCK_FACTS, sv_ingress=service_virt.SV_INGRESS_NONE)
         dests = {d for _, d in _mirror_pairs(files)}
         overrides = set(_cluster_overrides(files).values())
         crane = {d for d in dests if "/crane:" in d}
@@ -3609,7 +3630,7 @@ def test_cranes_cluster_mirror_target_is_the_reference_the_bundle_runs():
     assert crane in manifests["bzm_deployment.yaml"]
     assert crane in [d for _, d in _mirror_pairs(manifests)]
     helm = _cluster_bundle("helm")
-    values = yaml.safe_load(helm[gen.HELM_VALUES_FILE])
+    values = yaml.safe_load(helm[bundle_names.HELM_VALUES_FILE])
     assert f"{values['image']['repository']}:{values['image']['tag']}" == crane
     assert crane in [d for _, d in _mirror_pairs(helm)]
 
@@ -3653,7 +3674,7 @@ def test_the_two_platforms_never_offer_each_other_s_vocabulary():
     # until #182 only docker's README kept it.
     assert "## Set here, but not carried" in k8s["README.md"]
     assert "`sv_hostname`" in k8s["README.md"]
-    assert gen.SV_DOCKER_IGNORED.keys() <= gen.IGNORED_BY_FORMAT["helm"].keys()
+    assert bundle_options.SV_DOCKER_IGNORED.keys() <= bundle_options.IGNORED_BY_FORMAT["helm"].keys()
 
 
 def test_docker_profile_replays_and_carries_no_token():
@@ -3728,7 +3749,7 @@ def _env_names(facts, opts):
                     names |= set(re.findall(r"^\s*# ([A-Z][A-Z0-9_]*): <",
                                             content, re.M))
     if opts.get("output_format") == "docker":
-        names |= set(gen.docker_env(facts, {**gen.DEFAULT_OPTIONS, **opts}))
+        names |= set(render_docker.docker_env(facts, {**bundle_options.DEFAULT_OPTIONS, **opts}))
     return names
 
 
@@ -3744,7 +3765,7 @@ def test_reserved_env_is_what_the_bundles_actually_write():
     written = set()
     for facts, opts in ENV_COVERAGE:
         written |= _env_names(facts, opts)
-    assert written == set(gen.RESERVED_ENV)
+    assert written == set(bundle_env.RESERVED_ENV)
 
 
 def test_extra_env_reaches_every_format():
@@ -3766,7 +3787,7 @@ def test_extra_env_reaches_every_format():
     # token has moved into the env file.
     assert "PREFERRED_INTERFACE" not in (
         gen.generate(FACTS, {**base, "output_format": "docker"})
-        .get(gen.DOCKER_ENV_FILE, ""))
+        .get(bundle_names.DOCKER_ENV_FILE, ""))
 
 
 def test_extra_env_refuses_a_variable_the_bundle_already_writes():
@@ -3858,7 +3879,7 @@ def test_the_file_mode_carries_no_configmap_and_no_pem():
     files = gen.generate(FACTS, CERT_FILE_OPTS)
     _all_yaml_parse(files)
     assert "bzm_cacerts.yaml" not in files
-    assert not any(gen.marker("ca_bundle") in t for t in files.values())
+    assert not any(markers_mod.marker("ca_bundle") in t for t in files.values())
     assert not any("BEGIN CERTIFICATE" in t for t in files.values())
 
 
@@ -3868,15 +3889,15 @@ def test_the_file_mode_wires_the_agent_exactly_like_a_filled_bundle():
     the BlazeMeter documented Deployment, key for key."""
     files = gen.generate(FACTS, CERT_FILE_OPTS)
     spec = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
-    assert spec["volumes"][0]["configMap"]["name"] == gen.CA_CONFIGMAP
-    assert spec["containers"][0]["volumeMounts"][0]["mountPath"] == gen.CA_MOUNT_PATH
+    assert spec["volumes"][0]["configMap"]["name"] == bundle_names.CA_CONFIGMAP
+    assert spec["containers"][0]["volumeMounts"][0]["mountPath"] == ca_trust.CA_MOUNT_PATH
     conf = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
-    path = f"{gen.CA_MOUNT_PATH}/corp-root.crt"
+    path = f"{ca_trust.CA_MOUNT_PATH}/corp-root.crt"
     assert conf["REQUESTS_CA_BUNDLE"] == path
     assert conf["AWS_CA_BUNDLE"] == path
     assert conf["KUBERNETES_CA_BUNDLE_MOUNT"] == (
-        f"REQUESTS_CA_BUNDLE={gen.CA_CONFIGMAP}=corp-root.crt:"
-        f"AWS_CA_BUNDLE={gen.CA_CONFIGMAP}=corp-root.crt")
+        f"REQUESTS_CA_BUNDLE={bundle_names.CA_CONFIGMAP}=corp-root.crt:"
+        f"AWS_CA_BUNDLE={bundle_names.CA_CONFIGMAP}=corp-root.crt")
 
 
 def test_one_field_names_the_file_everywhere_it_appears():
@@ -3897,13 +3918,13 @@ def test_an_unnamed_certificate_is_the_marker_and_not_a_name_we_invented():
     goes and read back as a decision somebody made."""
     conf = yaml.safe_load(gen.generate(FACTS, {
         "namespace": "ns1", "ca_bundle_slot": True})["bzm_configmap.yaml"])["data"]
-    assert conf["REQUESTS_CA_BUNDLE"] == f"{gen.CA_MOUNT_PATH}/{gen.marker('ca_cert_file')}"
+    assert conf["REQUESTS_CA_BUNDLE"] == f"{ca_trust.CA_MOUNT_PATH}/{markers_mod.marker('ca_cert_file')}"
     # ...and the inline mode does not, because there the bundle writes the file
     # itself and the name is genuinely this generator's to pick.
     pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
     inline = yaml.safe_load(gen.generate(FACTS, {
         "namespace": "ns1", "ca_bundle": pem})["bzm_configmap.yaml"])["data"]
-    assert inline["REQUESTS_CA_BUNDLE"] == f"{gen.CA_MOUNT_PATH}/{gen.CA_FILENAME}"
+    assert inline["REQUESTS_CA_BUNDLE"] == f"{ca_trust.CA_MOUNT_PATH}/{ca_trust.CA_FILENAME}"
 
 
 def test_the_readme_prints_the_create_command_keyed_to_what_is_mounted():
@@ -3911,7 +3932,7 @@ def test_the_readme_prints_the_create_command_keyed_to_what_is_mounted():
     BlazeMeter document: the bare form keys the entry on the file's own name, so
     a certificate called anything else lands under a key nothing mounts."""
     md = gen.generate(FACTS, CERT_FILE_OPTS)["README.md"]
-    assert (f"kubectl create configmap {gen.CA_CONFIGMAP}" in md
+    assert (f"kubectl create configmap {bundle_names.CA_CONFIGMAP}" in md
             and "--from-file=corp-root.crt=./corp-root.crt -n ns1" in md)
     # The failure when somebody skips it, because a step nobody explains is a
     # step people skip. It is the kubelet refusing the mount, not this bundle.
@@ -3926,16 +3947,16 @@ def test_the_helm_bundle_ships_the_file_rather_than_inlining_the_pem():
     pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
     files = gen.generate(FACTS, {"namespace": "ns1", "output_format": "helm",
                                  "ca_bundle": pem})
-    assert files[f"{gen.CHART_DIR}/{gen.CA_FILENAME}"].strip() == pem
-    values = files[gen.HELM_VALUES_FILE]
-    assert f'file: "{gen.CA_FILENAME}"' in values
+    assert files[f"{bundle_names.CHART_DIR}/{ca_trust.CA_FILENAME}"].strip() == pem
+    values = files[bundle_names.HELM_VALUES_FILE]
+    assert f'file: "{ca_trust.CA_FILENAME}"' in values
     assert "BEGIN CERTIFICATE" not in values
     # ...and with no certificate in hand, the name alone and no file: the chart
     # refuses the install rather than resolving a placeholder file and
     # installing an agent that trusts nothing.
     named = gen.generate(FACTS, dict(CERT_FILE_OPTS, output_format="helm"))
-    assert f"{gen.CHART_DIR}/corp-root.crt" not in named
-    assert 'file: "corp-root.crt"' in named[gen.HELM_VALUES_FILE]
+    assert f"{bundle_names.CHART_DIR}/corp-root.crt" not in named
+    assert 'file: "corp-root.crt"' in named[bundle_names.HELM_VALUES_FILE]
 
 
 def test_naming_a_file_and_supplying_a_pem_are_two_answers_to_one_question():
@@ -3947,10 +3968,10 @@ def test_naming_a_file_and_supplying_a_pem_are_two_answers_to_one_question():
 def test_the_file_mode_is_one_of_the_ca_modes_not_a_fourth_thing():
     """`no_ca()` clears every CA option, and `CA_OPTIONS` is what it reads --
     livetest's negative control proves nothing unless the CA is really gone."""
-    assert "ca_bundle_slot" in gen.CA_MODES
-    assert "ca_cert_file" in gen.CA_OPTIONS
-    cleared = gen.no_ca()
-    assert gen._ca_cfg({**gen.DEFAULT_OPTIONS, **CERT_FILE_OPTS, **cleared}) is None
+    assert "ca_bundle_slot" in ca_trust.CA_MODES
+    assert "ca_cert_file" in ca_trust.CA_OPTIONS
+    cleared = ca_trust.no_ca()
+    assert ca_trust.ca_cfg({**bundle_options.DEFAULT_OPTIONS, **CERT_FILE_OPTS, **cleared}) is None
 
 
 @pytest.mark.parametrize("options,mode", [
@@ -3965,7 +3986,7 @@ def test_the_mode_a_bundle_is_in_is_readable_without_rendering_it(options, mode)
     livetest creates the ConfigMap for two of these and can create it for
     neither of the others. Reading `ca_bundle_slot` and its neighbours at each
     such call site is what #250 was, four times over."""
-    assert gen.ca_mode(dict(options, namespace="ns1")) == mode
+    assert ca_trust.ca_mode(dict(options, namespace="ns1")) == mode
 
 
 def test_options_generate_will_refuse_are_their_own_answer_not_no_ca():
@@ -3976,42 +3997,42 @@ def test_options_generate_will_refuse_are_their_own_answer_not_no_ca():
     whole job is to speak before anything is built."""
     both = {"namespace": "ns1", "ca_bundle_slot": True,
             "ca_bundle": "-----BEGIN CERTIFICATE-----"}
-    assert gen.ca_mode(both) is gen.CA_UNRESOLVED
-    assert gen.resolved_ca(both) is gen.CA_UNRESOLVED
-    assert gen.ca_mode({"namespace": "ns1"}) is None
+    assert ca_trust.ca_mode(both) is ca_trust.CA_UNRESOLVED
+    assert ca_trust.resolved_ca(both) is ca_trust.CA_UNRESOLVED
+    assert ca_trust.ca_mode({"namespace": "ns1"}) is None
     # And the notice above it still says nothing about a bundle generate is
     # about to refuse.
-    assert gen.ca_slot_notice(both) is None
+    assert ca_trust.ca_slot_notice(both) is None
 
 
 def test_generate_says_it_before_the_bundle_is_even_written():
     """The person who runs the command chose the file mode and can act now; the
     README says it again for the person who applies the bundle, who is routinely
     somebody else."""
-    said = gen.ca_slot_notice(CERT_FILE_OPTS)
-    assert "corp-root.crt" in said and gen.CA_CONFIGMAP in said
+    said = ca_trust.ca_slot_notice(CERT_FILE_OPTS)
+    assert "corp-root.crt" in said and bundle_names.CA_CONFIGMAP in said
 
 
 def test_the_notice_tells_a_named_file_from_one_nobody_has_named():
     """Two different facts, and only one is a thing left undone. Saying "still
     to do" over a finished bundle teaches the reader to ignore the sentence that
     means somebody forgot something."""
-    named = gen.ca_slot_notice(CERT_FILE_OPTS)
-    assert "corp-root.crt" in named and gen.marker("ca_cert_file") not in named
-    blank = gen.ca_slot_notice({"namespace": "ns1", "ca_bundle_slot": True})
-    assert gen.marker("ca_cert_file") in blank
+    named = ca_trust.ca_slot_notice(CERT_FILE_OPTS)
+    assert "corp-root.crt" in named and markers_mod.marker("ca_cert_file") not in named
+    blank = ca_trust.ca_slot_notice({"namespace": "ns1", "ca_bundle_slot": True})
+    assert markers_mod.marker("ca_cert_file") in blank
 
 
 @pytest.mark.parametrize("fmt,says", [
     ("manifests", "kubectl apply"),
     ("helm", "helm install"),
-    ("docker", gen.DOCKER_RUN_FILE),
+    ("docker", bundle_names.DOCKER_RUN_FILE),
 ])
 def test_the_notice_names_who_builds_the_configmap_on_this_format(fmt, says):
     """Three formats, three answers, and one sentence for all of them would be
     wrong twice: the chart builds it at install, a pipeline builds it before
     apply, and docker has no ConfigMap at all."""
-    said = gen.ca_slot_notice(dict(CERT_FILE_OPTS, output_format=fmt))
+    said = ca_trust.ca_slot_notice(dict(CERT_FILE_OPTS, output_format=fmt))
     assert says in said
 
 
@@ -4023,7 +4044,7 @@ def test_the_notice_leaves_every_refusal_to_the_one_that_owns_it(options):
     """A notice must not be the thing that raises, least of all from inside the
     MCP server's warning list -- and each of these is refused one line later, by
     the code that can name what is wrong with it."""
-    assert gen.ca_slot_notice(dict(options, namespace="ns1",
+    assert ca_trust.ca_slot_notice(dict(options, namespace="ns1",
                                    ca_bundle_slot=True)) is None
 
 
@@ -4051,4 +4072,4 @@ def test_every_configmap_value_survives_whatever_it_holds(use_secret):
     carrier = next(d for ds in docs.values() for d in ds
                    if d and "HTTP_PROXY" in (d.get("stringData") or d.get("data") or {}))
     assert ((carrier.get("stringData") or carrier.get("data"))["HTTP_PROXY"]
-            == gen.proxy_env(o)["HTTP_PROXY"])
+            == bundle_env.proxy_env(o)["HTTP_PROXY"])

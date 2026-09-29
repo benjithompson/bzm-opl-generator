@@ -13,9 +13,11 @@ import anyio
 import mcp
 import pytest
 
-from bzm_opl_gen import core, evidence, generate as gen_mod, kube, mcp_server, plan
+from bzm_opl_gen import (core, evidence, generate as gen_mod, kube, mcp_server,
+                         plan)
 from test_core import FakeClient, RefusingClient
 from test_generate import FACTS
+from bzm_opl_gen import bundle_names, bundle_options, markers  # noqa: E402
 
 # The one ship in FACTS, and the ship a rotation therefore names.
 SHIP = FACTS["ships"][0]["id"]
@@ -254,7 +256,7 @@ def test_generate_mints_nothing_unless_a_session_asks_to_rotate(fake_account,
     """generate without rotate_token calls the token endpoint zero times."""
     body = ok("opl_bundle", "generate", {"facts": FACTS, "out_dir": str(tmp_path)})
     assert fake_account.calls == []
-    assert (gen_mod.DEFAULT_OPTIONS["auth_token"]
+    assert (bundle_options.DEFAULT_OPTIONS["auth_token"]
             in (tmp_path / "bzm_secret.yaml").read_text())
     assert body["token_source"]["branch"] == core.TOKEN_PLACEHOLDER
     # And where a real one comes from, since this bundle cannot be applied yet.
@@ -267,7 +269,7 @@ def test_a_ca_slot_is_a_warning_here_rather_than_a_line_beside_the_token(
     body = ok("opl_bundle", "generate",
               {"facts": FACTS, "out_dir": str(tmp_path),
                "options": {"ca_bundle_slot": True}})
-    assert any(gen_mod.CA_CONFIGMAP in w for w in body["warnings"]), \
+    assert any(bundle_names.CA_CONFIGMAP in w for w in body["warnings"]), \
         body["warnings"]
     plain = ok("opl_bundle", "generate",
                {"facts": FACTS, "out_dir": str(tmp_path)})
@@ -694,8 +696,8 @@ def test_manual_facts_need_no_account():
 def test_manual_facts_need_no_ids_and_say_which_are_missing():
     """Manual facts take no ids and name the missing ones in `warnings`."""
     body = ok("opl_facts", "manual", {})
-    assert body["facts"]["harbor_id"] == gen_mod.marker("harbor_id")
-    assert body["facts"]["ships"][0]["id"] == gen_mod.marker("ship_id")
+    assert body["facts"]["harbor_id"] == markers.marker("harbor_id")
+    assert body["facts"]["ships"][0]["id"] == markers.marker("ship_id")
     said = " ".join(body["warnings"])
     assert "harbor_id (<HARBOR_ID>) and ship_id (<SHIP_ID>)" in said
     # ...and an id that was supplied is not reported as missing.

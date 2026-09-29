@@ -14,6 +14,7 @@ from test_livetest import _fake_kubectl, _sv_pod  # noqa: E402
 from test_core import (EXPIRED_401, ExpiredClient, FakeClient,  # noqa: E402
                        RefusingClient)
 from versions_fixtures import VERSIONS_PERFORMANCE  # noqa: E402
+from bzm_opl_gen import (bundle_names, bundle_options, markers, service_virt)  # noqa: E402
 
 # Absolute: several tests run the command from a directory of their own.
 KEY = os.path.abspath("examples/api-key.example.json")
@@ -58,7 +59,7 @@ def test_sv_expose_writes_a_pair_per_deployed_mock(fake_cluster, monkeypatch,
                                                    tmp_path, capsys):
     """sv-expose reads the namespace's mocks, renders, writes and says how to apply."""
     fake_cluster(stdout=SV_PODS)
-    out = tmp_path / gen.SV_EXPOSE_FILE
+    out = tmp_path / bundle_names.SV_EXPOSE_FILE
     _run(monkeypatch, "sv-expose", "--manifests", "", "-n", "ns1",
          "--sv-subdomain", "apps.example.com",
          "--sv-tls-secret", "wildcard-tls", "-o", str(out))
@@ -78,7 +79,7 @@ def test_sv_expose_ingress_class_reaches_the_ingress(fake_cluster, monkeypatch,
     fake_cluster(stdout=SV_PODS)
 
     def ing(*extra):
-        out = tmp_path / f"{len(extra)}-{gen.SV_EXPOSE_FILE}"
+        out = tmp_path / f"{len(extra)}-{bundle_names.SV_EXPOSE_FILE}"
         _run(monkeypatch, "sv-expose", "--manifests", "", "-n", "ns1",
              "--sv-subdomain", "apps.example.com", "-o", str(out), *extra)
         return next(d for d in _docs(out) if d["kind"] == "Ingress")
@@ -86,7 +87,7 @@ def test_sv_expose_ingress_class_reaches_the_ingress(fake_cluster, monkeypatch,
     assert (ing("--ingress-class", "openshift-default")
             ["spec"]["ingressClassName"] == "openshift-default")
     assert (ing()["spec"]["ingressClassName"]
-            == gen.SV_EXPOSE_DEFAULT_INGRESS_CLASS)
+            == service_virt.SV_EXPOSE_DEFAULT_INGRESS_CLASS)
 
 
 def test_sv_expose_reads_the_bundles_profile_rather_than_repeating_flags(
@@ -99,7 +100,7 @@ def test_sv_expose_reads_the_bundles_profile_rather_than_repeating_flags(
         "sv_subdomain": "apps.example.com", "sv_tls_secret": "wildcard-tls",
         "sv_ingress_class": "openshift-default"}), str(tmp_path))
     fake_cluster(stdout=SV_PODS)
-    out = tmp_path / gen.SV_EXPOSE_FILE
+    out = tmp_path / bundle_names.SV_EXPOSE_FILE
     _run(monkeypatch, "sv-expose", "--manifests", str(tmp_path), "-o", str(out))
     ing = next(d for d in _docs(out) if d["kind"] == "Ingress")
     assert ing["metadata"]["namespace"] == "ns1"
@@ -117,7 +118,7 @@ def test_sv_expose_runs_from_anywhere_with_no_profile_at_all(fake_cluster,
     assert not os.path.exists("out")
     _run(monkeypatch, "sv-expose", "--manifests", "", "-n", "ns1",
          "--sv-subdomain", "apps.example.com", "--ingress-class", "nginx")
-    ing = next(d for d in _docs(gen.SV_EXPOSE_FILE) if d["kind"] == "Ingress")
+    ing = next(d for d in _docs(bundle_names.SV_EXPOSE_FILE) if d["kind"] == "Ingress")
     assert ing["spec"]["rules"][0]["host"] == "vs1svc2-8080-ns1.apps.example.com"
 
 
@@ -125,7 +126,7 @@ def test_sv_expose_says_to_deploy_first_when_the_namespace_is_empty(
         fake_cluster, monkeypatch, tmp_path):
     """An empty namespace is a refusal saying to deploy the virtual service first."""
     fake_cluster(stdout=json.dumps({"items": []}))
-    out = tmp_path / gen.SV_EXPOSE_FILE
+    out = tmp_path / bundle_names.SV_EXPOSE_FILE
     with pytest.raises(SystemExit) as e:
         _run(monkeypatch, "sv-expose", "--manifests", "", "-n", "ns1",
              "--sv-subdomain", "apps.example.com", "-o", str(out))
@@ -137,7 +138,7 @@ def test_sv_expose_refuses_without_a_wildcard_domain(fake_cluster, monkeypatch,
                                                      tmp_path):
     """No wildcard domain is a refusal before anything is written."""
     fake_cluster(stdout=SV_PODS)
-    out = tmp_path / gen.SV_EXPOSE_FILE
+    out = tmp_path / bundle_names.SV_EXPOSE_FILE
     with pytest.raises(ValueError, match="sv_subdomain"):
         _run(monkeypatch, "sv-expose", "--manifests", "", "-n", "ns1",
              "-o", str(out))
@@ -225,8 +226,8 @@ def test_manual_facts_take_neither_id_and_name_what_is_missing(monkeypatch,
     out = tmp_path / "facts.json"
     _run(monkeypatch, "facts", "--manual", "--output", str(out))
     f = json.loads(out.read_text())
-    assert f["harbor_id"] == gen.marker("harbor_id")
-    assert f["ships"][0]["id"] == gen.marker("ship_id")
+    assert f["harbor_id"] == markers.marker("harbor_id")
+    assert f["ships"][0]["id"] == markers.marker("ship_id")
     err = capsys.readouterr().err
     assert "harbor_id (<HARBOR_ID>) and ship_id (<SHIP_ID>)" in err
     assert "not a legal label value" in err
@@ -269,7 +270,7 @@ def test_generate_with_an_api_key_alone_mints_nothing(monkeypatch, tmp_path,
     out = capsys.readouterr()
     assert "--api-key has no effect" in out.err
     assert "--rotate-token" in out.err
-    assert (gen.DEFAULT_OPTIONS["auth_token"]
+    assert (bundle_options.DEFAULT_OPTIONS["auth_token"]
             in (tmp_path / "out" / "bzm_secret.yaml").read_text())
 
 
@@ -279,7 +280,7 @@ def test_generate_says_a_ca_slot_out_loud(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     # File mode: the line carries the file name (a marker here) and who builds
     # the ConfigMap from it.
-    assert gen.marker("ca_cert_file") in out and gen.CA_CONFIGMAP in out
+    assert markers.marker("ca_cert_file") in out and bundle_names.CA_CONFIGMAP in out
     assert out.index("AUTH_TOKEN") < out.index("CA certificate") < out.index("wrote ")
 
 
@@ -363,7 +364,7 @@ def test_generate_mints_nothing_without_an_api_key(monkeypatch, tmp_path,
         "-o", str(out)])
     cli.main()
     assert "rotated" not in capsys.readouterr().out
-    assert gen.DEFAULT_OPTIONS["auth_token"] in (out / "bzm_secret.yaml").read_text()
+    assert bundle_options.DEFAULT_OPTIONS["auth_token"] in (out / "bzm_secret.yaml").read_text()
 
 
 def _create_ship(monkeypatch, client):
@@ -494,7 +495,7 @@ def test_livetest_says_which_ship_it_rotated_before_it_deploys(monkeypatch,
 def test_livetest_refuses_to_deploy_a_placeholder_token(monkeypatch, tmp_path):
     """--auth-token given the placeholder string is refused."""
     _, _, exit = _livetest(monkeypatch, tmp_path, FakeClient(), "--auth-token",
-                           gen.DEFAULT_OPTIONS["auth_token"])
+                           bundle_options.DEFAULT_OPTIONS["auth_token"])
     assert "create-agent" in str(exit)
 
 
@@ -695,7 +696,7 @@ def test_livetest_refuses_a_ca_configmap_nothing_in_the_run_creates(monkeypatch,
     c = FakeClient()
     captured, exit = _ca_livetest(monkeypatch, tmp_path, c, CA_FILE_MODE)
     assert captured == {}
-    assert gen.CA_CONFIGMAP in str(exit.code) and "--ca-mode file" in str(exit.code)
+    assert bundle_names.CA_CONFIGMAP in str(exit.code) and "--ca-mode file" in str(exit.code)
     assert c.calls == []
 
 
@@ -836,7 +837,7 @@ def test_livetest_compose_refuses_a_bundle_for_another_agent(monkeypatch,
         _run(monkeypatch, "livetest", "--api-key", KEY,
              "--facts", str(tmp_path / "facts.json"),
              "--manifests", str(out), "--ship-id", SHIP)
-    assert gen.docker_container_name(SHIP) in str(caught.value)
+    assert bundle_names.docker_container_name(SHIP) in str(caught.value)
 
 
 def test_livetest_still_requires_a_namespace_for_a_manifests_bundle(monkeypatch,

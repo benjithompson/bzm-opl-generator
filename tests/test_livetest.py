@@ -15,6 +15,8 @@ from bzm_opl_gen import bundle_check, kube, livetest, sv_read  # noqa: E402
 from bzm_opl_gen import generate as gen  # noqa: E402
 from tests.test_generate import FACTS  # noqa: E402
 from tests.tls_fixtures import SV_CERT, SV_HOST, SV_KEY  # noqa: E402
+from bzm_opl_gen import (bundle_names, bundle_options, ca_trust,
+                         image_registry, markers, required_fields, service_virt)  # noqa: E402
 
 CA_PEM = "-----BEGIN CERTIFICATE-----\nmitm\n-----END CERTIFICATE-----"
 
@@ -96,7 +98,7 @@ def test_the_rig_mirrors_where_the_bundle_it_deploys_will_look(monkeypatch):
     overrides = json.loads(yaml.safe_load(
         files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
     wanted = {r.split("/", 1)[1] for r in overrides.values()}
-    wanted.add(gen._crane_image(FACTS, {
+    wanted.add(image_registry.crane_image(FACTS, {
         "private_registry": f"host.minikube.internal:{port}"}).split("/", 1)[1])
     assert {p.split("/", 1)[1] for p in pushed} == wanted
 
@@ -283,11 +285,11 @@ def test_engine_config_catches_missing_ca_propagation():
     assert any("REQUESTS_CA_BUNDLE" in f for f in fails)
 
 
-@pytest.mark.parametrize("mode", sorted(gen.CA_MODES))
+@pytest.mark.parametrize("mode", sorted(ca_trust.CA_MODES))
 def test_engine_config_checks_the_ca_whichever_mode_configured_it(mode):
     """The engine CA assertions run for every CA mode, not only the inline one
     the proxy rig writes."""
-    value = True if gen.DEFAULT_OPTIONS[mode] is False else "x"
+    value = True if bundle_options.DEFAULT_OPTIONS[mode] is False else "x"
     opts = {**ENGINE_OPTS, "ca_bundle": None, mode: value}
     fails = livetest.assert_engine_config(_engine_pod(ca=False), opts)
     assert any("KUBERNETES_CA_BUNDLE_MOUNT did not propagate" in f for f in fails)
@@ -588,7 +590,7 @@ def test_bundle_check_catches_a_stale_ship_in_the_profile(tmp_path):
     d = _bundle(tmp_path)
     prof = {**gen.load_profile(d), "ship_id": "ddd444"}
     r = " ".join(bundle_check.bundle_check(d, "aaa111", "bbb222", prof).refusals)
-    assert "ddd444" in r and "bbb222" in r and gen.PROFILE_FILE in r
+    assert "ddd444" in r and "bbb222" in r and bundle_names.PROFILE_FILE in r
 
 
 def test_bundle_check_refuses_a_bundle_with_a_field_left_blank(tmp_path):
@@ -596,12 +598,12 @@ def test_bundle_check_refuses_a_bundle_with_a_field_left_blank(tmp_path):
     marker."""
     d = _bundle(tmp_path, service_account_name="")
     prof = gen.load_profile(d)
-    assert prof["service_account_name"] == gen.marker("service_account_name")
+    assert prof["service_account_name"] == markers.marker("service_account_name")
     r = " ".join(bundle_check.bundle_check(d, "aaa111", "bbb222", prof).refusals)
     # Both halves: the field somebody has to fill in, and the string they will
     # find in the bundle when they go looking.
     assert "service_account_name" in r
-    assert gen.marker("service_account_name") in r
+    assert markers.marker("service_account_name") in r
 
 
 def test_bundle_check_refuses_a_yaml_this_generator_does_not_emit(tmp_path):
@@ -719,7 +721,7 @@ def test_bundle_platform_reads_the_profile(tmp_path):
 def test_bundle_platform_reads_the_directory_when_there_is_no_profile(tmp_path):
     """Without a profile, a compose file makes a directory a docker bundle."""
     d = _docker_bundle(tmp_path)
-    os.remove(os.path.join(d, gen.PROFILE_FILE))
+    os.remove(os.path.join(d, bundle_names.PROFILE_FILE))
     assert bundle_check.bundle_platform(d) == bundle_check.PLATFORM_COMPOSE
     assert bundle_check.bundle_platform(str(tmp_path / "empty")) == \
         bundle_check.PLATFORM_MANIFESTS
@@ -729,11 +731,11 @@ def test_bundle_platform_does_not_let_a_stray_compose_file_win(tmp_path):
     """A manifests profile wins over a stray compose file, which is refused as
     an unknown *.yaml."""
     d = _bundle(tmp_path)
-    open(os.path.join(d, gen.DOCKER_COMPOSE_FILE), "w").write("services: {}\n")
+    open(os.path.join(d, bundle_names.DOCKER_COMPOSE_FILE), "w").write("services: {}\n")
     prof = gen.load_profile(d)
     assert bundle_check.bundle_platform(d, prof) == bundle_check.PLATFORM_MANIFESTS
     refusals = bundle_check.bundle_check(d, "aaa111", "bbb222", prof).refusals
-    assert any(gen.DOCKER_COMPOSE_FILE in r for r in refusals)
+    assert any(bundle_names.DOCKER_COMPOSE_FILE in r for r in refusals)
 
 
 def test_compose_bundle_check_passes_this_generators_own_output(tmp_path):
@@ -746,8 +748,8 @@ def test_compose_bundle_check_refuses_another_agents_container(tmp_path):
     """A compose container_name for another ship is refused, naming both."""
     d = _docker_bundle(tmp_path)
     refusals = bundle_check.bundle_check(d, "aaa111", "ccc333").refusals
-    assert any(gen.docker_container_name("bbb222") in r
-               and gen.docker_container_name("ccc333") in r for r in refusals)
+    assert any(bundle_names.docker_container_name("bbb222") in r
+               and bundle_names.docker_container_name("ccc333") in r for r in refusals)
 
 
 def test_compose_bundle_check_refuses_another_locations_harbor(tmp_path):
@@ -760,10 +762,10 @@ def test_compose_bundle_check_refuses_another_locations_harbor(tmp_path):
 def test_compose_bundle_check_refuses_a_directory_with_no_compose_file(tmp_path):
     """A docker profile with no compose file is refused."""
     d = _docker_bundle(tmp_path)
-    os.remove(os.path.join(d, gen.DOCKER_COMPOSE_FILE))
+    os.remove(os.path.join(d, bundle_names.DOCKER_COMPOSE_FILE))
     refusals = bundle_check.bundle_check(d, "aaa111", "bbb222",
                                      gen.load_profile(d)).refusals
-    assert any(gen.DOCKER_COMPOSE_FILE in r for r in refusals)
+    assert any(bundle_names.DOCKER_COMPOSE_FILE in r for r in refusals)
 
 
 def test_compose_bundle_check_refuses_a_bundle_nobody_finished(tmp_path):
@@ -778,7 +780,7 @@ def test_compose_bundle_check_notes_an_identity_it_could_not_read(tmp_path):
     """A compose file that names no container or ids gets per-field notes, not
     a refusal."""
     d = str(tmp_path)
-    open(os.path.join(d, gen.DOCKER_COMPOSE_FILE), "w").write(
+    open(os.path.join(d, bundle_names.DOCKER_COMPOSE_FILE), "w").write(
         "services:\n  crane:\n    image: x\n")
     assert bundle_check.compose_identity(d) == {}           # read, and names none
     check = bundle_check.bundle_check(d, "aaa111", "bbb222")
@@ -794,7 +796,7 @@ def test_compose_bundle_check_tells_an_unread_file_from_one_that_names_nothing(
     """An undecodable compose file gets exactly one "could not be read" note
     and no per-field notes."""
     d = str(tmp_path)
-    open(os.path.join(d, gen.DOCKER_COMPOSE_FILE), "wb").write(b"\xff\xfe\x00x")
+    open(os.path.join(d, bundle_names.DOCKER_COMPOSE_FILE), "wb").write(b"\xff\xfe\x00x")
     assert bundle_check.compose_identity(d) is None         # not {}: nobody read it
     check = bundle_check.bundle_check(d, "aaa111", "bbb222")
     assert check.refusals == []
@@ -819,10 +821,10 @@ def test_compose_bundle_check_refuses_a_mounted_file_left_blank(tmp_path):
     d = _sv_docker_bundle(tmp_path, sv_tls_key="")
     prof = gen.load_profile(d)
     # Neither of the two things this check already read can see it.
-    assert gen.placeholder_options(prof) == [] and bundle_check.compose_unset(d) == []
+    assert required_fields.placeholder_options(prof) == [] and bundle_check.compose_unset(d) == []
     refusals = bundle_check.bundle_check(d, "aaa111", "bbb222", prof).refusals
-    assert any(gen.DOCKER_SV_KEY_FILE in r
-               and gen.marker("sv_tls_key") in r
+    assert any(bundle_names.DOCKER_SV_KEY_FILE in r
+               and markers.marker("sv_tls_key") in r
                and "sv_tls_key" in r for r in refusals)
 
 
@@ -849,10 +851,10 @@ def test_compose_bundle_check_takes_the_escape_hatch_the_bundle_offers(
 def test_compose_bundle_check_notes_a_mounted_file_it_could_not_read(tmp_path):
     """An unreadable mounted file is a note, not a refusal."""
     d = _docker_bundle(tmp_path, ca_bundle=CA_PEM)
-    open(os.path.join(d, gen.DOCKER_CA_FILE), "wb").write(b"\xff\xfe\x00x")
+    open(os.path.join(d, bundle_names.DOCKER_CA_FILE), "wb").write(b"\xff\xfe\x00x")
     check = bundle_check.bundle_check(d, "aaa111", "bbb222", gen.load_profile(d))
     assert check.refusals == []
-    assert any(gen.DOCKER_CA_FILE in n and "could not be read" in n
+    assert any(bundle_names.DOCKER_CA_FILE in n and "could not be read" in n
                for n in check.notes)
 
 
@@ -863,11 +865,11 @@ def test_run_compose_refuses_a_blank_mounted_file_before_it_starts_anything(
     d = _sv_docker_bundle(tmp_path, sv_tls_key="")
     for name in ("compose_up", "compose_down", "compose_tool"):
         monkeypatch.setattr(livetest, name, lambda *a, **kw: pytest.fail(
-            f"{name} ran on a bundle with a blank {gen.DOCKER_SV_KEY_FILE}"))
+            f"{name} ran on a bundle with a blank {bundle_names.DOCKER_SV_KEY_FILE}"))
     with pytest.raises(bundle_check.BundleMismatch) as caught:
         livetest.run_compose(None, d, "aaa111", "bbb222",
                              opts=gen.load_profile(d))
-    assert gen.DOCKER_SV_KEY_FILE in str(caught.value)
+    assert bundle_names.DOCKER_SV_KEY_FILE in str(caught.value)
 
 
 def test_bundle_check_reports_its_notes_and_hands_back_its_refusals(capsys):
@@ -886,7 +888,7 @@ def test_run_compose_refuses_before_it_starts_anything(monkeypatch, tmp_path):
             f"{name} ran on a bundle built for another agent"))
     with pytest.raises(bundle_check.BundleMismatch) as caught:
         livetest.run_compose(None, d, "aaa111", "ccc333")
-    assert gen.docker_container_name("ccc333") in str(caught.value)
+    assert bundle_names.docker_container_name("ccc333") in str(caught.value)
 
 
 def test_run_refuses_a_compose_bundle_rather_than_deploying_nothing(
@@ -951,7 +953,7 @@ def test_teardown_removes_a_container_compose_down_left_behind(monkeypatch,
                                                                tmp_path):
     """A container that survives `down` is removed by name."""
     d = _docker_bundle(tmp_path)
-    name = gen.docker_container_name("bbb222")
+    name = bundle_names.docker_container_name("bbb222")
     cmds = _fake_daemon(monkeypatch, present=[name])
     livetest.compose_down(d, name)
     assert ["docker", "rm", "-f", name] in cmds
@@ -961,7 +963,7 @@ def test_teardown_removes_nothing_by_name_when_down_worked(monkeypatch,
                                                            tmp_path):
     d = _docker_bundle(tmp_path)
     cmds = _fake_daemon(monkeypatch, present=[])
-    livetest.compose_down(d, gen.docker_container_name("bbb222"))
+    livetest.compose_down(d, bundle_names.docker_container_name("bbb222"))
     assert not any(c[:3] == ["docker", "rm", "-f"] for c in cmds)
 
 
@@ -980,7 +982,7 @@ def test_compose_file_relative_paths_resolve_against_the_bundle(monkeypatch,
     cmds = _fake_daemon(monkeypatch)
     livetest.run_compose(_FakeBzm(), d, "aaa111", "bbb222")
     up = next(c for c in cmds if c[-2:] == ["up", "-d"])
-    assert up[2] == "-f" and up[3] == os.path.join(d, gen.DOCKER_COMPOSE_FILE)
+    assert up[2] == "-f" and up[3] == os.path.join(d, bundle_names.DOCKER_COMPOSE_FILE)
 
 
 def test_profile_json_roundtrip(tmp_path):
@@ -995,14 +997,14 @@ def test_profile_json_roundtrip(tmp_path):
     # Replaying it reproduces the manifests.
     again = gen.generate(FACTS, {**prof, "auth_token": "tok"})
     assert again["bzm_deployment.yaml"] == files["bzm_deployment.yaml"]
-    assert json.loads(again[gen.PROFILE_FILE]) == prof
+    assert json.loads(again[bundle_names.PROFILE_FILE]) == prof
 
 
 # -- sv_mocks ---------------------------------------------------------------
 
 def _sv_pod(name, port, harbor="h1", ship="s1", extra=None):
-    labels = {gen.SV_POD_NAME_LABEL: name, gen.SV_POD_HARBOR_LABEL: harbor,
-              gen.SV_POD_SHIP_LABEL: ship} if name else {}
+    labels = {service_virt.SV_POD_NAME_LABEL: name, service_virt.SV_POD_HARBOR_LABEL: harbor,
+              service_virt.SV_POD_SHIP_LABEL: ship} if name else {}
     return {"metadata": {"labels": {**labels, **(extra or {})}},
             "spec": {"containers": [
                 {"ports": [{"containerPort": port}] if port else []}]}}
@@ -1384,7 +1386,7 @@ def test_the_existing_mode_overlay_names_the_rigs_own_configmap():
 
 def test_the_rigs_key_is_not_the_generators_default():
     """The rig's CA key differs from the generator's fallback key."""
-    assert bundle_check.CA_RIG_KEY != gen.CA_FILENAME
+    assert bundle_check.CA_RIG_KEY != ca_trust.CA_FILENAME
 
 
 def test_the_existing_mode_still_carries_the_proxy():
@@ -1466,8 +1468,8 @@ def test_teardown_removes_the_name_this_run_made_not_a_constant(
     monkeypatch.setattr(kube, "run", lambda cmd, **kw: cmds.append(cmd))
     monkeypatch.setattr(kube, "cli_tool", lambda: "kubectl")
     livetest.teardown(str(tmp_path), "ns1", "kind",
-                      livetest.Owned(ca_configmap=gen.CA_CONFIGMAP))
-    assert ["kubectl", "-n", "ns1", "delete", "cm", gen.CA_CONFIGMAP,
+                      livetest.Owned(ca_configmap=bundle_names.CA_CONFIGMAP))
+    assert ["kubectl", "-n", "ns1", "delete", "cm", bundle_names.CA_CONFIGMAP,
             "--ignore-not-found"] in cmds
     assert not any(bundle_check.CA_RIG_CONFIGMAP in c for c in cmds)
 
@@ -1495,7 +1497,7 @@ def test_the_negative_control_deletes_the_name_the_file_mode_depends_on(
     overlay = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="file")
     livetest.negative_control(lambda o: None, overlay, str(tmp_path), "ns1",
                               "kind", timeout=0)
-    assert ["kubectl", "-n", "ns1", "delete", "cm", gen.CA_CONFIGMAP,
+    assert ["kubectl", "-n", "ns1", "delete", "cm", bundle_names.CA_CONFIGMAP,
             "--ignore-not-found"] in cmds
 
 
@@ -1534,9 +1536,9 @@ def test_the_negative_control_clears_every_ca_option_the_generator_has(
     overlay = {**livetest.proxy_overlay("h", 8080, CA_PEM), "ca_bundle_slot": True}
     livetest.negative_control(lambda o: seen.update(o), overlay,
                               str(tmp_path), "ns1", "kind", timeout=0)
-    for key in gen.CA_OPTIONS:
-        assert seen[key] == gen.DEFAULT_OPTIONS[key], key
-    assert gen._ca_cfg({**gen.DEFAULT_OPTIONS, **seen}) is None
+    for key in ca_trust.CA_OPTIONS:
+        assert seen[key] == bundle_options.DEFAULT_OPTIONS[key], key
+    assert ca_trust.ca_cfg({**bundle_options.DEFAULT_OPTIONS, **seen}) is None
 
 
 def test_the_proxy_overlay_replaces_every_ca_mode_too():
@@ -1544,18 +1546,18 @@ def test_the_proxy_overlay_replaces_every_ca_mode_too():
     cannot survive beside it."""
     for mode in ("inline", "existing", "file"):
         o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode=mode)
-        for key in gen.CA_OPTIONS:
+        for key in ca_trust.CA_OPTIONS:
             assert key in o, f"{mode}: {key} is left for the profile to answer"
-        assert gen._ca_cfg({**gen.DEFAULT_OPTIONS, "ca_bundle_slot": True, **o})
+        assert ca_trust.ca_cfg({**bundle_options.DEFAULT_OPTIONS, "ca_bundle_slot": True, **o})
 
 
 def test_the_file_mode_names_the_configmap_the_bundle_itself_writes():
     """File mode mounts generate.CA_CONFIGMAP under the rig's non-default key."""
     o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="file")
-    ca = gen._ca_cfg({**gen.DEFAULT_OPTIONS, **o})
+    ca = ca_trust.ca_cfg({**bundle_options.DEFAULT_OPTIONS, **o})
     assert ca["mode"] == "file"
-    assert ca["cm"] == gen.CA_CONFIGMAP
-    assert ca["key"] == bundle_check.CA_RIG_KEY != gen.CA_FILENAME
+    assert ca["cm"] == bundle_names.CA_CONFIGMAP
+    assert ca["key"] == bundle_check.CA_RIG_KEY != ca_trust.CA_FILENAME
 
 
 def test_the_file_mode_bundle_creates_no_configmap_for_the_rig_to_collide_with():
@@ -1563,11 +1565,11 @@ def test_the_file_mode_bundle_creates_no_configmap_for_the_rig_to_collide_with()
     from test_generate import FACTS
     o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="file")
     files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222", **o})
-    assert gen.CA_CONFIGMAP_FILE not in files
+    assert bundle_names.CA_CONFIGMAP_FILE not in files
     # ...and the Deployment still mounts it, which is the half that makes the
     # rig-created object reachable at all.
     dep = files["bzm_deployment.yaml"]
-    assert gen.CA_CONFIGMAP in dep and bundle_check.CA_RIG_KEY in \
+    assert bundle_names.CA_CONFIGMAP in dep and bundle_check.CA_RIG_KEY in \
         files["bzm_configmap.yaml"]
 
 
@@ -1599,7 +1601,7 @@ def test_every_rig_ca_mode_is_one_the_overlay_can_build():
 
 @pytest.mark.parametrize("options,names", [
     ({"ca_bundle_slot": True, "ca_cert_file": "corp-root.pem"},
-     (gen.CA_CONFIGMAP, "corp-root.pem", "--ca-mode file")),
+     (bundle_names.CA_CONFIGMAP, "corp-root.pem", "--ca-mode file")),
     ({"ca_existing_configmap": "corp-trust"},
      ("corp-trust", "--ca-mode existing")),
 ])
@@ -1616,7 +1618,7 @@ def test_a_bundle_that_leaves_the_certificate_unnamed_is_refused_by_its_marker()
     """An unnamed certificate file is refused quoting its marker."""
     said = bundle_check.ca_configmap_refusal({"namespace": "ns1",
                                           "ca_bundle_slot": True}, False)
-    assert gen.marker("ca_cert_file") in said
+    assert markers.marker("ca_cert_file") in said
 
 
 @pytest.mark.parametrize("options", [
@@ -1646,7 +1648,7 @@ def test_a_profile_setting_two_ca_modes_is_refused_either_way(local_proxy):
     said = bundle_check.ca_configmap_refusal(
         {"namespace": "ns1", "ca_bundle_slot": True, "ca_bundle": CA_PEM},
         local_proxy)
-    assert said and gen.PROFILE_FILE in said and "CA mode" in said
+    assert said and bundle_names.PROFILE_FILE in said and "CA mode" in said
 
 
 @pytest.mark.parametrize("asked,carried,resolved", [

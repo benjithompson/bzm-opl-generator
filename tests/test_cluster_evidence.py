@@ -10,7 +10,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from bzm_opl_gen import cli, doctor, evidence, facts as facts_mod, kube  # noqa: E402
+from bzm_opl_gen import (cli, doctor, evidence, facts as facts_mod, kube)  # noqa: E402
 # One document for every test that reads one, and the files a collector really
 # wrote. The cluster objects inside it are `test_doctor`'s, so the imported and
 # the live paths are fed literally the same objects.

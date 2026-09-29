@@ -24,6 +24,7 @@ import sys
 from . import (api, bundle_check, core, doctor, facts as facts_mod,
                generate as gen_mod, kube, livetest, plan, suggest as suggest_mod,
                sv_read, workstation)
+from . import bundle_names, bundle_options, ca_trust, footprint, service_virt
 
 
 def _client(a):
@@ -233,7 +234,7 @@ def cmd_generate(a):
                               out_dir=os.path.abspath(a.output), write=True,
                               announce=print)
     print(built.token.message)
-    notice = gen_mod.ca_slot_notice(opts)
+    notice = ca_trust.ca_slot_notice(opts)
     if notice:
         print(notice)
     print(f"wrote {len(built.written)} files to {a.output}/: "
@@ -257,8 +258,8 @@ def cmd_sv_expose(a):
     if not mocks:
         sys.exit(f"no virtual-service pods in namespace {opts['namespace']} -- "
                  f"deploy the virtual service in BlazeMeter first, then re-run")
-    out = gen_mod.sv_expose(mocks, opts["namespace"],
-                            gen_mod.sv_publish_cfg(opts))
+    out = service_virt.sv_expose(mocks, opts["namespace"],
+                            service_virt.sv_publish_cfg(opts))
     with open(a.output, "w") as fh:
         fh.write(out)
     names = ", ".join(f"{m['name']}:{m['port']}" for m in mocks)
@@ -507,7 +508,7 @@ def cmd_livetest(a):
             and gen_mod.existing_auth_token(a.manifests) is None:
         sys.exit(
             f"{a.manifests}/ carries no usable AUTH_TOKEN -- it is still the "
-            f"{gen_mod.DEFAULT_OPTIONS['auth_token']} placeholder, and this run "
+            f"{bundle_options.DEFAULT_OPTIONS['auth_token']} placeholder, and this run "
             f"re-renders nothing, so it would deploy that. The agent could not "
             f"authenticate, and the rig would wait out its whole timeout to say "
             f"only that it never came online. "
@@ -649,23 +650,23 @@ def main():
                         dest=m["figure_field"], metavar="N",
                         help=f"{m['figure_unit']} (default about "
                              f"{m['baseline']} for the "
-                             f"{gen_mod.ENGINE_DEFAULT_CPU} CPU / "
-                             f"{gen_mod.ENGINE_DEFAULT_MEM} engine, scaled "
+                             f"{footprint.ENGINE_DEFAULT_CPU} CPU / "
+                             f"{footprint.ENGINE_DEFAULT_MEM} engine, scaled "
                              f"from there). An estimate from the account "
                              f"owner, not a measurement")
     pl.add_argument("--vus-per-engine", dest="vus_per_engine",
                     help=f"virtual users one engine carries (BlazeMeter's "
                          f"`threadsPerEngine`). Default is what an engine of "
                          f"the chosen size is rated for -- "
-                         f"{api.DEFAULT_THREADS_PER_ENGINE} for the "
-                         f"{gen_mod.ENGINE_DEFAULT_CPU} CPU / "
-                         f"{gen_mod.ENGINE_DEFAULT_MEM} engine, scaled from "
+                         f"{footprint.DEFAULT_THREADS_PER_ENGINE} for the "
+                         f"{footprint.ENGINE_DEFAULT_CPU} CPU / "
+                         f"{footprint.ENGINE_DEFAULT_MEM} engine, scaled from "
                          f"there. Your script decides the real number: measure "
                          f"it against one engine and re-run this")
     pl.add_argument("--engine-cpu-limit", dest="engine_cpu_limit",
-                    help=f'engine CPU limit (default {gen_mod.ENGINE_DEFAULT_CPU})')
+                    help=f'engine CPU limit (default {footprint.ENGINE_DEFAULT_CPU})')
     pl.add_argument("--engine-mem-limit", dest="engine_mem_limit",
-                    help=f'engine memory limit (default {gen_mod.ENGINE_DEFAULT_MEM})')
+                    help=f'engine memory limit (default {footprint.ENGINE_DEFAULT_MEM})')
     pl.add_argument("--agents",
                     help="agents that will serve this location (default 1). "
                          "BlazeMeter's `slots` is engines per *agent*, so the "
@@ -701,9 +702,9 @@ def main():
                              f"{r['label']} needs at least {r['minimum']}"
                              for r in core.SLOT_MINIMUMS.values()))
     cl.add_argument("--threads-per-engine", type=int,
-                    default=api.DEFAULT_THREADS_PER_ENGINE,
+                    default=footprint.DEFAULT_THREADS_PER_ENGINE,
                     help=f"max threads per engine (default "
-                         f"{api.DEFAULT_THREADS_PER_ENGINE}); a location with "
+                         f"{footprint.DEFAULT_THREADS_PER_ENGINE}); a location with "
                          f"this unset cannot start tests")
     cl.set_defaults(fn=cmd_create_location)
 
@@ -757,7 +758,7 @@ def main():
                         "already in -o, or stays the placeholder")
     g.add_argument("--profile", help="JSON options file (see profiles/)")
     g.add_argument("--format", dest="output_format",
-                   choices=list(gen_mod.OUTPUT_FORMATS),
+                   choices=list(bundle_options.OUTPUT_FORMATS),
                    help="manifests (default): flat YAML to kubectl apply. "
                         "helm: a chart in helm/ with values.yaml filled in from "
                         "the account -- both render the same objects. docker: a "
@@ -809,10 +810,10 @@ def main():
                         "reference it from the Deployment and the RBAC subjects, "
                         "but do not emit the object")
     g.add_argument("--sv-ingress", dest="sv_ingress",
-                   choices=list(gen_mod.SV_INGRESS_TYPES) + [gen_mod.SV_INGRESS_NONE],
+                   choices=list(service_virt.SV_INGRESS_TYPES) + [service_virt.SV_INGRESS_NONE],
                    help="service virtualization: ingress controller to publish "
                         "virtual services through (required for a mockServices "
-                        f"location, or {gen_mod.SV_INGRESS_NONE} to generate such "
+                        f"location, or {service_virt.SV_INGRESS_NONE} to generate such "
                         "a location for performance testing alone)")
     g.add_argument("--sv-subdomain", dest="sv_subdomain", metavar="DOMAIN",
                    help="wildcard domain your ingress controller serves, e.g. apps.example.com")
@@ -918,7 +919,7 @@ def main():
     e.add_argument("--ingress-class", dest="ingress_class",
                    help="IngressClass to put on the Ingress. Defaults to nginx; "
                         "on OpenShift use openshift-default and no alias is needed")
-    e.add_argument("-o", "--output", default=gen_mod.SV_EXPOSE_FILE)
+    e.add_argument("-o", "--output", default=bundle_names.SV_EXPOSE_FILE)
     e.set_defaults(fn=cmd_sv_expose)
 
     d = sub.add_parser("doctor", help="can this cluster run the location's concurrency?")

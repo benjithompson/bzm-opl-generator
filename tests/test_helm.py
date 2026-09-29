@@ -19,6 +19,9 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bzm_opl_gen import generate as gen  # noqa: E402
+from bzm_opl_gen import (bundle_env, bundle_names, bundle_options,  # noqa: E402
+                         footprint as footprint_mod, image_registry,
+                         markers as markers_mod, service_virt)
 
 from test_generate import FACTS  # noqa: E402
 
@@ -28,16 +31,16 @@ BASE = {"platform": "k8s", "ship_id": "bbb222", "namespace": "bzm-perf",
 
 def _values(**over):
     files = gen.generate(FACTS, {**BASE, **over})
-    return yaml.safe_load(files[gen.HELM_VALUES_FILE]), files
+    return yaml.safe_load(files[bundle_names.HELM_VALUES_FILE]), files
 
 
 # -- what comes out -----------------------------------------------------------
 
 def test_emits_the_chart_plus_an_overlay():
     files = gen.generate(FACTS, BASE)
-    assert gen.HELM_CHART_FILE in files
-    assert f"{gen.CHART_DIR}/templates/deployment.yaml" in files
-    assert gen.HELM_VALUES_FILE in files
+    assert bundle_names.HELM_CHART_FILE in files
+    assert f"{bundle_names.CHART_DIR}/templates/deployment.yaml" in files
+    assert bundle_names.HELM_VALUES_FILE in files
     # No flat manifests: the chart's templates are the manifests now, and a
     # bundle carrying both would leave "which of these do I apply?" open.
     assert not any(n.startswith("bzm_") and n.endswith(".yaml") for n in files)
@@ -50,18 +53,18 @@ def test_chart_is_copied_verbatim():
     once and trusted everywhere."""
     files = gen.generate(FACTS, BASE)
     for name, content in files.items():
-        if not name.startswith(f"{gen.CHART_DIR}/"):
+        if not name.startswith(f"{bundle_names.CHART_DIR}/"):
             continue
-        src = os.path.join(gen.HELM_DIR, name[len(gen.CHART_DIR) + 1:])
+        src = os.path.join(bundle_names.HELM_DIR, name[len(bundle_names.CHART_DIR) + 1:])
         with open(src) as f:
             assert f.read() == content, name
-    assert f"{gen.CHART_DIR}/values.yaml" in files
+    assert f"{bundle_names.CHART_DIR}/values.yaml" in files
 
 
 def test_manifests_format_emits_no_chart():
     files = gen.generate(FACTS, {**BASE, "output_format": "manifests"})
-    assert not any(n.startswith(f"{gen.CHART_DIR}/") for n in files)
-    assert gen.HELM_VALUES_FILE not in files
+    assert not any(n.startswith(f"{bundle_names.CHART_DIR}/") for n in files)
+    assert bundle_names.HELM_VALUES_FILE not in files
     assert "bzm_deployment.yaml" in files
 
 
@@ -76,23 +79,23 @@ def test_profile_round_trips_the_format(tmp_path):
 
 def test_write_creates_chart_subdirectories(tmp_path):
     gen.write(gen.generate(FACTS, BASE), str(tmp_path))
-    assert (tmp_path / gen.CHART_DIR / "templates" / "deployment.yaml").is_file()
-    assert (tmp_path / gen.HELM_VALUES_FILE).is_file()
+    assert (tmp_path / bundle_names.CHART_DIR / "templates" / "deployment.yaml").is_file()
+    assert (tmp_path / bundle_names.HELM_VALUES_FILE).is_file()
 
 
 def test_preview_order_leads_with_the_generated_file():
     """The overlay is the only file in a chart bundle that came from the
     account, so it is the one a reviewer is looking for."""
     order = gen.preview_order(gen.generate(FACTS, BASE))
-    assert order[0] == gen.HELM_VALUES_FILE
+    assert order[0] == bundle_names.HELM_VALUES_FILE
     assert set(order) == set(gen.generate(FACTS, BASE))
 
 
 def test_preview_order_of_manifests_is_apply_order():
     files = gen.generate(FACTS, {**BASE, "output_format": "manifests"})
     order = gen.preview_order(files)
-    applied = [n for n in order if n in gen.APPLY_ORDER]
-    assert applied == [n for n in gen.APPLY_ORDER if n in files]
+    applied = [n for n in order if n in bundle_names.APPLY_ORDER]
+    assert applied == [n for n in bundle_names.APPLY_ORDER if n in files]
     assert set(order) == set(files)
 
 
@@ -136,9 +139,9 @@ def test_unfetched_token_is_left_empty_not_placeholdered():
     token at install time is what the README asks for, so a "this bundle is not
     finished" banner on every chart generated correctly would be a false alarm.
     See REQUIRED_TEXT."""
-    v, plain = _values(auth_token=gen.DEFAULT_OPTIONS["auth_token"])
+    v, plain = _values(auth_token=bundle_options.DEFAULT_OPTIONS["auth_token"])
     assert v["authToken"] == ""
-    assert not gen.MARKER_RE.search(plain[gen.HELM_VALUES_FILE])
+    assert not markers_mod.MARKER_RE.search(plain[bundle_names.HELM_VALUES_FILE])
     assert "not finished" not in plain["README.md"]
 
 
@@ -172,10 +175,10 @@ def test_the_not_finished_block_says_the_token_is_missing_too():
     # nothing in the bundle carries `<AUTH_TOKEN>` -- which the values file is
     # the authority on.
     assert "| `auth_token` |" not in readme
-    assert not gen.MARKER_RE.search(files[gen.HELM_VALUES_FILE].replace(
-        gen.marker("harbor_id"), "").replace(gen.marker("ship_id"), "")
-        .replace(gen.marker("namespace"), "")
-        .replace(gen.marker("service_account_name"), ""))
+    assert not markers_mod.MARKER_RE.search(files[bundle_names.HELM_VALUES_FILE].replace(
+        markers_mod.marker("harbor_id"), "").replace(markers_mod.marker("ship_id"), "")
+        .replace(markers_mod.marker("namespace"), "")
+        .replace(markers_mod.marker("service_account_name"), ""))
 
 
 def test_a_supplied_token_is_not_reported_as_missing():
@@ -207,7 +210,7 @@ def test_private_registry_carries_the_derived_image_map():
     v, _ = _values(private_registry="reg.io/bzm")
     assert v["privateRegistry"] == "reg.io/bzm"
     # Same keys the ConfigMap's IMAGE_OVERRIDES would carry, from the same facts.
-    assert v["imageOverrides"] == gen._image_overrides(
+    assert v["imageOverrides"] == image_registry.image_overrides(
         FACTS, {"private_registry": "reg.io/bzm"})
 
 
@@ -226,7 +229,7 @@ def test_proxy_credentials_are_embedded_in_the_url():
 def test_no_proxy_defaults_are_carried_even_when_off():
     v, _ = _values()
     assert v["proxy"]["enabled"] is False
-    assert v["proxy"]["noProxy"] == gen.DEFAULT_NO_PROXY
+    assert v["proxy"]["noProxy"] == bundle_env.DEFAULT_NO_PROXY
 
 
 def test_scheduling_survives_as_yaml_not_a_json_blob():
@@ -238,7 +241,7 @@ def test_scheduling_survives_as_yaml_not_a_json_blob():
     v, files = _values(tolerations=tol, node_selector={"workload": "perf"})
     assert v["tolerations"] == tol
     assert v["nodeSelector"] == {"workload": "perf"}
-    assert "- key: " in files[gen.HELM_VALUES_FILE]
+    assert "- key: " in files[bundle_names.HELM_VALUES_FILE]
 
 
 def test_engine_placement_is_written_out_not_left_for_the_chart_to_derive():
@@ -264,9 +267,9 @@ def test_engine_pool_overrides_cranes_in_the_overlay():
     assert v["engineTolerations"][0]["key"] == "bzm.io/engines"
     assert v["tolerations"] == []          # crane's pool needs no taint
     # Hand-editable, same as crane's list.
-    assert "- key: " in files[gen.HELM_VALUES_FILE]
+    assert "- key: " in files[bundle_names.HELM_VALUES_FILE]
     # The chart carries the recipe for the pool it now selects.
-    assert gen.NODEPOOLS_FILE in files
+    assert bundle_names.NODEPOOLS_FILE in files
 
 
 def test_explicitly_unpinned_engines_are_empty_in_the_overlay_not_cranes():
@@ -319,11 +322,11 @@ def test_the_chart_keeps_its_install_time_refusal_and_carries_no_guard():
     for name, text in files.items():
         assert "initContainers" not in text, name
     readme = files["README.md"]
-    assert gen.HELM_VALUES_FILE in readme and "helm install" in readme
-    assert gen.CA_CONFIGMAP_FILE not in readme
+    assert bundle_names.HELM_VALUES_FILE in readme and "helm install" in readme
+    assert bundle_names.CA_CONFIGMAP_FILE not in readme
     # The chart reads the file out of its own directory, so that is where the
     # README has to send somebody -- `.Files.Get` looks nowhere else.
-    assert f"{gen.CHART_DIR}/" in readme and "corp-root.crt" in readme
+    assert f"{bundle_names.CHART_DIR}/" in readme and "corp-root.crt" in readme
 
 
 def test_overlay_carries_no_limitrange_at_all():
@@ -348,15 +351,15 @@ def test_chart_carries_the_default_engine_limits_too():
     ENGINE_DEFAULT_CPU/MEM and holds the ConfigMap to reading it rather than
     spelling the figure again; whether the render then matches the manifests
     object-for-object is helm_parity.py's job."""
-    with open(os.path.join(gen.HELM_DIR, "templates", "configmap.yaml")) as f:
+    with open(os.path.join(bundle_names.HELM_DIR, "templates", "configmap.yaml")) as f:
         template = f.read()
-    with open(os.path.join(gen.HELM_DIR, "templates", "_helpers.tpl")) as f:
+    with open(os.path.join(bundle_names.HELM_DIR, "templates", "_helpers.tpl")) as f:
         helpers = f.read()
     for values_key, env, helper, default in (
             ("engine.cpuLimit", "KUBERNETES_RESOURCES_LIMITS_CPU",
-             "bzm-opl.engineCpuLimit", gen.ENGINE_DEFAULT_CPU),
+             "bzm-opl.engineCpuLimit", footprint_mod.ENGINE_DEFAULT_CPU),
             ("engine.memoryLimit", "KUBERNETES_RESOURCES_LIMITS_MEMORY",
-             "bzm-opl.engineMemoryLimit", gen.ENGINE_DEFAULT_MEM)):
+             "bzm-opl.engineMemoryLimit", footprint_mod.ENGINE_DEFAULT_MEM)):
         # Unconditional: a `with` block around the env is the old shape, where
         # an empty overlay meant no limits at all.
         assert f"with .Values.{values_key}" not in template
@@ -372,7 +375,7 @@ def test_overlay_offers_no_engine_request_knob():
     v, files = _values(engine_cpu_limit="4", engine_mem_limit="16Gi")
     assert "cpuRequest" not in v["engine"]
     assert "memoryRequest" not in v["engine"]
-    assert "not settable" in files[gen.HELM_VALUES_FILE]
+    assert "not settable" in files[bundle_names.HELM_VALUES_FILE]
 
 
 def test_auto_update_is_left_to_the_chart_when_unset():
@@ -383,7 +386,7 @@ def test_auto_update_is_left_to_the_chart_when_unset():
     v, files = _values()
     assert "autoUpdate" in v
     assert v["autoUpdate"] is None
-    assert "helm upgrade" in files[gen.HELM_VALUES_FILE]
+    assert "helm upgrade" in files[bundle_names.HELM_VALUES_FILE]
 
 
 def test_auto_update_is_stated_when_it_was_chosen():
@@ -435,7 +438,7 @@ def test_nodeport_is_not_refused_without_cluster_rbac():
     v, files = _values(service_type="NODEPORT")
     assert v["serviceType"] == "NODEPORT"
     assert v["clusterRbac"] is False
-    validate = files[f"{gen.CHART_DIR}/templates/_helpers.tpl"]
+    validate = files[f"{bundle_names.CHART_DIR}/templates/_helpers.tpl"]
     coupled = [ln for ln in validate.splitlines()
                if "fail" in ln and "NODEPORT" in ln and "clusterRbac" in ln]
     assert not coupled, f"chart still refuses the pairing: {coupled}"
@@ -448,7 +451,7 @@ def test_no_chart_file_claims_nodeport_needs_the_node_object():
     RBAC. The node reads themselves stay optional (capacity awareness); it is
     the tie to serviceType that is wrong."""
     _, files = _values(service_type="NODEPORT")
-    chart = {n: t for n, t in files.items() if n.startswith(f"{gen.CHART_DIR}/")}
+    chart = {n: t for n, t in files.items() if n.startswith(f"{bundle_names.CHART_DIR}/")}
     assert chart
     for name, text in chart.items():
         low = text.lower()
@@ -482,7 +485,7 @@ def test_the_cluster_check_reaches_the_overlay_only_when_asked_for():
     # ...and it is a chart file, not a flat manifest: the chart carries it as a
     # `helm test` hook, so it is in templates/, not beside bzm_deployment.yaml.
     assert "helm/templates/tests/cranehook.yaml" in files
-    assert gen.HOOK_FILE not in files
+    assert bundle_names.HOOK_FILE not in files
     off, _ = _values()
     assert "craneHook" not in off
 
@@ -502,7 +505,7 @@ def test_unnamed_service_account_is_marked_in_helm_format_too():
     bzm-opl.validate) -- that guard now covers a hand-edited values file, which
     is the only route left to an install with one in it."""
     v, plain = _values(service_account_name="", service_account_create=False)
-    assert v["serviceAccount"]["name"] == gen.marker("service_account_name")
+    assert v["serviceAccount"]["name"] == markers_mod.marker("service_account_name")
     assert "service_account_name" in plain["README.md"]
     assert "not finished" in plain["README.md"]
 
@@ -510,7 +513,7 @@ def test_unnamed_service_account_is_marked_in_helm_format_too():
 def test_the_charts_marker_test_is_the_generators_pattern():
     """`bzm-opl.validate` is the only thing between a marked *value* and an
     agent that installs and then fails, and it is written in Go templates, which
-    cannot import `generate.MARKER_PATTERN`. So the pattern is restated in the
+    cannot import `markers.MARKER_PATTERN`. So the pattern is restated in the
     chart and held equal here.
 
     Restated in one direction only: what the chart has to recognise is every
@@ -526,11 +529,11 @@ def test_the_charts_marker_test_is_the_generators_pattern():
         text = fh.read()
     found = re.search(r'regexMatch "([^"]+)" \$held', text)
     assert found, "the marker test is not where it was -- was it rewritten?"
-    assert found.group(1) == f"^{gen.MARKER_PATTERN}$"
+    assert found.group(1) == f"^{markers_mod.MARKER_PATTERN}$"
     chart_re = re.compile(found.group(1))
     for key in ("auth_token", "service_account_name", "private_registry",
                 "ca_existing_configmap", "ca_bundle", "proxy.https"):
-        assert chart_re.fullmatch(gen.marker(key)), key
+        assert chart_re.fullmatch(markers_mod.marker(key)), key
     # ...and it takes nothing else. A value that merely carries an angle
     # bracket is a value somebody supplied.
     for held in ("", "TOKEN", "<not a marker>", "reg.example.com/bzm",
@@ -576,9 +579,9 @@ def test_a_declined_location_writes_no_sv_block():
     overlay says nothing, exactly as the flat ConfigMap emits no
     KUBERNETES_WEB_EXPOSE_* for the same options. An overlay that restated
     every default would stop being the record of what was asked for."""
-    values, files = _values(sv_ingress=gen.SV_INGRESS_NONE)
+    values, files = _values(sv_ingress=service_virt.SV_INGRESS_NONE)
     assert "sv" not in values
-    assert gen.HELM_VALUES_FILE in files
+    assert bundle_names.HELM_VALUES_FILE in files
     plain, _ = _values()
     assert "sv" not in plain
 
@@ -607,8 +610,8 @@ def test_the_charts_backend_table_is_the_generators():
                      text, re.S)
     assert body, "the chart's backend table is not where it was -- renamed?"
     chart = yaml.safe_load(body.group(1))
-    assert set(chart) == set(gen.SV_INGRESS_BACKENDS)
-    for name, backend in gen.SV_INGRESS_BACKENDS.items():
+    assert set(chart) == set(service_virt.SV_INGRESS_BACKENDS)
+    for name, backend in service_virt.SV_INGRESS_BACKENDS.items():
         assert chart[name] == {
             "group": backend.group, "resources": list(backend.resources),
             "creates": backend.creates, "nodeportOk": backend.nodeport_ok,
@@ -655,7 +658,7 @@ def test_chart_defaults_to_restricted_engines():
     `helm install` of this chart used to get privileged engines, because
     values.yaml sets platform=k8s and the template gated on it."""
     _, files = _values()
-    chart = yaml.safe_load(files[f"{gen.CHART_DIR}/values.yaml"])
+    chart = yaml.safe_load(files[f"{bundle_names.CHART_DIR}/values.yaml"])
     assert chart["restrictEngines"] is True
 
 
@@ -676,11 +679,11 @@ def test_chart_default_crane_ephemeral_storage_is_a_matched_pair():
     and a chart whose request is the smaller number evicts crane on Autopilot
     while rendering perfectly well everywhere the parity test can look."""
     _, files = _values()
-    chart = yaml.safe_load(files[f"{gen.CHART_DIR}/values.yaml"])
+    chart = yaml.safe_load(files[f"{bundle_names.CHART_DIR}/values.yaml"])
     res = chart["crane"]["resources"]
     assert (res["requests"]["ephemeral-storage"]
             == res["limits"]["ephemeral-storage"]
-            == gen.CRANE_EPHEMERAL_STORAGE)
+            == footprint_mod.CRANE_EPHEMERAL_STORAGE)
 
 
 def test_crane_ephemeral_storage_override_reaches_the_overlay_as_both_fields():
@@ -716,13 +719,13 @@ def test_readme_is_short_and_actionable():
 def test_readme_names_the_overlay_in_its_install_command():
     files = gen.generate(FACTS, BASE)
     readme = files["README.md"]
-    assert f"-f {gen.HELM_VALUES_FILE}" in readme
-    assert f"./{gen.CHART_DIR}" in readme
+    assert f"-f {bundle_names.HELM_VALUES_FILE}" in readme
+    assert f"./{bundle_names.CHART_DIR}" in readme
     assert "bzm-perf" in readme
 
 
 def test_readme_tells_you_to_pass_a_token_when_none_was_fetched():
-    files = gen.generate(FACTS, {**BASE, "auth_token": gen.DEFAULT_OPTIONS["auth_token"]})
+    files = gen.generate(FACTS, {**BASE, "auth_token": bundle_options.DEFAULT_OPTIONS["auth_token"]})
     assert "--set-string authToken=" in files["README.md"]
     files = gen.generate(FACTS, BASE)
     assert "--set-string authToken=" not in files["README.md"]
@@ -741,10 +744,10 @@ def test_the_token_sample_is_not_marker_shaped():
     values file is committed, so an absent token is the recommended state), so
     nothing else here would have caught the collision."""
     readme = gen.generate(
-        FACTS, {**BASE, "auth_token": gen.DEFAULT_OPTIONS["auth_token"]})["README.md"]
+        FACTS, {**BASE, "auth_token": bundle_options.DEFAULT_OPTIONS["auth_token"]})["README.md"]
     line, = [ln for ln in readme.splitlines() if "--set-string authToken=" in ln]
     assert "--set-string authToken=<token>" in line
-    assert not gen.MARKER_RE.search(line)
+    assert not markers_mod.MARKER_RE.search(line)
 
 
 def test_overlay_json_values_are_parseable_where_the_chart_re_encodes_them():

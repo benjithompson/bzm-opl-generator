@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bzm_opl_gen import cli, doctor, evidence, kube, suggest  # noqa: E402
-from bzm_opl_gen.generate import SV_INGRESS_TYPES as SV_TYPES  # noqa: E402
+from bzm_opl_gen.service_virt import SV_INGRESS_TYPES as SV_TYPES  # noqa: E402
 
 EXAMPLE_FACTS = os.path.join(os.path.dirname(__file__), "..", "examples",
                              "facts.example.json")
@@ -24,6 +24,7 @@ from evidence_fixtures import (API_GROUPS, CLUSTER_SCOPED_DENIED,  # noqa: E402
                                PERMISSIONS as PERMS, SERVED,
                                classes as _classes, document as _evidence,
                                load, raw as _raw, scoped as _scoped)
+from bzm_opl_gen import bundle_names  # noqa: E402
 
 
 def _by_option(suggestions):
@@ -588,7 +589,7 @@ def test_merge_shows_what_would_be_replaced_whatever_the_state():
 
 def test_every_option_a_suggestion_names_is_one_generate_actually_takes():
     """Every suggested option is one generate() takes."""
-    from bzm_opl_gen.generate import DEFAULT_OPTIONS
+    from bzm_opl_gen.bundle_options import DEFAULT_OPTIONS
     for doc in _every_fixture():
         for s in suggest.from_evidence(doc):
             assert s.option in DEFAULT_OPTIONS, s.option
@@ -614,10 +615,10 @@ def test_an_applied_value_is_indistinguishable_from_a_typed_one():
     assert applied == typed
     assert gen.generate(facts, applied) == gen.generate(facts, typed)
     # ...and it replays as an ordinary option, with nothing extra beside it.
-    profile = json.loads(gen.generate(facts, applied)[gen.PROFILE_FILE])
+    profile = json.loads(gen.generate(facts, applied)[bundle_names.PROFILE_FILE])
     assert profile["pull_secret"] == "regcred"
     assert set(profile) == set(json.loads(
-        gen.generate(facts, typed)[gen.PROFILE_FILE]))
+        gen.generate(facts, typed)[bundle_names.PROFILE_FILE]))
 
 
 # -- the row a caller renders -------------------------------------------------
@@ -674,7 +675,8 @@ def test_an_option_is_never_blocked_by_its_own_value():
 def test_the_blocked_rule_names_the_modes_generate_actually_refuses():
     """The set is generate's, and a copy here is how a fourth mode arrives
     offerable over the other three."""
-    from bzm_opl_gen.generate import CA_MODES, DEFAULT_OPTIONS
+    from bzm_opl_gen.ca_trust import CA_MODES
+    from bzm_opl_gen.bundle_options import DEFAULT_OPTIONS
     for option in CA_MODES:
         assert option in DEFAULT_OPTIONS
 

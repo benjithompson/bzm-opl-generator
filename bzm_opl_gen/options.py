@@ -18,6 +18,7 @@ import re
 import sys
 
 from . import generate as gen
+from . import bundle_options, footprint, service_virt
 
 
 class Option:
@@ -36,7 +37,7 @@ class Option:
 
     @property
     def default(self):
-        return gen.DEFAULT_OPTIONS[self.name]
+        return bundle_options.DEFAULT_OPTIONS[self.name]
 
     @property
     def secret(self):
@@ -47,7 +48,7 @@ class Option:
     def nullable(self):
         """A `None` default means "not asked", which a caller must be able to
         send back."""
-        return gen.DEFAULT_OPTIONS[self.name] is None
+        return bundle_options.DEFAULT_OPTIONS[self.name] is None
 
 
 # Section headings for the generated table, in order. The intro states what a
@@ -98,7 +99,7 @@ OPTIONS = [
         summary="Target platform: openshift leaves the UID to the SCC, k8s pins runAsUser.",
         doc="`openshift` = SCC-friendly (no `runAsUser`, engines inherit the "
             "SCC-assigned UID); `k8s` = pinned `runAsUser` "
-            f"{gen.DEFAULT_OPTIONS['run_as_user']}. The difference is which side "
+            f"{bundle_options.DEFAULT_OPTIONS['run_as_user']}. The difference is which side "
             "chooses the UID: OpenShift's SCC assigns one from the namespace's "
             "range and rejects a pod that pins its own, while plain Kubernetes "
             "assigns nothing and a restricted PodSecurity namespace then refuses "
@@ -305,7 +306,7 @@ OPTIONS = [
     # ---- Service virtualization ----------------------------------------
     Option(
         "sv_ingress", "string", "Service virtualization",
-        choices=list(gen.SV_INGRESS_TYPES) + [gen.SV_INGRESS_NONE],
+        choices=list(service_virt.SV_INGRESS_TYPES) + [service_virt.SV_INGRESS_NONE],
         summary="Which ingress the mock services are published through, or `none` for performance only.",
         doc="`nginx` | `istio` | `contour` | `openshift` -- **required** for a "
             "`mockServices` location; `openshift` needs `platform: openshift`; "
@@ -608,13 +609,13 @@ OPTIONS = [
             "carried by the bundle."),
     Option(
         "crane_ephemeral_storage", "string", "Engine and agent sizing",
-        default_note=gen.CRANE_EPHEMERAL_STORAGE,
+        default_note=footprint.CRANE_EPHEMERAL_STORAGE,
         summary="Crane's own ephemeral-storage request and limit. One value sets both.",
         doc="Crane's own pod, e.g. `2Gi`. One value sets **both** the request and "
             "the limit, deliberately: crane's disk use is its image plus logs, and a "
             "request below the limit on a cluster that sizes nodes from requests just "
             "moves the eviction somewhere harder to see. Unset uses "
-            f"`{gen.CRANE_EPHEMERAL_STORAGE}`."),
+            f"`{footprint.CRANE_EPHEMERAL_STORAGE}`."),
 ]
 
 BY_NAME = {o.name: o for o in OPTIONS}

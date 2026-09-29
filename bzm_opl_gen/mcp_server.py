@@ -25,6 +25,7 @@ from mcp.types import ToolAnnotations
 
 from . import (__version__, api, core, evidence as evidence_mod,
                generate as gen_mod, livetest, plan)
+from . import bundle_names, bundle_options, ca_trust, footprint, readme_parts
 
 SERVER_NAME = "bzm-opl-gen"
 RESOURCE_SCHEME = "bzm-opl"
@@ -284,7 +285,7 @@ def _unknown(action, valid):
         f"unknown action {action!r}. This tool takes: {', '.join(valid)}")
 
 
-_DEFAULT_NS = gen_mod.DEFAULT_OPTIONS["namespace"]
+_DEFAULT_NS = bundle_options.DEFAULT_OPTIONS["namespace"]
 
 
 # -- opl_location --------------------------------------------------------------
@@ -375,7 +376,7 @@ def _location(action, args):
             func_ids=args.get("func_ids") or list(api.DEFAULT_FUNC_IDS),
             slots=_given(args, "slots", 1),
             threads_per_engine=_given(args, "threads_per_engine",
-                                      api.DEFAULT_THREADS_PER_ENGINE))
+                                      footprint.DEFAULT_THREADS_PER_ENGINE))
         loc = made["location"]
         body = {"location": _location_summary(loc),
                 "next": [f"opl_location create_agent with harbor_id "
@@ -550,7 +551,7 @@ def _bundle(action, args):
             facts, options, client=_client(args) if rotate else None,
             rotate=rotate, out_dir=out_dir, write=True)
         return {"out_dir": out_dir, "files": built.written,
-                "profile": json.loads(built.files[gen_mod.PROFILE_FILE]),
+                "profile": json.loads(built.files[bundle_names.PROFILE_FILE]),
                 # The branch and the ship, never the value.
                 "token_source": built.token._asdict(),
                 "warnings": (core.facts_warnings(facts)
@@ -591,12 +592,12 @@ def _bundle(action, args):
 
 def _after_generate(out_dir, options):
     if options.get("output_format") == "docker":
-        return [f"chmod +x {out_dir}/{gen_mod.DOCKER_RUN_FILE}",
-                f"{out_dir}/{gen_mod.DOCKER_RUN_FILE}   (YOU run this, on the "
+        return [f"chmod +x {out_dir}/{bundle_names.DOCKER_RUN_FILE}",
+                f"{out_dir}/{bundle_names.DOCKER_RUN_FILE}   (YOU run this, on the "
                 f"docker host itself -- nothing here reaches it)",
                 # Same container name, so running both refuses the second.
                 f"...or `docker compose up -d` in {out_dir}, which starts the "
-                f"same container from {gen_mod.DOCKER_COMPOSE_FILE}. One or the "
+                f"same container from {bundle_names.DOCKER_COMPOSE_FILE}. One or the "
                 f"other, not both",
                 "opl_agent status, to see whether the agent reported in"]
     if options.get("output_format") == "helm":
@@ -606,9 +607,9 @@ def _after_generate(out_dir, options):
                 "opl_agent status, once the release is up"]
     ns = options.get("namespace", _DEFAULT_NS)
     # The bundle's own namespace command and CLI binary (kubectl or oc).
-    o = {**gen_mod.DEFAULT_OPTIONS, **options}
-    return [gen_mod.create_namespace_cmd(o),
-            f"{gen_mod.cli(o)} apply -f {out_dir}/ -n {ns}   (YOU run this -- "
+    o = {**bundle_options.DEFAULT_OPTIONS, **options}
+    return [readme_parts.create_namespace_cmd(o),
+            f"{bundle_options.cli(o)} apply -f {out_dir}/ -n {ns}   (YOU run this -- "
             f"no tool here applies anything)",
             "opl_agent status, to see whether the agent reported in"]
 
@@ -634,7 +635,7 @@ def _token_warnings(source):
 
 def _bundle_warnings(options):
     out = []
-    slot = gen_mod.ca_slot_notice(options)
+    slot = ca_trust.ca_slot_notice(options)
     if slot:
         out.append(slot)
     if options.get("auto_update"):

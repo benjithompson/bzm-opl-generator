@@ -14,7 +14,7 @@ import glob
 import os
 import re
 
-from . import generate
+from . import bundle_names, ca_trust, markers, render_docker, required_fields
 
 CONFIGMAP_FILE = "bzm_configmap.yaml"
 
@@ -24,7 +24,7 @@ _IDENTITY_RE = re.compile(r'^\s*(HARBOR_ID|SHIP_ID):\s*"?([^"\s]+)"?\s*$', re.M)
 _COMPOSE_NAME_RE = re.compile(r'^\s*container_name:\s*"?([^"\s]+)"?\s*$', re.M)
 # A value nobody supplied, as _compose_required writes it; captures the name.
 _COMPOSE_UNSET_RE = re.compile(
-    r'\$\{' + re.escape(generate.COMPOSE_UNSET_PREFIX) + r'([A-Za-z0-9_]+):\?')
+    r'\$\{' + re.escape(render_docker.COMPOSE_UNSET_PREFIX) + r'([A-Za-z0-9_]+):\?')
 
 PLATFORM_MANIFESTS = "manifests"
 PLATFORM_COMPOSE = "compose"
@@ -71,8 +71,8 @@ def emitted_yaml_files():
     """Every *.yaml a manifests bundle from this generator can hold, from the
     generator's own constants. The chart's values file is deliberately absent:
     this rig deploys manifests."""
-    return frozenset(generate.APPLY_ORDER) | {generate.HOOK_FILE,
-                                              generate.SV_EXPOSE_FILE}
+    return frozenset(bundle_names.APPLY_ORDER) | {bundle_names.HOOK_FILE,
+                                              bundle_names.SV_EXPOSE_FILE}
 
 
 def bundle_yaml(manifest_dir):
@@ -84,7 +84,7 @@ def bundle_yaml(manifest_dir):
 
 
 def compose_path(manifest_dir):
-    return os.path.join(manifest_dir, generate.DOCKER_COMPOSE_FILE)
+    return os.path.join(manifest_dir, bundle_names.DOCKER_COMPOSE_FILE)
 
 
 def bundle_platform(manifest_dir, profile=None):
@@ -122,7 +122,7 @@ def compose_unset(manifest_dir):
     Read off both files (use_secret decides which holds the credential), not
     off profile.json, which never carries auth_token."""
     names = set()
-    for name in (generate.DOCKER_COMPOSE_FILE, generate.DOCKER_ENV_FILE):
+    for name in (bundle_names.DOCKER_COMPOSE_FILE, bundle_names.DOCKER_ENV_FILE):
         text = _file_text(os.path.join(manifest_dir, name)) or ""
         names.update(m.group(1) for m in _COMPOSE_UNSET_RE.finditer(text))
     return sorted(names)
@@ -145,7 +145,7 @@ def compose_blank_mounts(manifest_dir):
     override. A file absent with no override is not a mount this bundle has.
     """
     blank, unread = [], []
-    for m in generate.DOCKER_FILE_MOUNTS:
+    for m in render_docker.DOCKER_FILE_MOUNTS:
         override = os.environ.get(m.var)
         path = override or os.path.join(manifest_dir, m.file)
         if not override and not os.path.exists(path):
@@ -154,7 +154,7 @@ def compose_blank_mounts(manifest_dir):
         if text is None:
             unread.append((m, path))
             continue
-        mark = generate.marker_in(text)
+        mark = markers.marker_in(text)
         if mark:
             blank.append(BlankMount(m, path, mark))
     return BlankMounts(blank, unread)
@@ -218,7 +218,7 @@ def _plural(n, one, many):
 def _profile_refusals(manifest_dir, ship_id, profile):
     """What profile.json alone says is wrong, on either platform."""
     refusals = []
-    path = os.path.join(manifest_dir, generate.PROFILE_FILE)
+    path = os.path.join(manifest_dir, bundle_names.PROFILE_FILE)
     # A re-render merges onto the profile and prefers its ship_id, so a stale
     # one deploys the wrong agent even on a path that re-renders.
     prof_ship = (profile or {}).get("ship_id")
@@ -229,10 +229,10 @@ def _profile_refusals(manifest_dir, ship_id, profile):
             f"bundle, and a re-render would merge onto it rather than "
             f"correct it")
     # The API server refuses a marker too, but only after the cluster is built.
-    blank = generate.placeholder_options(profile or {})
+    blank = required_fields.placeholder_options(profile or {})
     if blank:
         n = len(blank)
-        named = ", ".join(f"{k} ({generate.marker(k)})" for k in blank)
+        named = ", ".join(f"{k} ({markers.marker(k)})" for k in blank)
         refusals.append(
             f"{path} was generated with {named} left blank, so the bundle "
             f"carries {_plural(n, 'that marker', 'those markers')} "
@@ -251,12 +251,12 @@ def _compose_bundle_check(manifest_dir, harbor_id, ship_id, profile):
         # bundle, or a tidied directory. There is nothing to start.
         return BundleCheck([
             f"{manifest_dir}/ is a docker bundle with no "
-            f"{generate.DOCKER_COMPOSE_FILE} in it, and this run starts a "
+            f"{bundle_names.DOCKER_COMPOSE_FILE} in it, and this run starts a "
             f"docker bundle with `docker compose up`. Re-generate it: "
-            f"{generate.DOCKER_RUN_FILE} on its own is the other route, and "
+            f"{bundle_names.DOCKER_RUN_FILE} on its own is the other route, and "
             f"the two are either/or rather than interchangeable here"], [])
     claimed = compose_identity(manifest_dir)
-    want_name = generate.docker_container_name(ship_id) if ship_id else None
+    want_name = bundle_names.docker_container_name(ship_id) if ship_id else None
     # The file exists, so None is a file nothing could decode: one note, and no
     # per-field notes, which would be claims about a file somebody read.
     read = claimed is not None
@@ -342,9 +342,9 @@ def rig_ca_mode(profile):
     """The `--ca-mode` a bundle is already generated for, or None where it
     carries no mode the rig can build (no CA trust, or OpenShift injection).
 
-    Callers run ca_configmap_refusal first, so generate.CA_UNRESOLVED never
+    Callers run ca_configmap_refusal first, so ca_trust.CA_UNRESOLVED never
     reaches here."""
-    mode = generate.ca_mode(profile)
+    mode = ca_trust.ca_mode(profile)
     return mode if mode in RIG_CA_MODES else None
 
 
@@ -369,7 +369,7 @@ def ca_mode_notice(profile, chosen):
         return (f"note: this bundle is generated for the {carried} CA mode, and "
                 f"--ca-mode {chosen} replaces it -- the run tests {chosen}, not "
                 f"what is on disk")
-    mode = generate.ca_mode(profile)
+    mode = ca_trust.ca_mode(profile)
     why = ("is generated for OpenShift trust injection, which this rig cannot "
            "deploy -- nothing here injects a trust bundle"
            if mode == "inject" else
@@ -387,14 +387,14 @@ def ca_configmap_refusal(profile, local_proxy):
     so it answers None there. `inject` is not refused: its ConfigMap is emitted
     (empty), so the pod starts and the failure is a readable TLS error.
     """
-    ca = generate.resolved_ca(profile)
-    if ca is generate.CA_UNRESOLVED:
-        return (f"{generate.PROFILE_FILE} sets more than one CA mode, and the "
+    ca = ca_trust.resolved_ca(profile)
+    if ca is ca_trust.CA_UNRESOLVED:
+        return (f"{bundle_names.PROFILE_FILE} sets more than one CA mode, and the "
                 f"generator takes one: a run that re-renders would raise out of "
                 f"generate() with the cluster already built, and one that does "
                 f"not would deploy manifests whose own profile disagrees with "
                 f"them. Re-generate the bundle with a single CA mode set "
-                f"({', '.join(generate.CA_MODES)})")
+                f"({', '.join(ca_trust.CA_MODES)})")
     if local_proxy or not ca or ca["mode"] not in ("file", "existing"):
         return None
     if ca["mode"] == "file":
@@ -409,7 +409,7 @@ def ca_configmap_refusal(profile, local_proxy):
         instead = ("creates a trust ConfigMap of the rig's own and re-renders "
                    "the bundle to reference it")
     return (
-        f"{generate.PROFILE_FILE} says this bundle {carries}. livetest creates "
+        f"{bundle_names.PROFILE_FILE} says this bundle {carries}. livetest creates "
         f"no such ConfigMap, and deploys into a namespace it has usually just "
         f"made itself: the crane pod would sit at ContainerCreating naming it, "
         f"no heartbeat could arrive, and the run would spend its whole timeout "

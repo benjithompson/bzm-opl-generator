@@ -9,19 +9,11 @@ import re
 import urllib.error
 import urllib.request
 
-API_BASE = "https://a.blazemeter.com/api/v4"
-
-# Max threads one engine will run. A location with this unset cannot start a
-# test at all; 500 matches BlazeMeter's own default for a 2 CPU / 8Gi engine.
-DEFAULT_THREADS_PER_ENGINE = 500
+from .footprint import API_BASE, DEFAULT_THREADS_PER_ENGINE
 
 # The funcIds a location is created with, or manual facts are built for, when
 # the caller names none.
 DEFAULT_FUNC_IDS = ("performance",)
-
-# Hosts only an engine talks to (results and artifact upload); crane itself uses
-# a.blazemeter.com. The planner, doctor and the live rig all name these.
-ENGINE_UPLOAD_HOSTS = ("data.blazemeter.com", "storage.blazemeter.com")
 
 
 class BzmApiError(RuntimeError):

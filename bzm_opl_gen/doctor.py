@@ -27,20 +27,20 @@ from . import kube, plan, verdict
 # Aliased: every check takes a `facts` argument, and evaluate() an `evidence`.
 from . import evidence as evidence_mod
 from . import facts as facts_mod
-from .api import (API_BASE, DEFAULT_THREADS_PER_ENGINE,
-                  ENGINE_UPLOAD_HOSTS)
-from .generate import (CA_MODES, CRANE_CPU_LIMIT, CRANE_CPU_REQUEST,
-                       CRANE_MEM_LIMIT,
-                       CRANE_MEM_REQUEST, DEFAULT_OPTIONS,
-                       ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM, ENGINE_DISK_GB,
-                       ENGINE_TMP_GB,
-                       ENGINE_STAMPED_REQUEST_CPU, ENGINE_STAMPED_REQUEST_MEM,
-                       NODEPOOLS_FILE, SV_INGRESS_BACKENDS, SV_INGRESS_NONE,
-                       TYPICAL_SYSTEM_PODS, crane_scheduling, engine_requests,
-                       engines_per_node,
-                       engine_scheduling, engine_size, proxy_env,
-                       resolve_engine_limits,
-                       separate_pools, service_account)
+from .ca_trust import CA_MODES
+from .footprint import (API_BASE, CRANE_CPU_LIMIT, CRANE_CPU_REQUEST,
+                        CRANE_MEM_LIMIT, CRANE_MEM_REQUEST, DEFAULT_THREADS_PER_ENGINE,
+                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM,
+                        ENGINE_DEFAULT_REQUEST_CPU, ENGINE_DEFAULT_REQUEST_MEM,
+                        ENGINE_DISK_GB, ENGINE_TMP_GB, ENGINE_UPLOAD_HOSTS,
+                        TYPICAL_SYSTEM_PODS, engine_requests)
+from .bundle_options import (DEFAULT_OPTIONS, crane_scheduling,
+                             engines_per_node, engine_scheduling, engine_size,
+                             resolve_engine_limits, separate_pools,
+                             service_account)
+from .bundle_names import NODEPOOLS_FILE
+from .service_virt import SV_INGRESS_BACKENDS, SV_INGRESS_NONE
+from .bundle_env import proxy_env
 from .quantity import (format_cpu, format_memory, human_memory, parse_cpu,
                        parse_memory)
 from .verdict import FAIL, PASS, WARN, Check
@@ -726,14 +726,14 @@ def check_limitrange(facts, opts, cluster):
         return [Check("limitrange", WARN,
                       f"no LimitRange in the namespace, so nothing caps what it "
                       f"may ask for. Separately, engine pods request "
-                      f"{ENGINE_STAMPED_REQUEST_CPU}/{ENGINE_STAMPED_REQUEST_MEM} "
+                      f"{ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM} "
                       f"rather than {_engine_str(cpu, mem)} because crane sets "
                       f"that explicitly -- a LimitRange cannot override it")]
 
     # (field, parse, the engine's limit, how to show it, crane's stamped request)
-    dims = (("cpu", parse_cpu, cpu, format_cpu, parse_cpu(ENGINE_STAMPED_REQUEST_CPU)),
+    dims = (("cpu", parse_cpu, cpu, format_cpu, parse_cpu(ENGINE_DEFAULT_REQUEST_CPU)),
             ("memory", parse_memory, mem, format_memory,
-             parse_memory(ENGINE_STAMPED_REQUEST_MEM)))
+             parse_memory(ENGINE_DEFAULT_REQUEST_MEM)))
     checks = []
     for lr in limitranges:
         name = lr.get("metadata", {}).get("name", "?")

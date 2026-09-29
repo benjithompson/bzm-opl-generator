@@ -10,7 +10,8 @@ import collections
 import json
 import subprocess
 
-from . import generate, kube
+from . import kube
+from . import service_virt
 
 
 def sv_mocks(cli, namespace):
@@ -24,7 +25,7 @@ def _sv_mocks(pods):
     found = {}
     for pod in pods:
         labels = (pod.get("metadata") or {}).get("labels") or {}
-        name = labels.get(generate.SV_POD_NAME_LABEL)
+        name = labels.get(service_virt.SV_POD_NAME_LABEL)
         if not name:
             continue                      # crane itself, engines, test jobs
         ports = [p.get("containerPort")
@@ -32,8 +33,8 @@ def _sv_mocks(pods):
                  for p in c.get("ports") or [] if p.get("containerPort")]
         if ports:
             found[name] = {"name": name, "port": ports[0],
-                           "harbor": labels.get(generate.SV_POD_HARBOR_LABEL),
-                           "ship": labels.get(generate.SV_POD_SHIP_LABEL)}
+                           "harbor": labels.get(service_virt.SV_POD_HARBOR_LABEL),
+                           "ship": labels.get(service_virt.SV_POD_SHIP_LABEL)}
     return [found[n] for n in sorted(found)]
 
 

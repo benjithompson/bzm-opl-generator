@@ -30,12 +30,15 @@ import re
 import tempfile
 import time
 
-from . import bundle_check, generate, kube
-from .api import ENGINE_UPLOAD_HOSTS
+from . import bundle_check, kube
+from .footprint import ENGINE_UPLOAD_HOSTS
 from .facts import image_refs, select_images
-from .generate import (CA_CONFIGMAP, CA_MOUNT_PATH, cluster_composed_targets,
-                       engine_scheduling, engine_size, separate_pools)
+from .bundle_names import CA_CONFIGMAP
+from .ca_trust import CA_MOUNT_PATH
+from .image_registry import cluster_composed_targets
+from .bundle_options import engine_scheduling, engine_size, separate_pools
 from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
+from . import bundle_names, bundle_options, ca_trust
 
 KIND_CLUSTER = "bzm-opl-test"
 MINIKUBE_PROFILE = "bzm-opl-test"
@@ -183,11 +186,11 @@ def mirror_images(facts, port, arch="linux/amd64"):
     """Pull the location's images (amd64) and push them to the local registry
     under the names generate() writes.
 
-    Destinations come from generate.cluster_composed_targets, so the push and
+    Destinations come from image_registry.cluster_composed_targets, so the push and
     IMAGE_OVERRIDES agree by construction. The rig pushes to localhost:<port>
     and the node reaches the same registry as host.minikube.internal:<port>, so
     only the path below the host must match. Crane's own image falls through to
-    the short form generate._crane_image writes."""
+    the short form image_registry.crane_image writes."""
     refs = image_refs(facts)
     reg = f"localhost:{port}"
     composed = cluster_composed_targets(facts, {"private_registry": reg})
@@ -309,10 +312,10 @@ def proxy_overlay(host, port, ca_pem, user=None, password=None,
       inline    the generator owns the ConfigMap and writes the PEM into it
       existing  the rig creates a ConfigMap of its own name; the bundle names it
       file      the bundle names a certificate file and creates no ConfigMap;
-                the rig builds generate.CA_CONFIGMAP from it, as a customer's
+                the rig builds bundle_names.CA_CONFIGMAP from it, as a customer's
                 pipeline would
 
-    Starts from generate.no_ca() so every other mode is cleared: the overlay is
+    Starts from ca_trust.no_ca() so every other mode is cleared: the overlay is
     merged onto a profile that may carry any of them, and two is a refusal."""
     url = f"http://{host}:{port}"
     proxy = {"http": url, "https": url, "no_proxy": PROXY_NO_PROXY}
@@ -327,7 +330,7 @@ def proxy_overlay(host, port, ca_pem, user=None, password=None,
         "file": {"ca_bundle_slot": True, "ca_cert_file": bundle_check.CA_RIG_KEY},
         "inline": {"ca_bundle": ca_pem},
     }[ca_mode]
-    return {"proxy": proxy, **generate.no_ca(), **mode}
+    return {"proxy": proxy, **ca_trust.no_ca(), **mode}
 
 
 def ensure_ca_configmap(cli, namespace, ca_pem, name=None, key=None):
@@ -404,11 +407,11 @@ def negative_control(regenerate, overlay, manifest_dir, namespace, cluster,
     """Deploy the same bundle with no CA trust and require
     CERTIFICATE_VERIFY_FAILED; a rig that cannot fail proves nothing.
 
-    Every CA mode is cleared (generate.no_ca()), not just the inline PEM: a
+    Every CA mode is cleared (ca_trust.no_ca()), not just the inline PEM: a
     leftover existing/file reference mounts a missing ConfigMap, the pod never
     starts, and the control fails without testing anything."""
     print("negative control: deploying without the CA bundle, expecting TLS failure")
-    regenerate({**overlay, **generate.no_ca()})
+    regenerate({**overlay, **ca_trust.no_ca()})
     stale = os.path.join(manifest_dir, "bzm_cacerts.yaml")
     if os.path.exists(stale):
         os.remove(stale)          # else deploy() re-applies the previous render
@@ -743,7 +746,7 @@ def assert_engine_config(pod, opts):
     if reg and not all(i.startswith(reg.split("/")[0]) for i in images):
         fails.append(f"engine image is not from the private registry: {images} "
                      f"-- IMAGE_OVERRIDES does not cover the engine")
-    if any(opts.get(k) for k in generate.CA_MODES):
+    if any(opts.get(k) for k in ca_trust.CA_MODES):
         # Crane mounts /var/cm as a directory; the engine gets the bundle file
         # itself (/var/cm/ca-bundle.crt, subPath). Accept both.
         mounts = [m for c in containers for m in c.get("volumeMounts", [])
@@ -901,7 +904,7 @@ def assert_live_config(cli, namespace, facts, opts):
 
     # Judged against the resolved option, which defaults to false under a
     # private registry (auto-update would pull from the blackholed public one).
-    want_auto = "true" if generate.auto_update(opts) else "false"
+    want_auto = "true" if bundle_options.auto_update(opts) else "false"
     if cm.get("AUTO_KUBERNETES_UPDATE") != want_auto:
         fails.append(f"AUTO_KUBERNETES_UPDATE is {cm.get('AUTO_KUBERNETES_UPDATE')!r}, "
                      f"expected {want_auto!r} for these options")
@@ -1061,7 +1064,7 @@ def run_compose(client, manifest_dir, harbor_id, ship_id, timeout=600,
     bad = bundle_check.bundle_check(manifest_dir, harbor_id, ship_id, opts).report()
     if bad:
         raise bundle_check.BundleMismatch(bad)
-    name = generate.docker_container_name(ship_id)
+    name = bundle_names.docker_container_name(ship_id)
     ok = False
     try:
         compose_up(manifest_dir)
@@ -1159,7 +1162,7 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
             # After the negative control, which deletes CA_CONFIGMAP by name --
             # the very object `file` mode has the rig create.
             if ca_mode in ("existing", "file"):
-                cm_name = (generate.CA_CONFIGMAP if ca_mode == "file"
+                cm_name = (bundle_names.CA_CONFIGMAP if ca_mode == "file"
                            else bundle_check.CA_RIG_CONFIGMAP)
                 ensure_ca_configmap(kube.cli_tool(), namespace, ca_pem, name=cm_name)
                 owned = owned._replace(ca_configmap=cm_name)
