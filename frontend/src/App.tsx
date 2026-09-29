@@ -99,6 +99,7 @@ import { NavDrawer, ViewId } from "./layout/NavDrawer";
 import { AccountMenu } from "./layout/AccountMenu";
 import { StepFlow } from "./layout/StepFlow";
 import { useServedTables } from "./useServedTables";
+import { useResource } from "./useResource";
 
 
 // The one thing this page does not own: the caller of the local routes. It
@@ -136,16 +137,6 @@ export default function App({ api }: { api: Api }) {
   const [locFilter, setLocFilter] = useState("");
   const [harborId, setHarborId] = useState<string | null>(null);
   const [showCreateLoc, setShowCreateLoc] = useState(false);
-  // Served from facts.CATEGORY_BY_FUNC over /api/func-ids, not listed here: the
-  // copy that used to live in this file omitted sv-bridge, so an SV-bridge
-  // location could not be created from the UI at all.
-  //
-  // The whole envelope, not its `choices`: `source` is what tells a funcId the
-  // account retired from one nobody has read the vocabulary for, and a reader
-  // handed the list alone would have to remember which fetch filled it (#160).
-  // "baseline" before either lands, which is what an empty list honestly is.
-  const [funcIds, setFuncIds] = useState<FuncIdVocabulary>(
-    { source: "baseline", choices: [] });
   const [newLoc, setNewLoc] = useState({
     name: "", workspace_id: 0, func_ids: ["performance"], slots: 1, threads_per_engine: 500 });
   const [locErr, setLocErr] = useState<string | null>(null);
@@ -188,11 +179,6 @@ export default function App({ api }: { api: Api }) {
 
   // -- options / preview -----------------------------------------------------
   const [defaults, setDefaults] = useState<Options>({});
-  // ...and the other half of it: the documented variables that are left, which
-  // the env area offers as a list. Empty again means "not read yet" -- the area
-  // falls back to naming a variable by hand, which is a field too many rather
-  // than an option nobody can reach.
-  const [agentEnv, setAgentEnv] = useState<AgentEnvVar[]>([]);
   // The generator's vocabulary, fetched once and only read (useServedTables.ts).
   const {
     svConst, ignored, reservedEnv, slotMinimums, placeholderSources,
@@ -415,7 +401,6 @@ export default function App({ api }: { api: Api }) {
       setDefaults(d);
       setOptions((o) => ({ ...d, ...o }));
     }).catch(() => {});
-    api.funcIdVocabulary().then(setFuncIds).catch(() => {});
     api.sizingModels().then((ms) => {
       setSizingModels(ms);
       // ...and the sizings to offer before anybody has saved one, which are one
@@ -662,46 +647,21 @@ export default function App({ api }: { api: Api }) {
     return () => { live = false; };
   }, [accountId, who]);
 
-  // The funcId vocabulary again, now that there is an account to ask. The mount
-  // fetch above got the covered baseline -- the three funcIds this tool
-  // configures -- which is all there is with no key; this replaces it with what
-  // the account actually offers, which is longer and carries BlazeMeter's own
-  // display names for the funcIds nothing here has options for (#148).
-  //
-  // Failure keeps the baseline rather than clearing it: an account that refuses
-  // the read has not said the vocabulary is empty, and a page with no funcIds at
-  // all cannot even name what a location runs.
-  useEffect(() => {
-    if (!accountId || !who) return;
-    let live = true;
-    api.funcIdVocabulary(accountId)
-      .then((f) => { if (live) setFuncIds(f); }).catch(() => {});
-    return () => { live = false; };
-  }, [accountId, who]);
+  // The account's funcId vocabulary once connected, the keyless baseline before.
+  // A failed read keeps the previous answer.
+  const vocabAccount = accountId && who ? accountId : null;
+  const funcIdsRead = useResource(
+    () => api.funcIdVocabulary(vocabAccount ?? undefined), [api, vocabAccount]);
+  const funcIds: FuncIdVocabulary =
+    funcIdsRead.data ?? { source: "baseline", choices: [] };
 
-  // The agent variables that are left, scoped to what this location runs
-  // (#150). Not part of the mount fetch above any more, because the answer
-  // changes with the location: a performance location has no Selenium grid and
-  // publishes no virtual services, so the Grid proxy's port and the three
-  // variables about publishing mocks reach nothing it runs.
-  //
-  // Scoped on the server rather than here, so the CLI and the MCP server get
-  // the same answer from the same place -- which is also why the first fetch
-  // asks with nothing: `null` is nobody having said, and it offers the
-  // reference whole. Keyed on the joined ids rather than on the array, which is
-  // rebuilt on every render; the empty string is a real key, and is not null.
-  //
-  // A failed read leaves what was there, as everywhere else on this page: an
-  // account that refused the call has not said the reference is empty, and an
-  // empty list here would take the whole list off screen and leave the
-  // name/value editor alone with it.
+  // The agent variables left for the bundle's options, scoped server-side to
+  // what this location runs; null asks for the whole reference.
   const enabledKey = enabled === null ? null : enabled.join(",");
-  useEffect(() => {
-    let live = true;
-    api.agentEnv(enabledKey === null ? null : enabledKey.split(",").filter(Boolean))
-      .then((e) => { if (live) setAgentEnv(e); }).catch(() => {});
-    return () => { live = false; };
-  }, [enabledKey, api]);
+  const agentEnvRead = useResource(
+    () => api.agentEnv(enabledKey === null ? null : enabledKey.split(",").filter(Boolean)),
+    [api, enabledKey]);
+  const agentEnv: AgentEnvVar[] = agentEnvRead.data ?? [];
 
   useEffect(() => {
     setNewLoc((n) => ({ ...n, workspace_id: workspaceId ?? 0 }));
