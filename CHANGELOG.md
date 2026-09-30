@@ -13,6 +13,94 @@ anything that breaks.
 
 ### Added
 
+- **Every bundle carries `IMAGES.md`.** It lists the images the agent pulls,
+  what each one does, which functionality needs it, when it is pulled, and
+  whether that was seen in a live run. With `--private-registry` it also lists
+  the name each image must have in your registry. It warns about floating
+  (`latest`) tags and says how to check a mirror after a BlazeMeter release.
+
+- **`images --explain`** prints the same catalogue for a location (or, with no
+  location, every image this tool knows), as a table, Markdown, CSV or JSON.
+  `--lookup` adds each image's digest, compressed size and newest published
+  tag from BlazeMeter's public registry, so you can see when a mirror is
+  behind. For a floating tag such as `latest` it also names the version the
+  tag is now (`resolves_to`). The newest tag is a release, never a CI build.
+  A registry that does not answer is reported as unread and never stops the
+  command.
+
+- **`images --verify <registry>`** checks that your mirror holds every image
+  under the name the agent asks for, and reports each one as present, missing
+  or unread. It exits 1 when an image is missing. Pass the bundle's
+  `--profile profile.json` for a docker bundle's names, and `--ca-file` for a
+  registry signed by your own CA. Credentials come from `BZM_REGISTRY_USER` and
+  `BZM_REGISTRY_PASSWORD` or your docker config, never from a flag. See
+  [docs/images.md](docs/images.md).
+
+- **`images --pull --mirror` takes `--profile profile.json`**, and pushes to
+  the same names as the bundle's own `bzm-opl-image-mirror.sh` for every
+  format. Before, it always used a Kubernetes bundle's names, so a mirror made
+  this way for a docker bundle was not where the docker agent looks. The MCP
+  server's `opl_bundle images` takes the bundle's `options` for the same
+  reason. Without a profile the names are a Kubernetes bundle's, as before.
+
+- **`GET /api/images`** serves the catalogue to the web UI, and the MCP
+  server's `opl_bundle images` returns it as `catalogue`.
+
+- **`facts` records where each image came from.** Each image entry has a
+  `source` (`location-versions`, `agent-inventory` or `catalogue`), and the
+  facts have a `crane_source`. Older facts files still work.
+
+- **`bzm-opl-gen ca-check` tests a corporate CA before you deploy.** Behind a
+  TLS-inspecting proxy the agent needs your CA, and a wrong one only shows up
+  as an agent that never comes online. Run it on the agent's network:
+
+  ```
+  bzm-opl-gen ca-check --ca-bundle corp-ca.pem --proxy http://proxy.corp:3128
+  ```
+
+  It lints the file (a server certificate where the CA belongs, an expired or
+  expiring CA, an intermediate without its root, duplicates, blocks that do not
+  parse), then opens TLS to the BlazeMeter API and upload hosts, prints the
+  chain your network presents, and verifies it against the bundle alone. A
+  host that does not verify names the CA the bundle is missing. It exits `1`
+  on a host not verified or a lint failure. See
+  [docs/ca-trust.md](docs/ca-trust.md).
+
+- **`generate --ca-bundle` lints the PEM and reads Windows exports.** A DER
+  `.cer` or a PKCS#7 `.p7b` no longer stops `generate` with a decode error; it
+  is written into the bundle as PEM. Lint findings are printed (and returned in
+  the MCP server's `warnings` and the web preview's `warnings`). A failure is
+  warned loudly; the bundle is still written, as before.
+
+- **`bzm-opl-gen triage -n <namespace>` names what went wrong after a
+  deploy.** When BlazeMeter shows the agent offline or a run stuck at
+  `BOOT_STARTING`, the cause is usually only in Kubernetes events, container
+  statuses and crane's log. `triage` reads those three and matches them against
+  a table of known failures: image pulls, CA trust, proxy, scheduling, quota,
+  Pod Security, SCC, admission webhooks, RBAC, OOMKilled, eviction and a revoked
+  AUTH_TOKEN. Each finding names the option or action that fixes it. A read the
+  cluster refuses is reported as unread, never as empty, and a warning no rule
+  knows is listed as found. It exits 1 only for a known failure. `--json` gives
+  the report as data, and the MCP server has it as `opl_agent triage`. See
+  [docs/triage.md](docs/triage.md).
+
+- **An Images view in the web UI** lists the container images to mirror into
+  your own registry: each reference, what it is for, which functionality pulls
+  it and when, its size and digest, which version a tag such as `latest` points
+  at now, and whether a newer tag exists. Connected
+  with a location chosen, it shows the versions that location uses; otherwise
+  it shows BlazeMeter's catalogue, pinned to the newest releases, and says that
+  a location can ask for an older one. **Copy** takes every reference, and
+  **CSV** / **Markdown** download the list. A value the page could not read
+  says "not read" rather than showing blank. See
+  [docs/web-ui.md](docs/web-ui.md#images).
+
+- **Manual entry in the web UI shows what its facts cannot tell.** Facts made
+  without an account now take a second or more, because the server reads the
+  newest releases from BlazeMeter's registry. The form says it is reading,
+  **Download** waits for the new facts, and the server's warnings show under
+  the form. Typing the AUTH_TOKEN no longer re-reads the facts.
+
 - **Engines request what they are limited to.** Manifests and the Helm chart
   now set `KUBERNETES_RESOURCES_DEFAULT_CPU` / `KUBERNETES_RESOURCES_DEFAULT_MEM`
   beside the engine limits, so each engine requests 2 CPU / 8Gi by default
@@ -82,6 +170,13 @@ anything that breaks.
 
 ### Changed
 
+- **`doctor` probes egress with your CA before crane is deployed.** It used to
+  report egress as unknown whenever a CA was configured. The throwaway curl pod
+  now gets the same CA (the inline PEM, or the CA ConfigMap from the
+  namespace). Where that ConfigMap does not exist yet, or cannot be read, the
+  report says which and why. A chain the CA does not verify is now a FAIL that
+  points to `ca-check`.
+
 - **Generated bundles read as customer documentation.** Comments in the
   manifests, the Helm chart (`values.yaml`, templates, README), the docker
   script and compose file, `nodepools.md` and the mirror script are shorter and
@@ -97,6 +192,19 @@ anything that breaks.
   material moved to `CONTRIBUTING.md`.
 
 ### Fixed
+
+- **A bundle made without an account deployed an old agent.** Manual-entry
+  facts named crane and the other images by `latest`, and on BlazeMeter's
+  registry `latest` names releases far older than the newest, so the agent
+  started far behind the current release and, with auto-update off, stayed
+  there. Facts made without an account now pin each image to its newest
+  release in BlazeMeter's
+  registry (`source: registry-newest`). torero and richrach keep `latest`,
+  which is what the agent asks for. If the registry does not answer, the old
+  tags stay and the facts say so. A location can still ask for an older
+  release than the newest: connect an API key for the exact list, or check a
+  mirror with `images --verify` once the agent is online. Re-make manual
+  facts to pick this up.
 
 - **The web UI showed an unanswered cluster as OpenShift** while the bundle
   was generated for plain Kubernetes. The Advanced selector now shows what the

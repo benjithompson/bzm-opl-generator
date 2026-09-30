@@ -73,7 +73,8 @@ GROUPS = [
      "Pick **exactly one** of the four modes -- inline PEM, a certificate file "
      "supplied later, an existing ConfigMap, or OpenShift injection. More than "
      "one is refused. All four mount at `/var/cm` and reach engines via "
-     "`KUBERNETES_CA_BUNDLE_MOUNT`."),
+     "`KUBERNETES_CA_BUNDLE_MOUNT`. Check the certificate before deploying "
+     "with `bzm-opl-gen ca-check` -- see [CA trust](ca-trust.md)."),
     ("Scheduling", None),
     ("Engine and agent sizing",
      "All unset by default: crane has its own defaults and this generator only "
@@ -356,7 +357,10 @@ OPTIONS = [
             "and the one that goes stale: nothing rotates it for you. A large "
             "bundle can push the manifest past the 256KB cap on kubectl's "
             "last-applied-configuration annotation, so anything over 200KB "
-            "applies `--server-side`."),
+            "applies `--server-side`. The PEM is linted at generate time: a "
+            "server certificate, an expired CA or an intermediate without its "
+            "root is warned, never refused. `--ca-bundle` also reads a DER "
+            "`.cer` or a PKCS#7 `.p7b` and writes it as PEM."),
     Option(
         "ca_bundle_slot", "boolean", "CA trust",
         summary="The certificate is a file you supply; name it with ca_cert_file.",

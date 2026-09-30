@@ -40,6 +40,18 @@ def test_generate_preview_no_key_needed():
     assert "bzm_deployment.yaml" in names and "README.md" in names
 
 
+def test_generate_preview_carries_the_ca_bundle_lint():
+    """Warned beside the files, never refused: the preview still renders."""
+    from ca_fixtures import CHAIN_PEM, LEAF_PEM
+    r = client.post("/api/generate", json={
+        "facts": FACTS, "options": {"namespace": "ns1", "ca_bundle": LEAF_PEM}})
+    assert r.status_code == 200
+    assert r.json()["warnings"][0].startswith("CA bundle FAIL: ")
+    clean = client.post("/api/generate", json={
+        "facts": FACTS, "options": {"namespace": "ns1", "ca_bundle": CHAIN_PEM}})
+    assert clean.json()["warnings"] == []
+
+
 def test_generate_zip_mirror_script_executable():
     r = client.post("/api/generate/zip", json={
         "facts": FACTS,
@@ -1959,3 +1971,46 @@ def test_only_a_stale_page_is_worded_as_a_warning(monkeypatch, capsys):
 
     assert "npm run build" not in printed(False)
     assert "npm run build" not in printed(None)
+
+
+# -- /api/images: the catalogue the page shows beside the bundle --------------------
+
+IMAGES_KEYS = {"source", "location", "image_list_state", "registry_lookup",
+               "images"}
+
+
+def test_images_without_a_location_is_the_catalogue_and_needs_no_key():
+    r = client.get("/api/images", params={"lookup": "false"})
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) == IMAGES_KEYS
+    assert body["source"] == "catalogue" and body["location"] is None
+    assert body["registry_lookup"] == {"state": "not-asked", "detail": None}
+    assert all(i["required"] is None for i in body["images"])
+
+
+def test_images_for_a_location_needs_a_key():
+    r = client.get("/api/images", params={"harbor_id": "h1", "lookup": "false"})
+    assert r.status_code == 401
+
+
+def test_images_reads_the_same_cached_facts_as_the_facts_route(monkeypatch):
+    c = connect(monkeypatch, FakeClient(harbor={
+        "id": "h1", "name": "L", "funcIds": ["performance"], "ships": []}))
+    client.get("/api/facts", params={"harbor_id": "h1"})
+    r = client.get("/api/images", params={"harbor_id": "h1", "lookup": "false",
+                                          "all": "true"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["location"] == {"harbor_id": "h1", "name": "L",
+                                "func_ids": ["performance"]}
+    assert body["image_list_state"] == "no-agent"
+    assert {i["required"] for i in body["images"]} == {True, False}
+    assert [x[0] for x in c.calls].count("private_location") == 1
+
+
+def test_an_unreachable_registry_is_an_answer_not_an_error():
+    """lookup defaults on; offline, every image is unread and the route is 200."""
+    body = client.get("/api/images").json()
+    assert body["registry_lookup"]["state"] == "unread"
+    assert body["registry_lookup"]["detail"]

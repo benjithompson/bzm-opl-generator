@@ -9,21 +9,25 @@ Subcommands:
                functionalities)
   generate     render manifests from facts + customer parameters
   doctor       preflight a cluster: can it schedule the location's concurrency?
+  triage       after deploying: name the known failures in the namespace, with fixes
   suggest      what a cluster's evidence implies about the generate options
+  ca-check     does a CA bundle verify the chain this network presents?
   sv-expose    emit a working Service+Ingress per deployed virtual service
-  images       list / pull / mirror the images the location actually needs
+  images       list / explain / pull / mirror / verify the images the location
+               actually needs
   livetest     start a bundle for real (a cluster, or docker compose) and
                verify the agent comes online
 """
 
 import argparse
+import collections
 import json
 import os
 import sys
 
-from . import (api, bundle_check, core, doctor, facts as facts_mod,
+from . import (api, bundle_check, ca_check, core, doctor, facts as facts_mod,
                generate as gen_mod, kube, livetest, plan, suggest as suggest_mod,
-               sv_read, workstation)
+               sv_read, triage as triage_mod, verdict, workstation)
 from . import bundle_names, bundle_options, ca_trust, footprint, service_virt
 
 
@@ -118,8 +122,10 @@ def cmd_facts(a):
     """Gather facts from the account, or -- with --manual -- build them from the
     ids BlazeMeter shows on the agent, for an account nobody here can reach."""
     if a.manual:
-        # Either id may be blank; facts.manual writes its marker instead.
-        f = facts_mod.manual(a.harbor_id, a.ship_id, func_ids=a.func_ids)
+        # Either id may be blank; facts.manual writes its marker instead. The
+        # images are pinned to BlazeMeter's newest releases where it answers.
+        f = core.manual_facts(a.harbor_id, a.ship_id,
+                              func_ids=a.func_ids)["facts"]
     else:
         if not a.api_key:
             sys.exit("facts needs --api-key, or --manual to build them from "
@@ -175,8 +181,8 @@ def cmd_generate(a):
     if a.engine_node_selector is not None:
         opts["engine_node_selector"] = json.loads(a.engine_node_selector)
     if a.ca_bundle:
-        with open(a.ca_bundle) as fh:
-            opts["ca_bundle"] = fh.read()
+        # DER and PKCS#7 exports arrive as PEM; the lint below says the rest.
+        opts["ca_bundle"] = core.ca_bundle_pem(core.read_ca_bundle(a.ca_bundle))
     # PEM flags take a file; the option carries its content. The key is never
     # written to profile.json, so a replay must pass --sv-tls-key again.
     for flag, key in (("sv_tls_cert", "sv_tls_cert"),
@@ -237,8 +243,82 @@ def cmd_generate(a):
     notice = ca_trust.ca_slot_notice(opts)
     if notice:
         print(notice)
+    for warning in core.ca_bundle_warnings(opts):
+        print(warning, file=sys.stderr)
     print(f"wrote {len(built.written)} files to {a.output}/: "
           + ", ".join(sorted(w["name"] for w in built.written)))
+
+
+# More certificates than this and only the ones worth reading are listed.
+CA_LIST_LIMIT = 25
+
+
+def _ca_line(n, d):
+    role = d["role"] if d["role"] != "leaf" else "leaf (not a CA)"
+    return (f"  [{n}] {role:<16} {d['subject']}\n"
+            f"       issuer {d['issuer']}; expires {d['not_after'][:10]} "
+            f"({d['days_left']} days); SHA256 {d['sha256'][:23]}...")
+
+
+def print_ca_lint(lint, verbose=False):
+    """The lint as lines: the certificates, then each finding."""
+    certs = lint["certificates"]
+    form = {"pem": "PEM", "der": "a DER certificate",
+            "pkcs7": "a DER PKCS#7 bundle"}.get(lint["form"],
+                                                 "nothing recognisable")
+    print(f"CA bundle: {len(certs)} certificate(s), read as {form}")
+    flagged = {f["cert"] for f in lint["findings"]}
+    shown = [(n, d) for n, d in enumerate(certs, 1)
+             if verbose or len(certs) <= CA_LIST_LIMIT or n in flagged
+             or d["role"] != "root"]
+    for n, d in shown:
+        print(_ca_line(n, d))
+    if len(shown) < len(certs):
+        print(f"  ...and {len(certs) - len(shown)} more root(s) with no "
+              f"finding (--verbose lists them)")
+    for f in lint["findings"]:
+        print(f"  {f['severity']:<4}  {f['message']}")
+    if not lint["findings"]:
+        print("  no findings")
+
+
+def cmd_ca_check(a):
+    """Lint a CA bundle and verify the chain each host presents against it."""
+    data = core.read_ca_bundle(a.ca_bundle)
+    result = core.ca_check(data, hosts=a.host, proxy=a.proxy,
+                           registry=a.registry)
+    if a.json:
+        print(json.dumps(result, indent=2))
+        sys.exit(0 if result["ok"] else 1)
+    print_ca_lint(result["lint"], a.verbose)
+    for r in result["hosts"]:
+        via = f" via {r['proxy']}" if r["proxy"] else ""
+        print(f"\n{r['host']}:{r['port']}{via}: "
+              f"{r['status'].replace('_', ' ').upper()}"
+              + (f" ({r['detail']})" if r["detail"] else ""))
+        for i, d in enumerate(r["chain"]):
+            lead = "  presented" if i == 0 else "           "
+            print(f"{lead} {d['subject']}  <-  issued by {d['issuer']}"
+                  if d else f"{lead} (a certificate that does not parse)")
+        if r["missing_issuer"]:
+            print(f"  missing: {r['missing_issuer']}\n"
+                  f"  Ask your security team for this CA certificate, and "
+                  f"its own issuers up to the root, and add them to the "
+                  f"bundle.")
+    count = collections.Counter(r["status"] for r in result["hosts"])
+    fails = sum(f["severity"] == verdict.FAIL
+                for f in result["lint"]["findings"])
+    print(f"\n{count[ca_check.VERIFIED]} verified, "
+          f"{count[ca_check.NOT_VERIFIED]} not verified, "
+          f"{count[ca_check.UNREACHABLE]} unreachable, "
+          f"{fails} lint failure(s)")
+    if count[ca_check.NOT_VERIFIED]:
+        print("Crane and its engines would fail TLS to the hosts not "
+              "verified. Fix the bundle before deploying.")
+    if count[ca_check.UNREACHABLE]:
+        print("An unreachable host was not judged. Run this from a machine "
+              "on the agent's network, with the proxy the agent will use.")
+    sys.exit(0 if result["ok"] else 1)
 
 
 def cmd_sv_expose(a):
@@ -367,6 +447,19 @@ def cmd_suggest(a):
         suggest_mod.report(doc, suggestions)
 
 
+def cmd_triage(a):
+    """Read a deployed agent's namespace and name the known failures in it.
+
+    Exit 1 for a known failure only: a denied read or an unrecognised warning
+    is reported and exits 0, as in doctor."""
+    doc = core.triage(a.namespace, since=a.since, log_lines=a.crane_log_lines)
+    if a.json:
+        print(json.dumps(doc, indent=2))
+    else:
+        triage_mod.report(doc)
+    sys.exit(0 if doc["ok"] else 1)
+
+
 def cmd_toolcheck(a):
     """Preflight the workstation against the rig flags you intend to pass."""
     opts = {"cluster": a.cluster, "local_registry": a.local_registry,
@@ -376,18 +469,126 @@ def cmd_toolcheck(a):
     sys.exit(0 if not doctor.has_failures(checks) else 1)
 
 
+EXPLAIN_COLUMNS = ["ref", "key", "category", "functionalities", "required",
+                   "verified", "tag_mutable", "source", "purpose",
+                   "pulled_when", "registry_state", "registry_detail",
+                   "digest", "size_mb", "resolves_to", "newest_tag",
+                   "update_available"]
+
+
+def _explain_cell(value):
+    if isinstance(value, list):
+        return ";".join(value)
+    return "" if value is None else str(value)
+
+
+def _print_explain(cat, fmt):
+    """The catalogue rows in the format asked for; json is core's answer as
+    is."""
+    if fmt == "json":
+        print(json.dumps(cat, indent=2))
+        return
+    rows = cat["images"]
+    if fmt == "csv":
+        import csv
+        w = csv.writer(sys.stdout)
+        w.writerow(EXPLAIN_COLUMNS)
+        for r in rows:
+            w.writerow([_explain_cell(r[c]) for c in EXPLAIN_COLUMNS])
+        return
+    looked = cat["registry_lookup"]["state"] != "not-asked"
+    if fmt == "md":
+        cols = ["Image", "What it does", "Functionality", "When it is pulled",
+                "Seen in a live run"] + (["Size (MB)", "Is now", "Newest tag"]
+                                         if looked else [])
+        print("| " + " | ".join(cols) + " |")
+        print("|" + "---|" * len(cols))
+        for r in rows:
+            cells = [f"`{r['ref']}`", r["purpose"], ", ".join(r["functionalities"]),
+                     r["pulled_when"], "yes" if r["verified"] else "no"]
+            if looked:
+                cells += [_explain_cell(r["size_mb"]),
+                          _explain_cell(r["resolves_to"]),
+                          _explain_cell(r["newest_tag"])]
+            print("| " + " | ".join(c.replace("|", "\\|") for c in cells) + " |")
+        return
+    loc = cat["location"]
+    print(f"location {loc['name'] or loc['harbor_id']} ({loc['harbor_id']}), "
+          f"funcIds {loc['func_ids']}, image list {cat['image_list_state']}"
+          if loc else "the built-in catalogue (no location)")
+    for r in rows:
+        need = {True: "required", False: "not required", None: ""}[r["required"]]
+        flags = [f for f in (need, "floating tag" if r["tag_mutable"] else "",
+                             "" if r["verified"] else "not seen in a live run") if f]
+        print(f"\n{r['ref']}  [{', '.join(r['functionalities']) or 'none'}]"
+              + (f"  ({'; '.join(flags)})" if flags else ""))
+        print(f"    {r['purpose']}\n    pulled: {r['pulled_when']}")
+        if looked:
+            if r["registry_state"] == "read":
+                now = (f", is {r['resolves_to']}" if r["resolves_to"] else "")
+                newer = (f", newer tag {r['newest_tag']}" if r["update_available"]
+                         else "")
+                print(f"    registry: {r['digest'] or 'no such tag'}, "
+                      f"{_explain_cell(r['size_mb']) or '?'} MB{now}{newer}")
+            if r["registry_detail"]:
+                print(f"    registry: {r['registry_detail']}")
+    if looked and cat["registry_lookup"]["detail"]:
+        print(f"\nWARN: {cat['registry_lookup']['detail']}", file=sys.stderr)
+
+
+def _profile_options(a):
+    """The bundle options --profile names, or None for a Kubernetes bundle's."""
+    if not a.profile:
+        return None
+    try:
+        with open(a.profile) as fh:
+            return json.load(fh)
+    except (OSError, ValueError) as e:
+        sys.exit(f"--profile {a.profile}: {e}")
+
+
+def _verify(f, a):
+    out = core.verify_mirror(f, a.verify, options=_profile_options(a),
+                             ca_file=a.ca_file)
+    print(f"checking {out['registry']} (credentials: {out['credentials']})")
+    for i in out["images"]:
+        state = i["state"].upper() if i["state"] == "missing" else i["state"]
+        print(f"  {state:8} {i['target']}"
+              + (f"  {i['digest']}" if i["digest"] else "")
+              + (f"  -- {i['detail']}" if i["state"] != "present" else ""))
+    print(f"{out['present']} present, {out['missing']} missing, "
+          f"{out['unread']} unread")
+    if out["unread"]:
+        print("WARN: an unread image may or may not be there; the registry did "
+              "not say.", file=sys.stderr)
+    if out["missing"]:
+        sys.exit(1)
+
+
 def cmd_images(a):
     f = facts_mod.load(a.facts) if a.facts else None
+    if a.explain and f is None and not a.harbor_id:
+        # No location named: the whole catalogue.
+        _print_explain(core.image_catalog(None, lookup=a.lookup), a.format)
+        return
     if f is None:
         f = core.gather_facts(_client(a), a.harbor_id)
+    if a.verify:
+        return _verify(f, a)
+    if a.explain:
+        _print_explain(core.image_catalog(f, lookup=a.lookup,
+                                          all_images=a.all), a.format)
+        return
     imgs = core.bundle_images(f, all_images=a.all)
     for ref in imgs:
         print(ref)
     if not a.pull:
         return
-    # core runs the pull/tag/push, so this and the MCP tool agree on targets.
-    for cmd in core.mirror_images(imgs, mirror=a.mirror, platform=a.platform,
-                                  dry_run=a.dry_run)["commands"]:
+    # core runs the pull/tag/push, so this, the MCP tool and the bundle's
+    # mirror script agree on targets.
+    for cmd in core.mirror_images(f, mirror=a.mirror, platform=a.platform,
+                                  dry_run=a.dry_run, all_images=a.all,
+                                  options=_profile_options(a))["commands"]:
         print(("DRY-RUN: " if a.dry_run else "+ ") + cmd)
 
 
@@ -957,6 +1158,23 @@ def main():
                         "candidates, the evidence each came from")
     s.set_defaults(fn=cmd_suggest)
 
+    tr = sub.add_parser("triage",
+                        help="after deploying: read the namespace and name "
+                             "each known failure with its fix")
+    tr.add_argument("-n", "--namespace", required=True,
+                    help="the namespace the agent was deployed to")
+    tr.add_argument("--since", default="1h",
+                    help="how far back to read events and crane's log, e.g. "
+                         "30m, 1h, 2h (default 1h; events expire after about "
+                         "an hour on most clusters)")
+    tr.add_argument("--crane-log-lines", type=int, default=500, metavar="N",
+                    help="read at most the last N lines of each crane log "
+                         "(default 500)")
+    tr.add_argument("--json", action="store_true",
+                    help="the report as data: findings, unrecognised "
+                         "warnings, and what could not be read")
+    tr.set_defaults(fn=cmd_triage)
+
     w = sub.add_parser("toolcheck",
                        help="does this workstation have what livetest shells "
                             "out to? (run before a 12-20 minute rig run)")
@@ -968,7 +1186,8 @@ def main():
                    help="check the proxy rig too")
     w.set_defaults(fn=cmd_toolcheck)
 
-    i = sub.add_parser("images", help="list/pull/mirror the location's images")
+    i = sub.add_parser("images", help="list/explain/pull/mirror/verify the "
+                                      "location's images")
     i.add_argument("--facts")
     i.add_argument("--api-key")
     i.add_argument("--harbor-id")
@@ -978,6 +1197,28 @@ def main():
     i.add_argument("--platform", default="linux/amd64",
                    help="pull arch (BlazeMeter images are amd64-only)")
     i.add_argument("--dry-run", action="store_true")
+    i.add_argument("--explain", action="store_true",
+                   help="what each image is for, which functionality needs it "
+                        "and when it is pulled. Without --facts or --harbor-id, "
+                        "every image the built-in catalogue knows")
+    i.add_argument("--format", choices=["table", "md", "csv", "json"],
+                   default="table", help="--explain output format")
+    i.add_argument("--lookup", action="store_true",
+                   help="with --explain: read each image's digest, size and "
+                        "newest tag from BlazeMeter's public registry")
+    i.add_argument("--verify", metavar="REGISTRY",
+                   help="check that each image is in REGISTRY under the name "
+                        "the mirror script pushes it to; exits 1 if one is "
+                        "missing. Credentials come from BZM_REGISTRY_USER and "
+                        "BZM_REGISTRY_PASSWORD, or the docker config. Prefix "
+                        "http:// for a plain-HTTP registry")
+    i.add_argument("--ca-file", metavar="PEM",
+                   help="with --verify: the CA that signed REGISTRY's "
+                        "certificate")
+    i.add_argument("--profile", metavar="PROFILE_JSON",
+                   help="with --verify or --mirror: the bundle's profile.json, "
+                        "whose format and crane_hook decide the names "
+                        "(default: a Kubernetes bundle)")
     i.set_defaults(fn=cmd_images)
 
     t = sub.add_parser("livetest", help="start a bundle for real, verify the "
@@ -1045,6 +1286,29 @@ def main():
                    help="credentials the local proxy demands ('none' for an open "
                         "proxy); they get URL-encoded into HTTP(S)_PROXY")
     t.set_defaults(fn=cmd_livetest)
+
+    c = sub.add_parser("ca-check",
+                       help="check a CA bundle before deploying: lint the "
+                            "file, then verify the chain each BlazeMeter host "
+                            "presents on this network against it")
+    c.add_argument("--ca-bundle", required=True, metavar="FILE",
+                   help="the trust bundle: PEM, a DER .cer or a PKCS#7 .p7b")
+    c.add_argument("--proxy", metavar="URL",
+                   help="HTTP CONNECT proxy, http://[user:pass@]host:port. "
+                        "Default: HTTPS_PROXY, minus NO_PROXY. Credentials are "
+                        "never printed")
+    c.add_argument("--host", action="append", metavar="HOST[:PORT]",
+                   help="a host to verify, repeatable; replaces the default "
+                        "set (the BlazeMeter API and the engine upload hosts)")
+    c.add_argument("--registry", metavar="HOST",
+                   help="also verify this registry (a prefix such as "
+                        "reg.corp:5001/blazemeter is fine)")
+    c.add_argument("--verbose", action="store_true",
+                   help="list every certificate, not only the ones worth "
+                        "reading in a large bundle")
+    c.add_argument("--json", action="store_true",
+                   help="the result as data")
+    c.set_defaults(fn=cmd_ca_check)
 
     m = sub.add_parser("mcp", help="serve the MCP tools on stdio (for an AI "
                                    "session; see docs/mcp.md)")

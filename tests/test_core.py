@@ -307,7 +307,7 @@ def test_facts_warnings_name_blank_ids_by_marker():
     said = " ".join(core.facts_warnings(core.manual_facts()["facts"]))
     assert "harbor_id (<HARBOR_ID>) and ship_id (<SHIP_ID>)" in said
     assert "not a legal label value" in said
-    assert core.facts_warnings(core.manual_facts("H1", "S1")["facts"]) == []
+    assert core.facts_warnings(core.manual_facts("H1", "S1", pin=False)["facts"]) == []
 
 
 def test_facts_warnings_name_a_gui_location_with_no_browser_image():
@@ -761,7 +761,7 @@ def test_mirroring_by_hand_pushes_where_the_bundle_will_look():
     map to (crane keeps its short form)."""
     reg = "reg.local/bzm"
     pushed = {c.split()[-1] for c in core.mirror_images(
-        core.bundle_images(FACTS), mirror=reg, dry_run=True)["commands"]
+        FACTS, mirror=reg, dry_run=True)["commands"]
         if " push " in c}
     files = gen.generate(FACTS, {"namespace": "ns1", "private_registry": reg})
     overrides = json.loads(yaml.safe_load(

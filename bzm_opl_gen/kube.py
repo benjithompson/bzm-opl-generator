@@ -21,10 +21,11 @@ def run(cmd, check=True, capture=False):
     return subprocess.run(cmd, check=check, text=True, capture_output=capture)
 
 
-def quiet(cmd, timeout=None):
+def quiet(cmd, timeout=None, input=None):
     """Run a command without echoing it; the CompletedProcess, never raising on
-    a non-zero exit."""
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    a non-zero exit. `input` is written to its stdin."""
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                          input=input)
 
 
 def poll_until(fn, timeout, interval, clock=time.monotonic, sleep=time.sleep):
@@ -62,17 +63,18 @@ def kget(cli, namespace, kind, name=None):
     return kget_named(cli, namespace, kind, name) or {}
 
 
-def kget_named(cli, namespace, kind, name=None):
+def kget_named(cli, namespace, kind, name=None, timeout=None):
     """`kget`, but {} only when the API server answered NotFound and None for
-    every other failure (Forbidden, no cluster, no binary)."""
+    every other failure (Forbidden, no cluster, no binary, no answer within
+    `timeout` seconds)."""
     cmd = [cli, "get", kind, "-o", "json"]
     if name:
         cmd.insert(3, name)
     if namespace:
         cmd[1:1] = ["-n", namespace]
     try:
-        out = quiet(cmd)
-    except OSError:
+        out = quiet(cmd, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if out.returncode == 0 and out.stdout.strip():
         return json.loads(out.stdout)

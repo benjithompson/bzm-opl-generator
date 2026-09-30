@@ -16,15 +16,18 @@ import socket
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
 from . import (agent_env as agent_env_mod, api, bundle_env, bundle_names,
-               bundle_options, doctor, evidence as evidence_mod,
-               facts as facts_mod, footprint, generate as gen_mod,
-               image_registry, markers, options as options_mod, plan,
-               quantity, required_fields, service_virt, suggest as suggest_mod,
-               sv_read, workstation)
+               bundle_options, ca_check as ca_check_mod, ca_trust, doctor,
+               evidence as evidence_mod, facts as facts_mod, footprint,
+               generate as gen_mod, image_catalog as image_catalog_mod,
+               image_registry, kube, markers, options as options_mod, plan,
+               quantity, registry_client, required_fields, service_virt,
+               suggest as suggest_mod, sv_read, triage as triage_mod, verdict,
+               workstation)
 
 
 # -- failures ------------------------------------------------------------------
@@ -51,6 +54,12 @@ class NotConfigured(CoreError):
 class EvidenceUnreadable(CoreError):
     """A cluster-evidence file that could not be read at all -- distinct from
     one that was read and is not evidence (a BadRequest)."""
+    status = 400
+
+
+class CaBundleUnreadable(CoreError):
+    """A CA bundle file that could not be opened -- distinct from one that was
+    read and holds no certificate, which the lint reports as a FAIL."""
     status = 400
 
 
@@ -375,15 +384,67 @@ def gather_facts(client, harbor_id):
     return _upstream(facts_mod.gather, client, harbor_id)
 
 
-def manual_facts(harbor_id=None, ship_id=None, func_ids=api.DEFAULT_FUNC_IDS):
+# The whole of pinning to the newest releases, however many repositories.
+PIN_BUDGET_S = 8
+
+
+def release_pins(budget_s=None):
+    """facts.release_pins: the newest release tag of each repository with a
+    release series, read from BlazeMeter's registry in parallel. Never raises
+    and never waits past the budget: an unanswered read is unread."""
+    budget_s = PIN_BUDGET_S if budget_s is None else budget_s
+    repos = image_catalog_mod.release_repos()
+
+    def one(repo):
+        reg, path, _ = registry_client.registry_for(f"{repo}:latest")
+        t = reg.tags(path)
+        if t["state"] != registry_client.READ:
+            return {"state": facts_mod.PIN_UNREAD, "tag": None,
+                    "detail": t["detail"]}
+        tag = image_catalog_mod.release_tag(
+            image_catalog_mod.repo_path(repo), t["tags"])
+        if tag is None:
+            return {"state": facts_mod.PIN_NO_RELEASE, "tag": None,
+                    "detail": "the registry lists no release tag for it"}
+        return {"state": facts_mod.PIN_PINNED, "tag": tag, "detail": None}
+
+    pool = concurrent.futures.ThreadPoolExecutor(REGISTRY_WORKERS)
+    futures = {repo: pool.submit(one, repo) for repo in repos}
+    concurrent.futures.wait(futures.values(), timeout=budget_s)
+    # Not waiting for a read still in flight: its thread ends on its own timeout.
+    pool.shutdown(wait=False, cancel_futures=True)
+    images = {}
+    for repo, fut in futures.items():
+        if fut.done() and not fut.cancelled() and fut.exception() is None:
+            images[repo] = fut.result()
+        else:
+            images[repo] = {"state": facts_mod.PIN_UNREAD, "tag": None,
+                            "detail": f"no answer within {budget_s}s"}
+    unread = [r for r, p in images.items() if p["state"] == facts_mod.PIN_UNREAD]
+    if not unread:
+        state, detail = registry_client.READ, None
+    else:
+        state = (registry_client.UNREAD if len(unread) == len(images)
+                 else "partial")
+        detail = (f"{len(unread)} of {len(images)} repositories could not be "
+                  f"read; the first: {images[unread[0]]['detail']}")
+    return {"state": state, "detail": detail, "images": images}
+
+
+def manual_facts(harbor_id=None, ship_id=None, func_ids=api.DEFAULT_FUNC_IDS,
+                 pin=True):
     """Facts from ids read off the BlazeMeter UI, with no API key.
 
     Neither id is required or validated: a blank one becomes its marker (see
-    facts.manual), for a location that does not exist yet.
+    facts.manual), for a location that does not exist yet. With `pin`, each
+    image is pinned to its newest release in BlazeMeter's registry (bounded
+    by PIN_BUDGET_S); `warnings` says what that cannot tell.
     """
-    facts = facts_mod.manual(harbor_id, ship_id, func_ids=list(func_ids))
+    facts = facts_mod.manual(harbor_id, ship_id, func_ids=list(func_ids),
+                             release_pins=release_pins() if pin else None)
     return {"facts": facts,
-            "gui_images_incomplete": facts_mod.gui_images_incomplete(facts)}
+            "gui_images_incomplete": facts_mod.gui_images_incomplete(facts),
+            "warnings": facts_warnings(facts)}
 
 
 def facts_warnings(facts):
@@ -406,6 +467,7 @@ def facts_warnings(facts):
             "The account names the pinned build: gather facts with an API key, "
             "or add the key to IMAGE_OVERRIDES by hand. Fine against the public "
             "registry; against a private one the browser engines fail to pull.")
+    out += _pin_warnings(facts.get("release_pins") or {})
     blank = [f"{k} ({markers.marker(k)})" for k, v in
              (("harbor_id", facts.get("harbor_id")),
               ("ship_id", sole_ship_id(facts))) if markers.is_placeholder(v)]
@@ -416,6 +478,33 @@ def facts_warnings(facts):
             f"a marker is not a legal label value -- so the bundle is for "
             f"review until the ids are filled in, or the facts re-made once the "
             f"location exists.")
+    return out
+
+
+def _pin_warnings(pins):
+    """What pinning to the newest releases leaves unsaid. Plain prose: these
+    are shown in Markdown and in a terminal."""
+    out = []
+    unread = [r.rsplit("/", 1)[-1] for r, p in (pins.get("images") or {}).items()
+              if p.get("state") == facts_mod.PIN_UNREAD]
+    if unread:
+        out.append(
+            f"BlazeMeter's registry could not be read ({pins.get('detail')}), "
+            f"so {', '.join(unread)} keep the tag latest. On BlazeMeter's "
+            f"registry latest names releases far older than the newest; for "
+            f"the test engine it was an earlier major version when this was "
+            f"checked. Connect an API key: the location's own image list "
+            f"gives the exact versions.")
+    if any(p.get("state") == facts_mod.PIN_PINNED
+           for p in (pins.get("images") or {}).values()):
+        out.append(
+            "The image versions are the newest releases in BlazeMeter's "
+            "registry, not read from your location. A location can ask for an "
+            "older release than the newest, so a mirror built from these facts "
+            "can lack the image the agent asks for. Connect an API key for the "
+            "exact list, put a pull-through cache in front of BlazeMeter's "
+            "registry, or check the mirror with the verify option of "
+            "bzm-opl-gen images once the agent is online.")
     return out
 
 
@@ -777,20 +866,26 @@ def read_bundle_file(out_dir, name):
         raise BadRequest(f"{name!r} is not text")
 
 
-def mirror_images(refs, mirror=None, platform="linux/amd64", dry_run=False):
-    """Pull each image and, with `mirror`, tag and push it under that prefix.
+def mirror_images(facts, mirror=None, platform="linux/amd64", dry_run=False,
+                  all_images=False, options=None):
+    """Pull each image the location's bundle needs and, with `mirror`, tag and
+    push it under that prefix.
 
-    Returns the commands (a dry run is a readable plan). Targets are the names
-    a Kubernetes agent composes from DOCKER_REGISTRY and the repo path.
+    Returns the commands (a dry run is a readable plan). Targets are
+    image_registry.mirror_targets, the names the bundle's own mirror script
+    pushes: `options` are the bundle's (its profile.json), whose format and
+    crane_hook decide them; without them, a Kubernetes bundle's.
     """
+    if mirror:
+        o = {**bundle_options.DEFAULT_OPTIONS, **(options or {}),
+             "private_registry": mirror}
+        pairs = image_registry.mirror_targets(facts, o, all_images=all_images)
+    else:
+        pairs = [(ref, None) for ref in bundle_images(facts, all_images)]
     ran = []
-    for ref in refs:
+    for ref, target in pairs:
         ran.append(_docker(["pull", "--platform", platform, ref], dry_run))
-        if mirror:
-            repo, _, tag = ref.rpartition(":")
-            target = (f"{mirror.rstrip('/')}/{ref.rsplit('/', 1)[-1]}"
-                      if repo == facts_mod.CRANE_REPO else
-                      image_registry.composed_image_ref(repo, tag, mirror))
+        if target:
             ran.append(_docker(["tag", ref, target], dry_run))
             ran.append(_docker(["push", target], dry_run))
     return {"mirror": mirror, "platform": platform, "dry_run": bool(dry_run),
@@ -811,6 +906,105 @@ def _docker(args, dry_run):
 def bundle_images(facts, all_images=False):
     """Every image reference this location's bundle will pull (crane first)."""
     return facts_mod.image_refs(facts, all_images=all_images)
+
+
+# Registry reads run side by side; each is short-timed in registry_client.
+REGISTRY_WORKERS = 8
+
+_NOT_LOOKED_UP = {"registry_state": registry_client.NOT_ASKED,
+                  "registry_detail": None, "digest": None, "size_mb": None,
+                  "newest_tag": None, "update_available": None,
+                  "resolves_to": None}
+
+
+def image_catalog(facts=None, lookup=True, all_images=False):
+    """Each image a location pulls, with what it is for: {source, location,
+    image_list_state, registry_lookup, images}.
+
+    Without facts, every image the catalogue knows (`required` null). With
+    `lookup`, BlazeMeter's public registry adds each image's digest, size and
+    newest tag in its series, and names the version a floating tag
+    (`latest`) currently is (`resolves_to`). A registry read never raises: its state is per
+    image, and `registry_lookup.state` is read, unread, partial or not-asked.
+    """
+    if facts is None:
+        # Pinned only when the registry is asked anyway.
+        rows = image_catalog_mod.catalogue_rows(
+            release_pins() if lookup else None)
+        head = {"source": "catalogue", "location": None,
+                "image_list_state": facts_mod.IMAGE_LIST_NOT_ASKED}
+    else:
+        rows = image_catalog_mod.location_rows(facts, all_images=all_images)
+        head = {"source": "location",
+                "location": {"harbor_id": facts.get("harbor_id") or "",
+                             "name": facts.get("harbor_name") or "",
+                             "func_ids": list(facts.get("func_ids") or [])},
+                "image_list_state": facts_mod.image_list_state(facts)}
+    if not lookup:
+        return {**head, "registry_lookup": {"state": registry_client.NOT_ASKED,
+                                            "detail": None},
+                "images": [{**r, **_NOT_LOOKED_UP} for r in rows]}
+    with concurrent.futures.ThreadPoolExecutor(REGISTRY_WORKERS) as pool:
+        # A repository with a release series is judged by that rule, the
+        # same one the no-account pins use.
+        found = list(pool.map(
+            lambda r: registry_client.lookup(
+                r["ref"], release_rule=image_catalog_mod.release_rule(r["repo"])),
+            rows))
+    images = [{**r, **f} for r, f in zip(rows, found)]
+    unread = [i for i in images
+              if i["registry_state"] != registry_client.READ]
+    if not unread:
+        summary = {"state": registry_client.READ, "detail": None}
+    else:
+        summary = {"state": registry_client.UNREAD if len(unread) == len(images)
+                   else "partial",
+                   "detail": f"{len(unread)} of {len(images)} images could not "
+                             f"be read from the registry; the first: "
+                             f"{unread[0]['registry_detail']}"}
+    return {**head, "registry_lookup": summary, "images": images}
+
+
+def verify_mirror(facts, registry, options=None, ca_file=None):
+    """Is each image this bundle pulls in the customer's `registry`, under the
+    name the mirror script pushes it to? Each is present, missing or unread.
+
+    `options` are the bundle's (its profile.json): the format and crane_hook
+    decide the names. Credentials come from the environment or the docker
+    config, never from an argument. A leading `http://` marks a plain-HTTP
+    registry.
+    """
+    reg_prefix = registry_client.strip_scheme(registry)
+    if not reg_prefix:
+        raise BadRequest("--verify needs a registry, such as "
+                         "registry.example.com/blazemeter")
+    o = {**bundle_options.DEFAULT_OPTIONS, **(options or {}),
+         "private_registry": reg_prefix}
+    targets = image_registry.mirror_targets(facts, o)
+    scheme, host, _, _ = registry_client.split_ref(
+        f"{registry.rstrip('/')}/probe:latest")
+    user, password, where = registry_client.credentials_for(host)
+    try:
+        client = registry_client.Registry(
+            host, scheme=scheme,
+            credentials=(user, password) if user else None, ca_file=ca_file)
+    except (OSError, ssl.SSLError) as e:
+        raise BadRequest(f"the CA file {ca_file!r} could not be used: {e}")
+
+    def check(pair):
+        ref, target = pair
+        _, _, path, tag = registry_client.split_ref(target)
+        return {"ref": ref, "target": target, **client.check(path, tag)}
+
+    with concurrent.futures.ThreadPoolExecutor(REGISTRY_WORKERS) as pool:
+        images = list(pool.map(check, targets))
+    counts = collections.Counter(i["state"] for i in images)
+    return {"registry": reg_prefix,
+            "credentials": where if user else f"anonymous ({where})",
+            "images": images,
+            "present": counts[registry_client.PRESENT],
+            "missing": counts[registry_client.MISSING],
+            "unread": counts[registry_client.UNREAD]}
 
 
 # -- planning, before any of the above exists ---------------------------------
@@ -1018,6 +1212,35 @@ SV_READ_MESSAGES = {
 }
 
 
+def triage(namespace, since=None, log_lines=None, cli=None, now=None):
+    """The known failures in a deployed agent's namespace, each with its fix.
+
+    Reads events, pods and crane's log with this machine's kubectl or oc
+    context and writes nothing. A read the cluster refused is listed in
+    `unread`, never read as empty; `ok` is false only for a known failure."""
+    since = since or triage_mod.DEFAULT_SINCE
+    log_lines = triage_mod.DEFAULT_LOG_LINES if log_lines is None else log_lines
+    try:
+        since_s = triage_mod.parse_since(since)
+    except ValueError as e:
+        raise BadRequest(str(e))
+    if not isinstance(log_lines, int) or isinstance(log_lines, bool) or log_lines < 1:
+        raise BadRequest(f"crane log lines must be a positive whole number, "
+                         f"not {log_lines!r}")
+    if not namespace:
+        raise BadRequest("triage needs the namespace the agent was deployed to")
+    if cli is None:
+        try:
+            cli = kube.cli_tool()
+        except RuntimeError as e:
+            gathered = triage_mod.Gathered(None, None, None, [],
+                                           [("cluster", str(e))])
+            return triage_mod.as_dict(
+                triage_mod.evaluate(gathered, namespace, since, now))
+    gathered = triage_mod.gather(cli, namespace, since_s, log_lines)
+    return triage_mod.as_dict(triage_mod.evaluate(gathered, namespace, since, now))
+
+
 def sv_read_message(read):
     """The sentence for an unreadable cluster; an unknown reason falls back to
     the raw detail."""
@@ -1124,6 +1347,102 @@ def sv_check(host, scheme="http"):
     return {"status": SV_CHECK_OK, "code": code, "url": url, "detail": detail,
             "message": SV_CHECK_503 if code == 503
             else f"HTTP {code} -- the endpoint answered."}
+
+
+# -- CA trust, checked before deploying -----------------------------------------
+
+def read_ca_bundle(path):
+    """The bytes of a CA bundle file. CaBundleUnreadable where it cannot be
+    opened; a file that opens and holds no certificate is the lint's FAIL."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError as e:
+        raise CaBundleUnreadable(
+            f"could not read the CA bundle {path}: {e.strerror or e}")
+
+
+def ca_bundle_pem(data):
+    """A CA bundle as the PEM text a bundle carries: DER and PKCS#7 converted,
+    CRLF made LF, comments kept."""
+    # cert imports cryptography, a compiled extension; only CA work loads it.
+    from . import cert
+    return cert.normalise(data)
+
+
+def ca_lint(data):
+    """What is wrong with a CA bundle, from the file alone (cert.lint)."""
+    from . import cert
+    return cert.lint(data)
+
+
+def ca_bundle_warnings(options):
+    """An inline CA bundle's lint findings, as sentences a generate reports.
+
+    Warned, never refused: an inline PEM has always been accepted as given,
+    and a FAIL here is a bundle that will not connect, not one that will not
+    apply. [] for every other CA mode, which carries no PEM to read.
+    """
+    ca = ca_trust.resolved_ca(options)
+    pem = (options or {}).get("ca_bundle")
+    if (ca is ca_trust.CA_UNRESOLVED or not ca or ca["mode"] != "inline"
+            or not pem or markers.is_placeholder(pem)):
+        return []
+    out = []
+    for f in ca_lint(pem)["findings"]:
+        tail = (" The bundle was written anyway. Fix the CA bundle before "
+                "deploying." if f["severity"] == verdict.FAIL else "")
+        out.append(f"CA bundle {f['severity']}: {f['message']}{tail}")
+    return out
+
+
+def ca_check_hosts():
+    """The hosts ca_check tries by default: the API crane registers with and
+    the hosts engines upload results to."""
+    return [urllib.parse.urlsplit(footprint.API_BASE).hostname,
+            *footprint.ENGINE_UPLOAD_HOSTS]
+
+
+def ca_check(data, hosts=None, proxy=None, registry=None, env=None,
+             timeout=ca_check_mod.TIMEOUT_S):
+    """Lint a CA bundle, then verify each host's presented chain with it alone.
+
+    `hosts` replaces ca_check_hosts(); `registry` (a host, or a registry
+    prefix like reg.corp:5001/blazemeter) is added to either. `proxy` is an
+    http:// URL; without one HTTPS_PROXY and NO_PROXY in `env` decide. Returns
+    {lint, hosts, ok}; `ok` is False on a lint FAIL or any not-verified host.
+    An unreachable host is no verdict and leaves `ok` alone.
+    """
+    from . import cert
+    targets = list(hosts or ca_check_hosts())
+    if registry:
+        targets.append(registry.split("/")[0])
+    # Every proxy is parsed before the first connection, so a bad URL is a
+    # refusal rather than a column of unreachable hosts.
+    proxies = []
+    for target in targets:
+        host, _ = ca_check_mod.split_host(target)
+        try:
+            proxies.append(ca_check_mod.proxy_for(host, proxy, env))
+        except ValueError as e:
+            raise BadRequest(str(e))
+    lint = cert.lint(data)
+    pem = cert.verify_pem(data)
+    results = []
+    for target, p in zip(targets, proxies):
+        r = ca_check_mod.check_host(target, pem, p, timeout)
+        results.append({
+            "host": r["host"], "port": r["port"], "status": r["status"],
+            "detail": r["detail"], "proxy": p.shown if p else None,
+            # None for a presented certificate that does not parse.
+            "chain": [cert.describe_der(der) for der in r["chain"]],
+            "missing_issuer": (cert.missing_issuer(r["chain"], data)
+                               if r["status"] == ca_check_mod.NOT_VERIFIED
+                               else None)})
+    ok = (not any(f["severity"] == verdict.FAIL for f in lint["findings"])
+          and not any(r["status"] == ca_check_mod.NOT_VERIFIED
+                      for r in results))
+    return {"lint": lint, "hosts": results, "ok": ok}
 
 
 # -- the vocabulary ------------------------------------------------------------

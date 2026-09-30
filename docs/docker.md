@@ -21,7 +21,7 @@ The bundle is:
 | `ca-bundle.crt` | the inline PEM, when one was given |
 | `sv-tls.crt`, `sv-tls.key` | the certificate this agent serves its virtual services with, when one was given |
 | `bzm-opl-image-mirror.sh` | when `--private-registry` was given |
-| `README.md`, `profile.json` | as every format |
+| `README.md`, `IMAGES.md`, `profile.json` | as every format ([images.md](images.md)) |
 
 ## Where the command comes from
 

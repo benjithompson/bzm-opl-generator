@@ -23,6 +23,7 @@ import { buildNotice } from "./build";
 import { shipOnline } from "./heartbeat";
 import { blankManualIds, manualComplete } from "./manualIds";
 import { CapacityView } from "./CapacityView";
+import { CatalogueReason, ImagesView } from "./ImagesView";
 import { EMPTY_PLAN_INPUTS, PlanAsk, PlanInputs } from "./usePlan";
 import { defaultSizings, SavedSizing } from "./sizings";
 import { AgentPanel } from "./steps/AgentPanel";
@@ -44,6 +45,7 @@ import { StepFlow } from "./layout/StepFlow";
 import { useServedTables } from "./useServedTables";
 import { useResource } from "./useResource";
 import { useCapacity } from "./useCapacity";
+import { useImages } from "./useImages";
 import { useAgentWatch } from "./useAgentWatch";
 import { usePreview } from "./usePreview";
 import { useBundleOptions } from "./useBundleOptions";
@@ -168,6 +170,14 @@ export default function App({ api }: { api: Api }) {
   const [navOpen, setNavOpen] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
   const capacity = useCapacity(api, view === "capacity", accountId);
+  // The images of the location selected for the bundle, read from the account;
+  // the catalogue (null) when nothing connected is selected. Manual entry reads
+  // nothing from an account, so it is the catalogue too.
+  const imagesHarbor = sourceMode === "connect" && who ? harborId : null;
+  const [imagesAll, setImagesAll] = useState(false);
+  // The catalogue answers the same list either way, so it is not re-read.
+  const images = useImages(api, view === "images", imagesHarbor,
+                           imagesHarbor ? imagesAll : false);
   const [planInputs, setPlanInputs] = useState<PlanInputs>(EMPTY_PLAN_INPUTS);
   const [sizingModels, setSizingModels] = useState<SizingModel[]>([]);
   // Null until decided: the defaults are one per served model and are seeded
@@ -274,7 +284,8 @@ export default function App({ api }: { api: Api }) {
     evicted.current.clear();
     session.clear();
     setHeld(null);
-    setView("flow");
+    // The images view works with no key, as the catalogue.
+    setView((v) => (v === "images" ? v : "flow"));
     setStep(0);
     setSourceMode("manual");
   };
@@ -496,14 +507,22 @@ export default function App({ api }: { api: Api }) {
     [functionalities, declared]);
 
   // Facts rebuilt from the typed values, debounced like the preview. Nothing is
-  // built from an id that is not the shape one comes in.
+  // built from an id that is not the shape one comes in. The token is not in
+  // the request, so only whether it is well formed is a dependency: typing it
+  // does not re-read the registry.
+  const manualReady = manualComplete(manual.harbor_id, manual.ship_id,
+                                     String(options.auth_token ?? ""));
+  // The server reads the public registry for these facts, which takes seconds.
+  // While it does, the facts on screen are for the previous values.
+  const [manualReading, setManualReading] = useState(false);
+  const [manualWarnings, setManualWarnings] = useState<string[]>([]);
   useEffect(() => {
     if (sourceMode !== "manual") return;
-    if (!manualComplete(manual.harbor_id, manual.ship_id,
-                        String(options.auth_token ?? ""))) {
-      setFacts(null); setShipId(null); return;
+    if (!manualReady) {
+      setFacts(null); setShipId(null); setManualWarnings([]); return;
     }
     let live = true;
+    setManualReading(true);
     const timer = window.setTimeout(() => {
       api.manualFacts({
         harbor_id: manual.harbor_id.trim(),
@@ -513,10 +532,13 @@ export default function App({ api }: { api: Api }) {
         if (!live) return;
         setFacts(r.facts);
         setShipId(r.facts.ships[0].id);
-      }).catch((e) => { if (live) setGenErr(String(e.message)); });
+        setManualWarnings(r.warnings);
+      }).catch((e) => { if (live) setGenErr(String(e.message)); })
+        .finally(() => { if (live) setManualReading(false); });
     }, 250);
-    return () => { live = false; window.clearTimeout(timer); };
-  }, [api, sourceMode, manual, manualFuncIds, options.auth_token, setGenErr]);
+    // A superseded read is dropped; the next run marks itself as reading.
+    return () => { live = false; window.clearTimeout(timer); setManualReading(false); };
+  }, [api, sourceMode, manual, manualFuncIds, manualReady, setGenErr]);
 
   /** Switching modes drops what the other one established, the token included. */
   const switchMode = (m: string) => {
@@ -778,8 +800,26 @@ export default function App({ api }: { api: Api }) {
     enginesPerNode: raw("engines_per_node"),
   };
 
+  // BlazeMeter's name for a funcId: the account's vocabulary (every funcId it
+  // has), then the served functionalities (the covered ones). Null where
+  // neither names it: unconnected, an uncovered funcId has no served name.
+  const funcLabel = useCallback((id: string) =>
+    funcIds.choices.find((c) => c.id === id)?.label
+      ?? functionalities.find((f) => f.id === id)?.label ?? null,
+  [funcIds.choices, functionalities]);
+  const catalogueReason: CatalogueReason | null = imagesHarbor ? null
+    : sourceMode === "manual" ? "manual"
+    : who ? "no-location" : "disconnected";
+
   const { cap, capErr, capRefreshing, refreshCapacity } = capacity;
-  const body = view === "capacity" ? (
+  const body = view === "images" ? (
+    <main className="max-w-screen-xl mx-auto p-4 sm:p-6">
+      <ImagesView answer={images.answer} busy={images.busy} error={images.error}
+        all={imagesAll} setAll={setImagesAll} labelOf={funcLabel}
+        registry={txt("private_registry") || null}
+        catalogueReason={catalogueReason} />
+    </main>
+  ) : view === "capacity" ? (
     <main className="max-w-screen-xl mx-auto p-6">
       {!accountId && <p className="text-sm text-slate-500">Connect first.</p>}
       <ErrorMsg msg={capErr} className="text-sm" />
@@ -830,6 +870,7 @@ export default function App({ api }: { api: Api }) {
             source={{
               mode: sourceMode, switchTo: switchMode,
               manual, setManual, who,
+              manualReading, manualWarnings,
             }}
             locations={{
               accountName, workspaceName,
@@ -902,7 +943,8 @@ export default function App({ api }: { api: Api }) {
             api={api}
             bundle={{
               // What the preview showed, markers included.
-              facts, shipId, options: sentOptions, format,
+              facts, reading: sourceMode === "manual" && manualReading,
+              shipId, options: sentOptions, format,
               sv, genErr: preview.genErr, gaps: downloadGaps,
               goToConfigure: () => setStep(1),
               goToAgent: () => setStep(0),

@@ -45,7 +45,7 @@ with `"bzm-opl-gen[ui]==0.4.1"`.
 `[ui]` is the web page, `[mcp]` the MCP server ([docs/mcp.md](docs/mcp.md)),
 `[ui,mcp]` both. The bare CLI pulls in one package, `cryptography` — it reads
 the certificate a docker agent serves its virtual services with, to check the
-hostname against it.
+hostname against it, and the CA bundles `ca-check` lints.
 
 <details>
 <summary>Installing from git, or from a release wheel</summary>
@@ -113,32 +113,41 @@ bzm-opl-gen create-agent --api-key api-key.json --harbor-id <harbor-id> \
 # 2. gather the location's facts from the account
 bzm-opl-gen facts --api-key api-key.json --harbor-id <harbor-id>
 
-# 3. generate manifests. The token comes from you, not from the API: generate
+# 3. behind a TLS-inspecting proxy: check the CA on the agent's network first
+bzm-opl-gen ca-check --ca-bundle corp-ca.pem --proxy http://proxy.corp:3128
+
+# 4. generate manifests. The token comes from you, not from the API: generate
 #    never mints one, because minting revokes the token a running agent holds
 bzm-opl-gen generate --namespace my-project --auth-token <token> -o out/
 
-# 4. preflight the target cluster before anyone waits on a stuck run
+# 5. preflight the target cluster before anyone waits on a stuck run
 bzm-opl-gen doctor --facts facts.json --manifests out/ -n my-project
 
-# 5. deploy. No manifest in the bundle is the namespace -- one that was would
+# 6. deploy. No manifest in the bundle is the namespace -- one that was would
 #    let a later `delete -f` take the namespace too -- so create it here. It
 #    asks first, so it changes nothing about a namespace somebody already owns,
 #    and the bundle README prints the same line
 kubectl get namespace my-project >/dev/null 2>&1 || kubectl create namespace my-project
 kubectl apply -n my-project -f out/
+
+# 7. agent offline, or a run stuck at BOOT_STARTING? name the cause and the fix
+bzm-opl-gen triage -n my-project
 ```
 
 Step 0 needs no account and no cluster — that is the case it exists for, since
 its answer is what you raise the cluster request *with*
 ([docs/capacity-planning.md](docs/capacity-planning.md)).
 
-`out/README.md` is written for whoever receives the bundle; `out/profile.json`
+`out/README.md` is written for whoever receives the bundle, and `out/IMAGES.md`
+lists the images the agent pulls and what each does; `out/profile.json`
 is the resolved options minus the token, replayed with `generate --profile`.
 
 Also: `--format helm` for a chart ([docs/helm.md](docs/helm.md)),
 `--format docker` for one agent as one container
 ([docs/docker.md](docs/docker.md)), `--private-registry` plus `images --pull
---mirror` for an air-gapped cluster, and `livetest` to start a bundle for real
+--mirror` for an air-gapped cluster (`images --explain` says what each image
+does, `images --verify` checks the mirror: [docs/images.md](docs/images.md)),
+and `livetest` to start a bundle for real
 and wait for the agent to come online -- a cluster for the manifests, `docker
 compose` on this host for a docker bundle
 ([docs/live-test.md](docs/live-test.md)).
@@ -171,7 +180,9 @@ bzm-opl-gen generate --auth-token <token> --namespace their-ns -o out/
 ```
 
 Nothing is validated and nothing is sent to BlazeMeter. What you give up: the
-crane tag floats on `latest`, `IMAGE_OVERRIDES` comes from the built-in catalogue
+image versions are the newest releases in BlazeMeter's registry rather than the
+ones the location asks for ([docs/images.md](docs/images.md#without-an-account)),
+`IMAGE_OVERRIDES` comes from the built-in catalogue
 rather than the location — complete except for **GUI browser images**, where the
 account names one of 60+ pinned repos and nothing here can guess which — and
 `doctor` has no concurrency numbers. With a key none of that applies, and it
@@ -214,7 +225,10 @@ option or only narrows it
 | [docs/helm.md](docs/helm.md) | `--format helm`, and `helm upgrade` |
 | [docs/docker.md](docs/docker.md) | `--format docker`, and which options reach it |
 | [docs/service-virtualization.md](docs/service-virtualization.md) | ingress backends for `mockServices`, and `sv-expose` |
+| [docs/images.md](docs/images.md) | `images` — what each image does, mirroring, and checking a mirror |
 | [docs/preflight.md](docs/preflight.md) | `doctor`, `suggest`, `toolcheck`, engine sizing |
+| [docs/ca-trust.md](docs/ca-trust.md) | `ca-check` — a corporate CA, checked against the network before deploying |
+| [docs/triage.md](docs/triage.md) | `triage` — after deploying, the known failures in a namespace and the fix for each |
 | [docs/live-test.md](docs/live-test.md) | the live rig: registry, proxy + CA, egress containment |
 | [docs/hardened-engines.md](docs/hardened-engines.md) | the security context crane stamps on the pods it spawns |
 | [docs/crane-nginx-ingress-port.md](docs/crane-nginx-ingress-port.md) | write-up of crane's nginx Ingress port defect |

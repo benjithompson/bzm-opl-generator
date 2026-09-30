@@ -56,12 +56,16 @@ The path through it:
   4. opl_bundle generate        -- write the manifests to a directory
   5. kubectl apply -f <dir>     -- YOU run this, in your own shell
   6. opl_agent status           -- did the agent come online?
+  7. opl_agent triage           -- if not, or a run hangs at BOOT_STARTING:
+                                   the known failures in the namespace, each
+                                   with its fix (see triage.md)
 
 Step 5 is deliberately not a tool. This server does not apply anything to a
 cluster: the person you are working with needs to see what is being applied to
 theirs, and `kubectl apply` in their shell is where they see it. The same goes
 for `helm install` when the bundle is a chart. (The one tool that does deploy is
-opl_agent livetest, which is off unless its own variable is set.)
+opl_agent livetest, which is off unless its own variable is set.) Step 7 reads
+the namespace with this machine's own kubectl or oc context and writes nothing.
 
 Sizing before there is a cluster: `opl_plan capacity` turns what a customer has
 to run ("5,000 virtual users", "40 browsers at once") into pods, nodes and a
@@ -102,9 +106,13 @@ you have not got one, say so -- do not report a preflight you did not run.
 
 Reference, readable as resources on this server ({RESOURCE_SCHEME}://docs/...):
 options.md (every generate option), preflight.md (evidence files and what the
-checks mean), capacity-planning.md (sizing a cluster nobody has yet), helm.md
+checks mean), triage.md (what a deployed namespace shows, and each fix),
+capacity-planning.md (sizing a cluster nobody has yet), helm.md
 and docker.md (the two non-manifest output formats), service-virtualization.md,
-hardened-engines.md, live-test.md. Read the one that covers the question rather
+hardened-engines.md, images.md (what each image does, mirroring and checking
+a mirror), live-test.md, ca-trust.md (a corporate CA, and the
+`bzm-opl-gen ca-check` command the customer runs on their own network to test
+it). Read the one that covers the question rather
 than guessing at an option name -- `opl_bundle options` lists them all with a
 one-line summary each, and every page this server serves is in `docs`.
 
@@ -196,7 +204,11 @@ DOC_SUMMARIES = {
                                  "generate such a location for performance alone.",
     "hardened-engines.md": "The restricted engine posture, and which images "
                            "have run under it.",
+    "images.md": "What each image does and which functionality needs it, "
+                 "mirroring them, and checking a mirror with images --verify.",
     "live-test.md": "The live rig: what it proves and what it costs.",
+    "ca-trust.md": "A corporate TLS-inspecting CA: the four ways to supply it, "
+                   "and checking it with ca-check before deploying.",
     "web-ui.md": "The local web UI, for a human doing this by hand.",
     # That page's fix is a patch to crane's source; the runnable workarounds
     # are elsewhere, and the summary has to say so.
@@ -204,6 +216,8 @@ DOC_SUMMARIES = {
                                    "endpoint that 503s; the workarounds are in "
                                    "service-virtualization.md.",
     "mcp.md": "This server: its tools, its gates, and what it will not do.",
+    "triage.md": "After deploying: the known failures triage recognises in "
+                 "a namespace, and the fix for each.",
 }
 
 
@@ -482,7 +496,9 @@ DESCRIPTIONS["opl_facts"] = (
     "cannot be applied\n"
     "func_ids decide which images the bundle carries, so `manual` needs the "
     f"ones the location really runs -- {', '.join(core.covered_func_ids())} "
-    "are the ones this tool configures for, and the default is performance.\n"
+    "are the ones this tool configures for, and the default is performance. "
+    "`manual` pins each image to its newest release in BlazeMeter's "
+    "registry, which the location may not use yet; `warnings` says so.\n"
     "Pass the `facts` object straight to opl_bundle and opl_preflight.")
 
 
@@ -525,10 +541,13 @@ DESCRIPTIONS["opl_bundle"] = (
     "  read     -- one file out of a written bundle {out_dir, name}\n"
     "  options  -- every generate option, its default and what it does\n"
     "  images   -- the image references this bundle pulls {facts, "
-    "all?}. With mirror=<prefix> it also pulls them and pushes them "
-    "into that registry, under the names a Kubernetes agent then asks "
-    "for, which writes to it -- confirm before calling it that way. A "
-    "docker bundle's images are its own script's, not these.\n"
+    "all?, lookup?}, and a `catalogue` row per image: what it does, "
+    "the funcIds that need it, when it is pulled, whether that was seen "
+    "live. lookup=true adds digest, size, newest tag and, for `latest`, "
+    "the version it is now (resolves_to) from BlazeMeter's public registry. With mirror=<prefix> it also pulls them and pushes them "
+    "into that registry, under the names the bundle's own mirror script "
+    "uses (pass the bundle's options, e.g. output_format, for a docker "
+    "bundle), which writes to it -- confirm before calling it that way.\n"
     "Applying the bundle is yours: `kubectl apply -f <out_dir>`. No "
     "action on this tool touches a cluster at all.")
 
@@ -576,16 +595,21 @@ def _bundle(action, args):
         facts, = _need(args, "facts")
         refs = core.bundle_images(facts, all_images=bool(args.get("all")))
         if not (args.get("pull") or args.get("mirror")):
+            cat = core.image_catalog(facts, lookup=bool(args.get("lookup")),
+                                     all_images=bool(args.get("all")))
             return {"images": refs,
+                    "catalogue": cat["images"],
+                    "registry_lookup": cat["registry_lookup"],
                     "next": ["pass mirror=<registry-prefix> to copy these into "
                              "a private registry, or run the bundle's "
                              "bzm-opl-image-mirror.sh yourself"]}
         # Not gated like `delete`: mirroring only adds images to a registry the
         # caller named. The destructive hint makes a client confirm it.
         return core.mirror_images(
-            refs, mirror=args.get("mirror"),
+            facts, mirror=args.get("mirror"),
             platform=args.get("platform", "linux/amd64"),
-            dry_run=bool(args.get("dry_run")))
+            dry_run=bool(args.get("dry_run")), all_images=bool(args.get("all")),
+            options=_no_secrets(args.get("options") or {}))
 
     raise _unknown(action, BUNDLE_ACTIONS)
 
@@ -638,6 +662,7 @@ def _bundle_warnings(options):
     slot = ca_trust.ca_slot_notice(options)
     if slot:
         out.append(slot)
+    out += core.ca_bundle_warnings(options)
     if options.get("auto_update"):
         out.append(
             "auto_update is on: crane will take field ownership of its own "
@@ -732,7 +757,7 @@ PREFLIGHT_ACTIONS = ("doctor", "suggest", "toolcheck")
 DESCRIPTIONS["opl_preflight"] = (
     "Will this land? Checks that run before anything is applied.\n"
     "  doctor    -- the cluster against this configuration {facts, "
-    "evidence, options?, namespace?}. This server never runs kubectl "
+    "evidence, options?, namespace?}. It never runs kubectl "
     "itself.\n"
     "  suggest   -- what that same evidence implies the options should "
     "be {evidence, options?}\n"
@@ -761,7 +786,7 @@ def _preflight(action, args):
                 f"access runs read-only and sends back "
                 f"({RESOURCE_SCHEME}://docs/preflight.md has what to ask them "
                 f"for). Pass the path of the file they sent, or the object "
-                f"itself. This server never runs kubectl, so without one there "
+                f"itself. Doctor never runs kubectl, so without one there "
                 f"is no cluster to check against -- and a preflight of no "
                 f"cluster would report nothing wrong with one you have not "
                 f"seen.")
@@ -790,12 +815,18 @@ def _preflight(action, args):
 
 # -- opl_agent -----------------------------------------------------------------
 
-AGENT_ACTIONS = ("status", "livetest")
+AGENT_ACTIONS = ("status", "triage", "livetest")
 
 DESCRIPTIONS["opl_agent"] = (
     "The deployed agent.\n"
     "  status   -- is it reporting? {harbor_id, ship_id}. State alone "
     "reads as healthy forever, so this is really about the heartbeat.\n"
+    "  triage   -- why not, or why a run hangs at BOOT_STARTING {namespace, "
+    "since?, crane_log_lines?}. Reads events, pods and crane's log with "
+    "this machine's kubectl or oc context and writes nothing. Each "
+    "finding names the option or action that fixes it; `unread` lists "
+    "reads the cluster refused, which are not findings, and "
+    "`unrecognised` lists warnings no rule knows. Report both.\n"
     "  livetest -- deploy a bundle to a cluster and wait for the agent "
     "{manifests, namespace, harbor_id, ship_id, cluster?, timeout?}. "
     "Off unless " + ENABLE_LIVETEST_ENV + "=1, blocks for minutes, and "
@@ -813,6 +844,12 @@ def _agent(action, args):
         harbor_id, ship_id = _need(args, "harbor_id", "ship_id")
         st = core.agent_status(_client(args), harbor_id, ship_id)
         return dict(st, next=_after_status(st))
+
+    if action == "triage":
+        namespace, = _need(args, "namespace")
+        report = core.triage(namespace, since=args.get("since"),
+                             log_lines=args.get("crane_log_lines"))
+        return dict(report, next=_after_triage(report))
 
     if action == "livetest":
         _gate(ENABLE_LIVETEST_ENV,
@@ -847,9 +884,29 @@ def _after_status(st):
         return ["no heartbeat ever: the agent has not reached BlazeMeter. "
                 "Check the pod is running and its AUTH_TOKEN is current -- a "
                 "stale token logs 404 on /ships/<id>/status and sits at 0/1.",
-                "kubectl -n <namespace> logs -l role=role-crane --tail=50"]
+                "opl_agent triage with the namespace, where this machine has "
+                "cluster access: it names the known failures and their fixes"]
     return ["the agent reported once and has gone quiet.",
-            "kubectl -n <namespace> logs -l role=role-crane --tail=50"]
+            "opl_agent triage with the namespace, where this machine has "
+            "cluster access: it names the known failures and their fixes"]
+
+
+def _after_triage(report):
+    """Where a triage leads: a finding's fix, else what the report could not
+    see."""
+    if not report["ok"]:
+        return ["apply the fix each FAIL names, regenerating with opl_bundle "
+                "generate where it names an option, then run this again"]
+    steps = []
+    if report["unread"]:
+        steps.append("some reads were refused, so a clean report is not a "
+                     "clean namespace: ask someone with read access to events, "
+                     "pods and pods/log in it to run bzm-opl-gen triage")
+    if report["unrecognised"]:
+        steps.append("no rule knows the unrecognised warnings: pass them on "
+                     "as found rather than guessing a cause")
+    return steps or ["nothing known is wrong in the namespace. opl_agent "
+                     "status says whether the agent is reporting"]
 
 
 # -- the server ----------------------------------------------------------------

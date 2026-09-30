@@ -43,8 +43,11 @@ NODEPOOLS_FILE = "nodepools.md"
 PROFILE_FILE = "profile.json"
 SV_EXPOSE_FILE = "bzm_sv_expose.yaml"
 
+# Every bundle's list of the images its agent pulls.
+IMAGES_FILE = "IMAGES.md"
+
 # Listed last when a bundle is shown (see generate.preview_order).
-PREVIEW_TAIL = [MIRROR_SCRIPT_FILE, "README.md"]
+PREVIEW_TAIL = [MIRROR_SCRIPT_FILE, IMAGES_FILE, "README.md"]
 
 # The docker bundle.
 DOCKER_RUN_FILE = "bzm-opl-agent.sh"

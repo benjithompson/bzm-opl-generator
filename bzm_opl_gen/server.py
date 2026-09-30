@@ -19,7 +19,7 @@ import os
 import time
 from typing import Annotated, Any, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, BeforeValidator
@@ -267,6 +267,19 @@ def get_facts(harbor_id: str, client: Client):
     # Cached like the lists. Liveness is /api/status, which is never cached.
     return _cached(f"facts:{harbor_id}", core.gather_facts, client, harbor_id)
 
+@app.get("/api/images", description=core.image_catalog.__doc__)
+def images(harbor_id: Optional[str] = None, lookup: bool = True,
+           all_images: bool = Query(False, alias="all")):
+    """No harbor_id: the catalogue, which needs no key. With one, the
+    location's facts come from the same cached read as /api/facts."""
+    if not harbor_id:
+        return _cached(f"images::{lookup}", core.image_catalog, None,
+                       lookup=lookup)
+    facts = _cached(f"facts:{harbor_id}", core.gather_facts, _client(), harbor_id)
+    return _cached(f"images:{harbor_id}:{lookup}:{all_images}",
+                   core.image_catalog, facts, lookup=lookup,
+                   all_images=all_images)
+
 class ManualFactsIn(BaseModel):
     # "" is what a form sends for an empty box; a blank id becomes its marker.
     harbor_id: str = ""
@@ -327,7 +340,9 @@ def generate_preview(g: GenerateIn):
     built = _build(g)
     return {"files": [{"name": n, "content": built.files[n]}
                       for n in core.preview_order(built.files)],
-            "token": built.token._asdict()}
+            "token": built.token._asdict(),
+            # An inline CA bundle's lint: warned, never refused.
+            "warnings": core.ca_bundle_warnings(g.options)}
 
 @app.post("/api/generate/zip")
 def generate_zip(g: GenerateIn):

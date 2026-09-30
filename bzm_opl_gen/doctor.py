@@ -27,7 +27,7 @@ from . import kube, plan, verdict
 # Aliased: every check takes a `facts` argument, and evaluate() an `evidence`.
 from . import evidence as evidence_mod
 from . import facts as facts_mod
-from .ca_trust import CA_MODES
+from .ca_trust import CA_MODES, CA_UNRESOLVED, resolved_ca
 from .footprint import (API_BASE, CRANE_CPU_LIMIT, CRANE_CPU_REQUEST,
                         CRANE_MEM_LIMIT, CRANE_MEM_REQUEST, DEFAULT_THREADS_PER_ENGINE,
                         ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM,
@@ -39,6 +39,7 @@ from .bundle_options import (DEFAULT_OPTIONS, crane_scheduling,
                              resolve_engine_limits, separate_pools,
                              service_account)
 from .bundle_names import NODEPOOLS_FILE
+from .markers import is_placeholder
 from .service_virt import SV_INGRESS_BACKENDS, SV_INGRESS_NONE
 from .bundle_env import proxy_env
 from .quantity import (format_cpu, format_memory, human_memory, parse_cpu,
@@ -1021,26 +1022,61 @@ def egress_targets(opts):
     return targets
 
 
+# A probe that was deliberately not run, and why: distinct from None (run, and
+# no answer came back) and from a return code.
+Unprobed = collections.namedtuple("Unprobed", "reason")
+
+# curl's exit codes for "the chain did not verify against --cacert" and "the
+# CA file could not be loaded".
+CURL_RC_CA_VERIFY = 60
+CURL_RC_CA_UNREADABLE = 77
+
+
 # No unread verdict: {} (an evidence file cannot probe) and None (not probed)
 # are the same answer, since egress_targets() is never empty.
 @reads("probes")
 def check_egress(facts, opts, cluster):
-    """Pure verdict over {target: curl returncode, or None if unknown}."""
+    """Pure verdict over {target: curl returncode, None if unknown, or
+    Unprobed}."""
     probes = cluster["probes"]
     if not probes:
         return [Check("egress", WARN,
                       "egress was not probed from inside the cluster, so whether "
                       "the namespace can reach BlazeMeter is unverified -- the "
                       "agent will not come online without it")]
+    reasons = {rc.reason for rc in probes.values() if isinstance(rc, Unprobed)}
+    if len(reasons) == 1 and all(isinstance(rc, Unprobed)
+                                 for rc in probes.values()):
+        return [Check("egress", WARN,
+                      f"egress was not probed: {reasons.pop()}. Whether the "
+                      f"namespace can reach BlazeMeter with that CA is "
+                      f"unverified -- the agent will not come online without "
+                      f"it")]
     checks = []
     for target, rc in probes.items():
         name = f"egress {target.split('/')[2]}"
-        if rc == 0:
+        if isinstance(rc, Unprobed):
+            checks.append(Check(name, WARN, f"{target} was not probed: "
+                                            f"{rc.reason}"))
+        elif rc == 0:
             checks.append(Check(name, PASS, f"{target} reachable from the namespace"))
         elif rc is None:
             checks.append(Check(name, WARN,
                                 f"{target} could not be probed with the profile's "
                                 f"proxy/CA honoured -- verdict unknown"))
+        elif rc == CURL_RC_CA_VERIFY:
+            checks.append(Check(name, FAIL,
+                                f"TLS to {target} did not verify against the "
+                                f"profile's CA (curl rc={rc}): the CA does not "
+                                f"sign the chain this network presents. Run "
+                                f"bzm-opl-gen ca-check --ca-bundle <file> on "
+                                f"this network to name the missing issuer"))
+        elif rc == CURL_RC_CA_UNREADABLE:
+            checks.append(Check(name, FAIL,
+                                f"curl could not load the profile's CA to "
+                                f"probe {target} (rc={rc}) -- check that it "
+                                f"holds PEM certificates (bzm-opl-gen "
+                                f"ca-check lints it)"))
         else:
             checks.append(Check(name, FAIL,
                                 f"{target} unreachable (curl rc={rc}); if the "
@@ -1240,13 +1276,21 @@ def _rc_lines(output, targets):
     return rcs
 
 
-def _curl_script(targets, cacert=False, settle=0):
+# The CA crane's own environment points at, for a probe from its pod.
+CRANE_CA = '"$REQUESTS_CA_BUNDLE"'
+
+# Where the throwaway pod writes the CA it is handed on stdin.
+ONESHOT_CA_PATH = "/tmp/bzm-ca.pem"
+
+
+def _curl_script(targets, cacert=None, settle=0):
     """One shell running every probe, so a doctor costs one exec or one pod.
 
     Each probe is retried once: a fresh pod can lose its first DNS lookup
-    (rc=6) before CoreDNS answers. `settle` delays the first probe until
-    `kubectl run -i` has attached; output before that is dropped."""
-    ca = ' --cacert "$REQUESTS_CA_BUNDLE"' if cacert else ""
+    (rc=6) before CoreDNS answers. `cacert` is a shell word naming the CA file.
+    `settle` delays the first probe until `kubectl run -i` has attached;
+    output before that is dropped."""
+    ca = f" --cacert {cacert}" if cacert else ""
     probe = (f"curl -s -o /dev/null --max-time 20{ca} %s || "
              f"{{ sleep 2; curl -s -o /dev/null --max-time 20{ca} %s; }}")
     lines = [f'{probe % (t, t)}; echo "{t} rc=$?"' for t in targets]
@@ -1257,28 +1301,83 @@ def probe_egress(cli, namespace, opts):
     """curl each target from inside the cluster -> {target: returncode}.
 
     From the crane pod where there is one: only there are the profile's proxy
-    and CA in force. A throwaway pod cannot verify a corporate CA, so with one
-    configured the answer is None (WARN), never a FAIL."""
+    and CA in force. Otherwise from a throwaway pod handed the same CA; where
+    that CA cannot be had yet, every target is Unprobed with the reason."""
     targets = egress_targets(opts)
     if kube.kget(cli, namespace, "deploy", "crane"):
-        out = kube.crane_exec(cli, namespace,
-                              _curl_script(targets, _ca_configured(opts)))
+        out = kube.crane_exec(cli, namespace, _curl_script(
+            targets, CRANE_CA if _ca_configured(opts) else None))
         return _rc_lines(out, targets)
-    if _ca_configured(opts):
-        return {t: None for t in targets}
-    return _oneshot_curl(cli, namespace, targets, opts)
+    ca = resolved_ca(opts)
+    if ca is None:
+        return _oneshot_curl(cli, namespace, targets, opts)
+    pem, reason = _probe_ca(cli, namespace, opts, ca)
+    if pem is None:
+        return {t: Unprobed(reason) for t in targets}
+    return _oneshot_curl(cli, namespace, targets, opts, ca_pem=pem)
 
 
-def _oneshot_curl(cli, namespace, targets, opts):
-    """Probe from one throwaway pod: one pull and schedule for all targets."""
+def _probe_ca(cli, namespace, opts, ca):
+    """(pem, None), or (None, why not): the CA a throwaway pod probes with.
+
+    Inline mode carries the PEM in the profile, so its ConfigMap need not
+    exist yet. Every other mode reads the ConfigMap, which may not: the file
+    mode's is built at install time, and injection fills it on apply."""
+    if ca is CA_UNRESOLVED:
+        return None, ("the profile sets more than one CA mode, so which CA "
+                      "to probe with is unknown")
+    if ca["mode"] == "inline":
+        pem = opts.get("ca_bundle") or ""
+        if is_placeholder(pem):
+            return None, "the profile's CA bundle is still a marker"
+        if "-----BEGIN CERTIFICATE-----" not in pem:
+            return None, ("the profile's CA bundle holds no PEM certificate "
+                          "(bzm-opl-gen ca-check lints it)")
+        return pem, None
+    if is_placeholder(ca["key"]):
+        return None, "the certificate file the CA is built from is not named yet"
+    cm = kube.kget_named(cli, namespace, "configmap", ca["cm"])
+    if cm is None:
+        return None, (f"the CA ConfigMap {ca['cm']} could not be read in "
+                      f"{namespace}")
+    if not cm:
+        return None, {
+            "file": (f"the CA ConfigMap {ca['cm']} is built from "
+                     f"{ca['key']} at install time and is not in {namespace} "
+                     f"yet"),
+            "existing": (f"the CA ConfigMap {ca['cm']} the profile names is "
+                         f"not in {namespace}, and crane cannot start until "
+                         f"it is"),
+            "inject": (f"the CA ConfigMap {ca['cm']} OpenShift fills is not "
+                       f"in {namespace} yet; applying the bundle creates it"),
+        }[ca["mode"]]
+    pem = (cm.get("data") or {}).get(ca["key"])
+    if not pem:
+        return None, (f"the CA ConfigMap {ca['cm']} has no key {ca['key']}"
+                      + (" yet -- OpenShift fills it once the bundle is "
+                         "applied" if ca["mode"] == "inject" else ""))
+    return pem, None
+
+
+def _oneshot_curl(cli, namespace, targets, opts, ca_pem=None):
+    """Probe from one throwaway pod: one pull and schedule for all targets.
+
+    A CA goes in on stdin, not as an argument or a variable: a full trust
+    bundle is larger than one argument may be on Linux."""
     env = [arg for name, value in proxy_env(opts).items()
            for arg in ("--env", f"{name}={value}")]
+    script = _curl_script(targets, ONESHOT_CA_PATH if ca_pem else None,
+                          settle=2)
+    if ca_pem:
+        # cat returns at end of input, which arrives only after the attach.
+        script = f"cat > {ONESHOT_CA_PATH}; {script}"
     print(f"  probing egress from a throwaway {CURL_IMAGE} pod in {namespace} "
-          f"(crane is not deployed yet)")
+          f"(crane is not deployed yet)"
+          + (", with the profile's CA" if ca_pem else ""))
     out = kube.quiet(
         [cli, "-n", namespace, "run", f"bzm-doctor-{os.getpid()}", "--rm", "-i",
          "--restart=Never", "--image", CURL_IMAGE, *env, "--command", "--",
-         "sh", "-c", _curl_script(targets, settle=2)])
+         "sh", "-c", script], input=ca_pem)
     return _rc_lines(out.stdout, targets)
 
 

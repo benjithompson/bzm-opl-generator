@@ -33,6 +33,11 @@ interface SourceHandover {
   setManual: (f: (m: ManualIds) => ManualIds) => void;
   /** Who the page is connected as; the key itself is the Account menu's. */
   who: { email: string; keyId: string } | null;
+  /** Manual entry's facts are being read (the server asks the public
+   *  registry, which takes seconds). */
+  manualReading: boolean;
+  /** What those facts cannot tell, in the server's plain prose. */
+  manualWarnings: string[];
 }
 
 /** What a new location is asked for, in the account's own field names. The
@@ -269,6 +274,7 @@ export function AgentPanel({
           harborId={source.manual.harbor_id}
           shipId={source.manual.ship_id}
           authToken={credential.token}
+          reading={source.manualReading} warnings={source.manualWarnings}
           onHarborId={(v) => source.setManual((m) => ({ ...m, harbor_id: v }))}
           onShipId={(v) => source.setManual((m) => ({ ...m, ship_id: v }))}
           onAuthToken={credential.setToken} />

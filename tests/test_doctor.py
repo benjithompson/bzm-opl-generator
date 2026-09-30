@@ -1088,11 +1088,106 @@ def test_probe_egress_mixes_known_and_unknown_targets(monkeypatch):
     assert all(probes[t] is None for t in targets[1:])
 
 
-def test_probe_egress_cannot_honour_a_ca_without_crane(monkeypatch):
-    """A bare curl pod has no trust bundle; report 'unknown', not 'broken'."""
-    _crane(monkeypatch, False)
-    probes = doctor.probe_egress("kubectl", "ns1", {"ca_bundle": "PEM"})
-    assert set(probes.values()) == {None}
+PEM = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+
+
+def _oneshot(monkeypatch, configmap, output_rc=0):
+    """No crane; `configmap` is what kget_named answers for the CA ConfigMap
+    ({} NotFound, None unread). Returns the one-shot pod's calls."""
+    monkeypatch.setattr(kube, "kget", lambda cli, ns, kind, name=None: {})
+    monkeypatch.setattr(kube, "kget_named",
+                        lambda cli, ns, kind, name=None: configmap)
+    calls = []
+
+    def quiet(cmd, timeout=None, input=None):
+        calls.append({"cmd": cmd, "input": input})
+        targets = doctor.egress_targets({})
+        return type("Out", (), {"stdout": "\n".join(
+            f"{t} rc={output_rc}" for t in targets)})()
+    monkeypatch.setattr(kube, "quiet", quiet)
+    return calls
+
+
+def test_a_throwaway_pod_probes_with_an_inline_ca(monkeypatch):
+    """With no crane yet, the profile's own PEM goes into the pod on stdin and
+    every curl verifies against it: the corporate case is probed, not
+    skipped."""
+    calls = _oneshot(monkeypatch, None)
+    probes = doctor.probe_egress("kubectl", "ns1", {"ca_bundle": PEM})
+    assert set(probes.values()) == {0}
+    assert len(calls) == 1 and calls[0]["input"] == PEM
+    script = calls[0]["cmd"][-1]
+    assert script.startswith(f"cat > {doctor.ONESHOT_CA_PATH}; ")
+    assert script.count(f"--cacert {doctor.ONESHOT_CA_PATH}") == 2 * len(probes)
+    # The PEM is not on the command line: a full bundle outgrows one argument.
+    assert not any("BEGIN CERTIFICATE" in arg for arg in calls[0]["cmd"])
+
+
+def test_a_throwaway_pod_without_a_ca_reads_nothing_from_stdin(monkeypatch):
+    calls = _oneshot(monkeypatch, None)
+    doctor.probe_egress("kubectl", "ns1", {})
+    assert calls[0]["input"] is None
+    assert "--cacert" not in calls[0]["cmd"][-1]
+
+
+def test_an_existing_configmap_is_read_and_handed_to_the_pod(monkeypatch):
+    calls = _oneshot(monkeypatch, {"data": {"corp.crt": PEM}})
+    probes = doctor.probe_egress("kubectl", "ns1", {
+        "ca_existing_configmap": "corp-ca", "ca_configmap_key": "corp.crt"})
+    assert set(probes.values()) == {0}
+    assert calls[0]["input"] == PEM
+
+
+@pytest.mark.parametrize("opts,configmap,said", [
+    # NotFound and unread are different reasons, never one.
+    ({"ca_existing_configmap": "corp-ca"}, {}, "not in ns1"),
+    ({"ca_existing_configmap": "corp-ca"}, None, "could not be read"),
+    ({"ca_existing_configmap": "corp-ca"}, {"data": {}}, "has no key"),
+    ({"ca_bundle_slot": True, "ca_cert_file": "corp.crt"}, {},
+     "at install time"),
+    ({"ca_bundle_slot": True}, {}, "not named yet"),
+    ({"ca_openshift_inject": True}, {}, "applying the bundle creates it"),
+    ({"ca_openshift_inject": True}, {"data": {}}, "OpenShift fills it"),
+    ({"ca_bundle": "not a pem"}, None, "no PEM certificate"),
+    ({"ca_bundle": PEM, "ca_existing_configmap": "corp-ca"}, None,
+     "more than one CA mode"),
+])
+def test_a_ca_that_cannot_be_had_yet_is_unprobed_with_its_reason(
+        monkeypatch, opts, configmap, said):
+    """No pod is started without the CA: it would report a failure the agent
+    will not have. The reason says which CA is missing and why."""
+    calls = _oneshot(monkeypatch, configmap)
+    probes = doctor.probe_egress("kubectl", "ns1", opts)
+    assert not calls
+    reasons = {p.reason for p in probes.values()}
+    assert all(isinstance(p, doctor.Unprobed) for p in probes.values())
+    assert len(reasons) == 1 and said in reasons.pop()
+
+
+def test_an_unprobed_egress_is_one_warning_with_its_reason():
+    probes = {t: doctor.Unprobed("the CA ConfigMap x is not in ns1")
+              for t in doctor.egress_targets({})}
+    checks = doctor.check_egress(FACTS, {}, {"probes": probes})
+    assert [(c.name, c.status) for c in checks] == [("egress", doctor.WARN)]
+    assert "the CA ConfigMap x is not in ns1" in checks[0].detail
+
+
+def test_mixed_unprobed_targets_warn_one_by_one():
+    targets = doctor.egress_targets({})
+    probes = {targets[0]: 0, targets[1]: doctor.Unprobed("why")}
+    statuses = [c.status for c in doctor.check_egress(FACTS, {},
+                                                      {"probes": probes})]
+    assert statuses == [doctor.PASS, doctor.WARN]
+
+
+@pytest.mark.parametrize("rc,said", [
+    (doctor.CURL_RC_CA_VERIFY, "ca-check"),
+    (doctor.CURL_RC_CA_UNREADABLE, "PEM certificates"),
+])
+def test_a_ca_that_does_not_verify_fails_and_says_what_to_run(rc, said):
+    c = doctor.check_egress(FACTS, {}, {"probes": {doctor.API_PROBE_URL: rc}})[0]
+    assert c.status == doctor.FAIL
+    assert said in c.detail
 
 
 @pytest.mark.parametrize("mode", sorted(ca_trust.CA_MODES))
@@ -1103,10 +1198,6 @@ def test_a_bundle_with_any_ca_mode_probes_with_that_ca(monkeypatch, mode):
     seen = _crane(monkeypatch, True, "\n".join(f"{t} rc=0" for t in targets))
     doctor.probe_egress("kubectl", "ns1", opts)
     assert '--cacert "$REQUESTS_CA_BUNDLE"' in seen[0]
-    # And with crane absent, the answer is 'unknown' rather than a one-shot
-    # pod's verdict, which has no trust bundle to reach that CA with.
-    _crane(monkeypatch, False)
-    assert set(doctor.probe_egress("kubectl", "ns1", opts).values()) == {None}
 
 
 def test_probe_egress_falls_back_to_one_shot_pod(monkeypatch):

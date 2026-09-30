@@ -7,6 +7,7 @@ extra)."""
 import json
 import os
 import re
+import subprocess
 import time
 
 import anyio
@@ -276,6 +277,17 @@ def test_a_ca_slot_is_a_warning_here_rather_than_a_line_beside_the_token(
     assert not any("CA certificate" in w for w in plain["warnings"])
 
 
+def test_an_inline_ca_bundle_is_linted_into_warnings(fake_account, tmp_path):
+    """A server certificate given where the CA belongs is written, and said."""
+    from ca_fixtures import LEAF_PEM
+    body = ok("opl_bundle", "generate",
+              {"facts": FACTS, "out_dir": str(tmp_path),
+               "options": {"ca_bundle": LEAF_PEM}})
+    assert any(w.startswith("CA bundle FAIL: ") for w in body["warnings"]), \
+        body["warnings"]
+    assert (tmp_path / bundle_names.CA_CONFIGMAP_FILE).exists()
+
+
 def test_rotating_names_the_ship_whose_credential_it_replaced(fake_account,
                                                               tmp_path):
     """A rotation names the ship in token_source and in warnings; the token never
@@ -439,6 +451,58 @@ def test_never_reported_and_gone_quiet_get_different_next_steps(monkeypatch):
     assert never["heartbeat_age_s"] is None and quiet["heartbeat_age_s"]
     assert "not reached BlazeMeter" in " ".join(never["next"])
     assert "gone quiet" in " ".join(quiet["next"])
+
+
+def _triage_cluster(monkeypatch, answers):
+    """kubectl faked by verb: `get events`, `get pods`, `logs`."""
+    def quiet(cmd, timeout=None):
+        key = "logs" if cmd[3] == "logs" else f"get {cmd[4]}"
+        rc, out = answers[key]
+        return subprocess.CompletedProcess(cmd, rc, out if rc == 0 else "",
+                                           "" if rc == 0 else out)
+    monkeypatch.setattr(kube, "cli_tool", lambda: "kubectl")
+    monkeypatch.setattr(kube, "quiet", quiet)
+    monkeypatch.setattr(kube, "kget_named", lambda *a, **k: {"metadata": {}})
+
+
+_CRANE_POD = {"metadata": {"name": "crane-5d4f8b7c9-x2x7q",
+                           "labels": {"role": "role-crane"}},
+              "spec": {"containers": [{"name": "crane", "image": "c:1"}]},
+              "status": {"containerStatuses": [{"name": "crane", "image": "c:1",
+                                                "restartCount": 0,
+                                                "state": {"running": {}}}]}}
+
+
+def test_triage_reads_the_namespace_and_names_the_fix(monkeypatch):
+    """A known failure comes back with its fix; nothing is written."""
+    _triage_cluster(monkeypatch, {
+        "get events": (0, '{"items": []}'),
+        "get pods": (0, json.dumps({"items": [_CRANE_POD]})),
+        "logs": (0, "requests.exceptions.SSLError: HTTPSConnectionPool(host="
+                    "'a.blazemeter.com', port=443): [SSL: "
+                    "CERTIFICATE_VERIFY_FAILED] certificate verify failed")})
+    body = ok("opl_agent", "triage", {"namespace": "bzm"})
+    assert body["ok"] is False
+    assert [f["rule"] for f in body["findings"]] == ["tls-trust"]
+    assert "ca_existing_configmap" in body["findings"][0]["fix"]
+    assert "fix each FAIL" in " ".join(body["next"])
+
+
+def test_triage_reports_a_refused_read_as_unread_not_as_clean(monkeypatch):
+    _triage_cluster(monkeypatch, {
+        "get events": (1, "Error from server (Forbidden): events is forbidden"),
+        "get pods": (0, json.dumps({"items": [_CRANE_POD]})),
+        "logs": (0, "heartbeat sent")})
+    body = ok("opl_agent", "triage", {"namespace": "bzm"})
+    assert body["ok"] is True
+    assert body["unread"][0]["section"] == "events"
+    assert "not a clean namespace" in " ".join(body["next"])
+
+
+def test_triage_needs_a_namespace_and_a_real_duration():
+    assert "namespace" in err("opl_agent", "triage", {})
+    assert "--since" in err("opl_agent", "triage",
+                            {"namespace": "bzm", "since": "a while"})
 
 
 def test_narrowing_by_name_counts_what_the_filter_removed(big_account):
@@ -1060,3 +1124,24 @@ def test_the_instructions_offer_planning_before_the_account():
     text = listing()["instructions"]
     assert "opl_plan" in text
     assert "no cluster" in text or "before there is a cluster" in text
+
+
+def test_listing_images_explains_each_one(fake_account):
+    """The images action returns a catalogue row per image, registry fields
+    not asked unless lookup is set."""
+    body = ok("opl_bundle", "images", {"facts": FACTS})
+    rows = body["catalogue"]
+    assert [r["ref"] for r in rows] == body["images"]
+    assert all(r["purpose"] and r["pulled_when"] for r in rows)
+    assert body["registry_lookup"]["state"] == "not-asked"
+    looked = ok("opl_bundle", "images", {"facts": FACTS, "lookup": True})
+    assert looked["registry_lookup"]["state"] == "unread"
+
+
+def test_mirroring_images_uses_the_bundle_s_own_names(fake_account):
+    """The bundle's options decide the destinations, as in its mirror script."""
+    body = ok("opl_bundle", "images",
+              {"facts": FACTS, "mirror": "reg.local/bzm", "dry_run": True,
+               "options": {"output_format": "docker"}})
+    assert any(c.endswith("reg.local/bzm/taurus-cloud:latest")
+               for c in body["commands"] if " push " in c)
