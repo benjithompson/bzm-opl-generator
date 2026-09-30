@@ -11,6 +11,7 @@ import textwrap
 import urllib.parse
 
 from . import plan
+from .admission_policy import ENGINE_NO_RUN_AS_NON_ROOT
 from .bundle_env import proxy_env, proxy_has_creds
 from .bundle_names import (APPLY_ORDER, CHART_DIR, CONFIGMAP_FILE, CONFIGMAP_NAME,
                            DEPLOYMENT_FILE, DOCKER_COMPOSE_FILE,
@@ -575,7 +576,10 @@ def _pod_security(o, files):
     if keys:
         engines = (_para("Engines and the other pods crane starts run as "
                          "crane's UID and GID, with every capability dropped. "
-                         "This bundle sets:")
+                         "They meet the `baseline` Pod Security Standard, not "
+                         "`restricted`: " + ENGINE_NO_RUN_AS_NON_ROOT + ". A "
+                         "namespace that enforces `restricted` refuses every "
+                         "engine after the agent is online. This bundle sets:")
                    + "\n\n```\n" + "\n".join(keys) + "\n```\n")
     else:
         engines = _para(

@@ -65,8 +65,8 @@ def _configmap(facts, o):
     # BOOT_STARTING with crane healthy.
     if o["restrict_engines"]:
         lines += [
-            "  # Engines run as crane's UID:GID with no capabilities, which restricted",
-            "  # PodSecurity, OpenShift's restricted-v2 SCC and GKE Autopilot require.",
+            "  # Engines run as crane's UID:GID with no capabilities. This meets",
+            "  # OpenShift's restricted-v2 SCC, GKE Autopilot and baseline PodSecurity.",
             "  INHERIT_RUNNING_USER_AND_GROUP: 'true'",
             "  KUBERNETES_SECURITY_CONTEXT_CAP_JSON: '{\"drop\": [\"ALL\"]}'",
         ]

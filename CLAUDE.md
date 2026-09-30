@@ -72,6 +72,9 @@ cli.py  server.py  mcp_server.py      three front doors, thin
    image_catalog.py (what each image is; release rules)   registry_client.py
    ca_check.py (TLS chain against the network)   triage.py (post-deploy rules)
    smoke.py (post-install check of a deployed agent; reuses livetest readers)
+   security_review.py (SECURITY-REVIEW.md, derived from the rendered objects)
+   image_transfer.py (air-gapped save/load plans)   admission_policy.py
+   (Kyverno, Gatekeeper, VAP: which enforcing policy refuses which pod)
 frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
 ```
 
@@ -133,7 +136,9 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
    parse, [] = no names), `ui_build.staleness`, `ca_trust.CA_UNRESOLVED`,
    `core.NotFound` (404 only), `registry_client` states (read / unread /
    not-asked; present / missing / unread), `doctor.Unprobed`, `triage.gather`
-   sections (None = unread), frontend `stale.ts` (status, never message).
+   sections (None = unread), `kube.kget_served` (`evidence.NOT_SERVED` = the
+   API is not installed, None = unread), frontend `stale.ts` (status, never
+   message).
    A denied read is a WARN and exits 0; an empty result can be a FAIL. The
    evidence document's section names live once in `evidence.py`, and
    `test_cluster_evidence` holds the shell collector to them.
@@ -204,6 +209,11 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
   `overrideCPU/overrideMemory`, when set, become the limits
   (`resolve_engine_limits`) and replace the requests (measured: 1/4096 gave
   requests {1, 4Gi}); unset everywhere, crane uses 250m/256Mi.
+- **Engines meet PodSecurity `baseline`, not `restricted`.** `restrict_engines`
+  gives them crane's UID and drops every capability, but no agent variable
+  sets `runAsNonRoot`. Measured (kind v1.36, server dry run): `restricted`
+  refuses that spec and `baseline` accepts it. Crane's own pod meets
+  `restricted`. The fact lives once, in `admission_policy.ENGINE_NO_RUN_AS_NON_ROOT`.
 - No LimitRange is emitted: crane sets requests explicitly, so a LimitRange
   only hits crane's `test-job-*` pods. `doctor` still reads an existing one.
 - Crane requests 250m/512Mi and limits 1 CPU/2Gi: the scheduler places on the
