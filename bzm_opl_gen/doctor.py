@@ -878,22 +878,28 @@ def check_admission(facts, opts, cluster):
                       f"assigned no UID range, so INHERIT_RUNNING_USER_AND_GROUP "
                       f"has nothing to inherit and engine pods may be rejected")]
     enforce = (meta.get("labels") or {}).get(PSA_ENFORCE)
-    if enforce == "restricted":
-        if opts.get("restrict_engines", True):
-            return [Check("admission (PodSecurity)", PASS,
-                          f"{PSA_ENFORCE}=restricted; engines drop all "
-                          f"capabilities and inherit crane's UID:GID, so the "
-                          f"pods crane spawns satisfy it too")]
+    refused = admission_policy.pod_security_refusals(enforce, facts, opts)
+    if refused:
+        namespace = admission_policy.target_namespace(opts)
+        fixes = []
+        if not opts.get("restrict_engines", True):
+            fixes.append("Turn restrict_engines back on")
+        if any(admission_policy.NON_ROOT in demands
+               for _, demands in refused):
+            fixes.append(admission_policy.run_as_non_root_fix(namespace))
+        crane_meets = all(pod.role != "crane" for pod, _ in refused)
         return [Check("admission (PodSecurity)", FAIL,
-                      f"{PSA_ENFORCE}=restricted with restrict_engines off: "
-                      f"crane passes, but the engine pods it spawns keep "
-                      f"crane's own privileged default and are rejected after "
-                      f"the agent is already online, so runs hang rather than "
-                      f"fail. Drop --no-restrict-engines, or use "
-                      f"enforce=baseline for this namespace")]
+                      f"{PSA_ENFORCE}={enforce} refuses "
+                      f"{admission_policy.refusal_text(refused)}. "
+                      + (f"Crane's own Deployment meets {enforce}, so the "
+                         f"agent comes online and the refusal lands when a "
+                         f"run starts: the run hangs rather than fails. "
+                         if crane_meets else "")
+                      + ". ".join(fixes))]
     if enforce:
         return [Check("admission (PodSecurity)", PASS,
-                      f"{PSA_ENFORCE}={enforce} admits the engine pods")]
+                      f"{PSA_ENFORCE}={enforce} admits crane and the engine "
+                      f"pods")]
     return [Check("admission (PodSecurity)", WARN,
                   f"namespace has no {PSA_ENFORCE} label -- no enforcement is "
                   f"configured, so nothing here is checked at admission time "

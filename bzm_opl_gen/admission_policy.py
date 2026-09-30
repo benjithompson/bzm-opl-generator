@@ -187,10 +187,32 @@ Pod = collections.namedtuple(
 
 CRANE_LABELS = frozenset({"role", "harbor_id", "ship_id"})
 
+# Engines carry no runAsNonRoot, and no agent variable sets it. Measured
+# 2026-09-29 on kind v1.36 with a server-side dry run of the engine spec.
+ENGINE_NO_RUN_AS_NON_ROOT = (
+    "restrict_engines gives them crane's non-root UID and drops every "
+    "capability, but sets no runAsNonRoot, and no agent variable sets it. "
+    "Measured on Kubernetes v1.36: restricted PodSecurity refuses exactly "
+    "this engine spec, accepts it with runAsNonRoot true added, and baseline "
+    "accepts it as it is")
+
+
+def run_as_non_root_fix(namespace, exception=None):
+    """What makes the engines acceptable to a runAsNonRoot demand: a looser
+    PodSecurity label (`exception` None), else the policy engine's exception;
+    either way, a mutating policy that adds the field."""
+    first = (f"Label namespace {namespace} "
+             f"pod-security.kubernetes.io/enforce=baseline, which the engines "
+             f"meet, and keep warn and audit at restricted to still see "
+             f"violations" if exception is None else
+             f"Ask the platform team for {exception} for namespace {namespace}")
+    return (f"{first}. Or add a mutating policy, such as a Kyverno mutate "
+            f"rule, that sets runAsNonRoot true on the pods crane creates in "
+            f"namespace {namespace}. Or exempt the namespace from the policy")
+
 # Why a pod falls short, per (role, demand); (role, None) is the role's default.
 _WHY = {
-    ("engine", NON_ROOT): "the engine spec read off a live run carries "
-                          "crane's runAsUser but no runAsNonRoot",
+    ("engine", NON_ROOT): ENGINE_NO_RUN_AS_NON_ROOT,
     ("engine", READONLY_ROOT): "nothing sets readOnlyRootFilesystem, and an "
                                "engine writes to its own filesystem during a "
                                "run",
@@ -275,7 +297,7 @@ def bundle_pods(facts, opts, limitranges):
                  "request": (parse_cpu(CRANE_CPU_REQUEST),
                              parse_memory(CRANE_MEM_REQUEST))})
     if restricted:
-        engine_traits = {**safe, NON_ROOT: None, READONLY_ROOT: False}
+        engine_traits = {**safe, NON_ROOT: False, READONLY_ROOT: False}
     else:
         engine_traits = {**dict.fromkeys(TRAITS, False), CAPS_ADD: None,
                          SECCOMP: None, NO_HOST_PATH: True,
@@ -303,6 +325,30 @@ def bundle_pods(facts, opts, limitranges):
                          "limit": (200, parse_memory("512Mi")),
                          "request": (100, parse_memory("256Mi"))}))
     return pods
+
+
+def pod_security_refusals(level, facts, opts):
+    """[(pod, [demand, ...])] for crane and the engines: what a Pod Security
+    Standards level refuses among the pods the bundle makes."""
+    out = []
+    for pod in bundle_pods(facts, opts, None):
+        if pod.role not in ("crane", "engine"):
+            continue
+        refused = [d for d in PSS.get(level, ()) if pod.traits[d] is False]
+        if refused:
+            out.append((pod, refused))
+    return out
+
+
+def refusal_text(refusals):
+    """The pods a level refuses and why, as one phrase."""
+    parts = []
+    for pod, demands in refusals:
+        whys = list(dict.fromkeys(_why(pod, d) for d in demands))
+        wants = ", ".join(_requirement(Finding(d, {})) for d in demands)
+        parts.append(f"{pod.who}, which do not meet these demands: {wants} "
+                     f"({'; '.join(whys)})")
+    return "; ".join(parts)
 
 
 # -- judging one demand -------------------------------------------------------
@@ -477,10 +523,11 @@ def _fix(finding, failing, engine, namespace):
     if demand in TRAITS and "engine" in roles and not any(
             pod.traits[NOT_PRIVILEGED] for pod, _, _ in failing
             if pod.role == "engine"):
-        return "Turn restrict_engines back on"
+        return "Turn restrict_engines back on" + (
+            ". " + run_as_non_root_fix(namespace, EXCEPTION[engine])
+            if demand == NON_ROOT else "")
     if demand == NON_ROOT and "engine" in roles:
-        return ("Keep restrict_engines on and run_as_user set. If the engines "
-                f"are still refused, {exception}")
+        return run_as_non_root_fix(namespace, EXCEPTION[engine])
     if demand == DIGEST:
         return ("No option names an image by digest, and crane composes "
                 "engine image names from registry, path and tag. "

@@ -11,7 +11,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bzm_opl_gen import (doctor, evidence, facts as facts_mod, kube)  # noqa: E402
-from bzm_opl_gen import bundle_options, ca_trust, footprint  # noqa: E402
+from bzm_opl_gen import (admission_policy, bundle_options,  # noqa: E402
+                         ca_trust, footprint)
 
 
 # -- fixtures ---------------------------------------------------------------
@@ -839,11 +840,38 @@ NS_RESTRICTED = {"metadata": {"labels":
                  {"pod-security.kubernetes.io/enforce": "restricted"}}}
 
 
-def test_admission_k8s_restricted_passes_now_that_engines_drop_privileges():
-    """Restricted PSA passes with restrict_engines on."""
+def test_admission_k8s_restricted_fails_the_engines_even_with_them_restricted():
+    """Restricted PSA refuses the engines: they carry no runAsNonRoot, and no
+    agent variable sets it (measured on a server-side dry run). Crane's own
+    Deployment meets restricted, which is why the agent still comes online."""
     c = doctor.check_admission(FACTS, {"platform": "k8s"},
                                {"namespace": NS_RESTRICTED})[0]
-    assert c.status == doctor.PASS
+    assert c.status == doctor.FAIL
+    assert admission_policy.ENGINE_NO_RUN_AS_NON_ROOT in c.detail
+    assert "Crane's own Deployment meets restricted" in c.detail
+    assert "enforce=baseline" in c.detail
+    assert "mutating policy" in c.detail
+    assert "restrict_engines back on" not in c.detail
+
+
+def test_admission_k8s_baseline_fails_unrestricted_engines():
+    """Crane's default engine pod is privileged, which baseline forbids."""
+    c = doctor.check_admission(FACTS,
+                               {"platform": "k8s", "restrict_engines": False},
+                               {"namespace": NS_BASELINE})[0]
+    assert c.status == doctor.FAIL
+    assert "no privileged container" in c.detail
+    assert "restrict_engines back on" in c.detail
+
+
+def test_admission_k8s_privileged_passes_either_way():
+    ns = {"metadata": {"labels":
+                       {"pod-security.kubernetes.io/enforce": "privileged"}}}
+    for restricted in (True, False):
+        c = doctor.check_admission(
+            FACTS, {"platform": "k8s", "restrict_engines": restricted},
+            {"namespace": ns})[0]
+        assert c.status == doctor.PASS
 
 
 def test_admission_k8s_restricted_still_fails_with_engine_restriction_off():

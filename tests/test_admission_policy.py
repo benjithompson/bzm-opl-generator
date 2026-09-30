@@ -228,12 +228,36 @@ def test_unread_limitranges_leave_the_test_job_verdict_open():
     assert "could not be read" in c.detail
 
 
-def test_run_as_nonroot_warns_for_restricted_engines_and_says_why():
+def test_run_as_nonroot_fails_restricted_engines_and_says_why():
+    """Engines carry no runAsNonRoot and no agent variable sets it, so a
+    policy demanding it refuses every engine pod (measured under PSA)."""
     c = _policy(_checks(kyverno=[P.require_run_as_nonroot()]),
                 "Kyverno ClusterPolicy require-run-as-nonroot")
-    assert c.status == doctor.WARN
-    assert "runAsUser but no runAsNonRoot" in c.detail
+    assert c.status == doctor.FAIL
+    assert admission_policy.ENGINE_NO_RUN_AS_NON_ROOT in c.detail
+    assert admission_policy.run_as_non_root_fix(
+        "blazemeter", admission_policy.EXCEPTION["Kyverno"]) in c.detail
     assert "crane's own pod" not in c.detail      # crane sets it
+
+
+def test_a_run_as_nonroot_cel_expression_fails_the_engines_too():
+    c = _policy(_checks(admission=[P.vap(
+        "non-root", "object.spec.containers.all(c, "
+                    "c.securityContext.runAsNonRoot == true)")],
+        bindings=[P.binding("non-root")]),
+        "ValidatingAdmissionPolicy non-root")
+    assert c.status == doctor.FAIL
+    assert admission_policy.ENGINE_NO_RUN_AS_NON_ROOT in c.detail
+
+
+def test_gatekeeper_must_run_as_non_root_accepts_the_engines_uid():
+    """K8sPSPAllowedUsers MustRunAsNonRoot accepts a non-zero runAsUser, which
+    the engines inherit from crane."""
+    c = _policy(_checks(templates=P.TEMPLATES, constraints=[P.constraint(
+        "K8sPSPAllowedUsers", "psp-pods-allowed-user-ranges",
+        {"runAsUser": {"rule": "MustRunAsNonRoot"}})]),
+        "Gatekeeper K8sPSPAllowedUsers")
+    assert "engine pods" not in c.detail
 
 
 def test_run_as_nonroot_fails_engines_without_restrict_engines():
@@ -276,6 +300,7 @@ def test_disallow_host_path_passes():
 
 @pytest.mark.parametrize("level,restricted,status", [
     ("baseline", True, doctor.PASS),
+    ("restricted", True, doctor.FAIL),
     ("baseline", False, doctor.FAIL),
     ("restricted", False, doctor.FAIL),
 ])

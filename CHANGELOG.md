@@ -206,6 +206,17 @@ anything that breaks.
 
 ### Fixed
 
+- **`doctor` passed restricted namespaces that reject every engine.** A
+  namespace labelled `pod-security.kubernetes.io/enforce=restricted` refuses
+  the engine pods: `restrict_engines` gives them a non-root UID but no
+  `runAsNonRoot`, and no agent variable sets it. Crane itself is accepted, so
+  the agent comes online and every run hangs. This is now a FAIL, with the
+  fix: label the namespace `enforce=baseline` (the engines meet it), add a
+  mutating policy that sets `runAsNonRoot: true`, or exempt the namespace.
+  A `baseline` namespace with `restrict_engines` off is now a FAIL too.
+  Measured on Kubernetes v1.36 with a server-side dry run; see
+  [docs/hardened-engines.md](docs/hardened-engines.md).
+
 - **A bundle made without an account deployed an old agent.** Manual-entry
   facts named crane and the other images by `latest`, and on BlazeMeter's
   registry `latest` names releases far older than the newest, so the agent
