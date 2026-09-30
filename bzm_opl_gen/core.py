@@ -992,8 +992,9 @@ def verify_mirror(facts, registry, options=None, ca_file=None,
 
     `options` are the bundle's (its profile.json): the format and crane_hook
     decide the names. Credentials come from the environment or the docker
-    config, never from an argument. A leading `http://` marks a plain-HTTP
-    registry.
+    config, never from an argument. The scheme is registry_scheme's: the
+    registry's own `http://` or `https://`, else plain HTTP for localhost
+    and 127.0.0.0/8 only.
     """
     reg_prefix = registry_client.strip_scheme(registry)
     if not reg_prefix:
@@ -1002,8 +1003,8 @@ def verify_mirror(facts, registry, options=None, ca_file=None,
     o = {**bundle_options.DEFAULT_OPTIONS, **(options or {}),
          "private_registry": reg_prefix}
     targets = image_registry.mirror_targets(facts, o, all_images=all_images)
-    scheme, host, _, _ = registry_client.split_ref(
-        f"{registry.rstrip('/')}/probe:latest")
+    scheme = registry_client.registry_scheme(registry)
+    _, host, _, _ = registry_client.split_ref(f"{reg_prefix}/probe:latest")
     user, password, where = registry_client.credentials_for(host)
     try:
         client = registry_client.Registry(
@@ -1308,9 +1309,10 @@ def load_images(directory, registry, options=None, tool=None, ca_file=None,
     name mirror_targets gives for `options` (default: the options the save
     recorded), then check the registry holds each.
 
-    Every checksum is checked before the first push. A leading `http://`
-    marks a plain-HTTP registry. Credentials come from the environment or
-    the tool's own login, never from an argument.
+    Every checksum is checked before the first push. The scheme is
+    registry_scheme's, for the push and the check after it; the pushed names
+    carry no scheme. Credentials come from the environment or the tool's own
+    login, never from an argument.
     """
     directory = os.path.abspath(directory)
     reg_prefix = registry_client.strip_scheme(registry or "")
@@ -1333,8 +1335,8 @@ def load_images(directory, registry, options=None, tool=None, ca_file=None,
     fmt = manifest["archive_format"]
     tool = _transfer_tool(tool, image_transfer.LOADERS[fmt],
                           f"push a {fmt} archive", dry_run, warnings)
-    scheme, host, _, _ = registry_client.split_ref(
-        f"{registry.rstrip('/')}/probe:latest")
+    scheme = registry_client.registry_scheme(registry)
+    _, host, _, _ = registry_client.split_ref(f"{reg_prefix}/probe:latest")
     images = [{**saved[ref], "target": target} for ref, target in pairs]
     checksums = "not checked (dry run)" if dry_run else \
         _check_archives(directory, images)
@@ -1358,9 +1360,11 @@ def load_images(directory, registry, options=None, tool=None, ca_file=None,
             notes.append(f"docker reads a registry CA from "
                          f"/etc/docker/certs.d/{host}/ca.crt, not from "
                          f"--ca-file; --ca-file is used by the check only")
-        if scheme == "http":
-            notes.append(f"a plain-HTTP registry must be in the docker "
-                         f"daemon's insecure-registries ({host})")
+        # docker itself pushes to localhost and 127.0.0.0/8 without TLS.
+        if scheme == "http" and not registry_client.is_loopback(host):
+            notes.append(f"docker pushes to a plain-HTTP registry only when "
+                         f"it is in the docker daemon's insecure-registries; "
+                         f"add {host} there")
     with tempfile.TemporaryDirectory(prefix="bzm-opl-load-") as workdir:
         dest = (_skopeo_destination(host, scheme, ca_file, workdir, dry_run,
                                     notes)

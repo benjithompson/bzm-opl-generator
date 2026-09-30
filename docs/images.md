@@ -161,6 +161,13 @@ Add `--dry-run` to either command to print the commands and run none.
   so the file holds exactly the image the manifest names.
 - An `oci-archive` file loads only with skopeo. A `docker save` file loads
   with skopeo or with `docker load`, `docker tag` and `docker push`.
+- A `docker save` file holds the layers uncompressed, so the push compresses
+  them again. The image in your registry then has a digest different from
+  the digest in BlazeMeter's registry and in `images-manifest.json`. This was
+  measured: `crane:3.7.55` pushed from a `docker save` file got the digest
+  `sha256:3004be93…`, not the digest BlazeMeter's registry gives. The agent
+  pulls by tag, so a different digest does not stop it. Compare the tag, not
+  the digest, when you check a mirror.
 - The command prints each command before it runs it, prefixed `+ `.
 - skopeo runs with `TMPDIR` set to the save directory, because it unpacks each
   image there for a moment. A small `/var/tmp` then does not stop it.
@@ -206,8 +213,15 @@ leaves no manifest, and the load refuses that directory. Run the save again.
 - `--ca-file <pem>` reaches skopeo as a certificate directory. docker reads a
   registry CA only from `/etc/docker/certs.d/<host>/ca.crt`, so for docker
   `--ca-file` applies to the check after the push only.
-- Prefix the registry with `http://` for a registry that serves plain HTTP.
-  docker then needs the registry in the daemon's `insecure-registries`.
+- `--mirror` takes a scheme. `--mirror http://registry.local:5000/bzm` is a
+  registry that serves plain HTTP. The pushed names never carry the scheme,
+  and the check after the push uses the same scheme as the push. Without a
+  scheme, the rule is docker's own: `localhost` and `127.0.0.0/8` are plain
+  HTTP, and every other host is HTTPS. Write `https://localhost:…` for a
+  local registry that serves TLS.
+- docker pushes to a plain-HTTP registry other than `localhost` and
+  `127.0.0.0/8` only when the registry is in the daemon's
+  `insecure-registries`. The load says so when this applies.
 
 The MCP server's `opl_bundle images` plans a save or a load
 (`transfer: "save"` or `"load"`) and returns the commands. It never runs them.
@@ -236,6 +250,9 @@ pushes it to, and reports it as `present`, `missing` or `unread`:
   command-line value.
 - `--ca-file <pem>` trusts a registry whose certificate your own CA signed.
 - Prefix the registry with `http://` for a registry that serves plain HTTP.
+  Without a prefix, `localhost` and `127.0.0.0/8` are plain HTTP, as docker
+  treats them, and every other host is HTTPS. Prefix `https://` for a local
+  registry that serves TLS.
 
 ## Keeping a mirror current
 

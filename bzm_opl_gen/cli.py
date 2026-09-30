@@ -1274,7 +1274,9 @@ def main():
                         "the mirror script pushes it to; exits 1 if one is "
                         "missing. Credentials come from BZM_REGISTRY_USER and "
                         "BZM_REGISTRY_PASSWORD, or the docker config. Prefix "
-                        "http:// for a plain-HTTP registry")
+                        "http:// for a plain-HTTP registry; localhost and "
+                        "127.0.0.0/8 are plain HTTP unless prefixed https://, "
+                        "as docker treats them")
     i.add_argument("--save", metavar="DIR",
                    help="for a site that cannot reach BlazeMeter's registry: "
                         "write each image to an archive file in DIR, with "
@@ -1284,7 +1286,8 @@ def main():
                    help="push the archives a --save wrote in DIR to --mirror "
                         "REGISTRY under the names the agent asks for, after "
                         "checking every checksum, then check the registry. "
-                        "Needs no API key")
+                        "Needs no API key. REGISTRY takes http:// or https:// "
+                        "as --verify does")
     i.add_argument("--tool", choices=["skopeo", "docker"],
                    help="with --save or --load: the program that copies the "
                         "images (default: skopeo when on PATH, else docker)")

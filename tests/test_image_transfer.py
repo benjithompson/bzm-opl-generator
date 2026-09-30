@@ -514,6 +514,78 @@ def test_the_cli_load_exits_1_when_the_check_finds_an_image_missing(
     assert "MISSING  reg.corp/bzm/crane:3.7.55" in capsys.readouterr().out
 
 
+# -- the registry's scheme -------------------------------------------------------
+
+@pytest.mark.parametrize("given,want", [
+    ("http://reg.corp:5000/bzm", "http"),
+    ("https://localhost:5055", "https"),
+    ("localhost:5055", "http"),
+    ("localhost/bzm", "http"),
+    ("127.0.0.1:5000/bzm", "http"),
+    ("127.200.3.4", "http"),
+    ("reg.corp/bzm", "https"),
+    ("reg.corp:5000", "https"),
+    ("128.0.0.1:5000", "https"),
+    ("localhost.corp:5000", "https"),
+    ("127.0.0.1.example.com", "https"),
+])
+def test_the_scheme_is_the_registry_s_own_else_docker_s_rule(given, want):
+    assert registry_client.registry_scheme(given) == want
+
+
+def _asked(fake):
+    """The scheme and host of every registry call except the token's."""
+    return {c[1].split("/v2/")[0] for c in fake.calls
+            if "/v2/token" not in c[1]}
+
+
+@pytest.mark.parametrize("given,asked", [
+    ("localhost:5055", "http://localhost:5055"),
+    ("http://reg.corp:5000/bzm", "http://reg.corp:5000"),
+    ("https://localhost:5055", "https://localhost:5055"),
+    ("reg.corp:5000/bzm", "https://reg.corp:5000"),
+])
+def test_verify_speaks_the_scheme_the_rule_gives(registry, given, asked):
+    fake = registry()
+    out = core.verify_mirror(FACTS, given)
+    assert _asked(fake) == {asked}
+    assert not any(t["target"].startswith("http") for t in out["images"])
+
+
+@pytest.mark.parametrize("given,host,note", [
+    ("localhost:5055", "localhost:5055", False),
+    ("http://localhost:5055", "localhost:5055", False),
+    ("http://127.0.0.1:5055/bzm", "127.0.0.1:5055/bzm", False),
+    ("http://reg.corp:5000/bzm", "reg.corp:5000/bzm", True),
+])
+def test_a_docker_load_pushes_bare_names_and_checks_over_the_same_scheme(
+        tmp_path, tools, run, registry, given, host, note):
+    directory = _saved(tmp_path, tools, run, registry, tool="docker")
+    fake = run()
+    reg = registry(manifests={})   # the private registry, after the push
+    out = core.load_images(directory, given)
+    pushed = [t.split()[-1] for t in fake.texts() if t.startswith("docker push")]
+    assert pushed[0] == f"{host}/crane:3.7.55"
+    assert not any("://" in t for t in fake.texts())
+    assert _asked(reg) == {"http://" + host.split("/")[0]}
+    assert out["verify"]["registry"] == host
+    said = any("insecure-registries" in n for n in out["notes"])
+    assert said is note
+
+
+def test_a_skopeo_load_to_a_plain_http_registry_skips_tls(tmp_path, tools, run,
+                                                         registry):
+    directory = _saved(tmp_path, tools, run, registry)
+    for given, off in (("localhost:5055", True), ("http://reg.corp/bzm", True),
+                       ("reg.corp/bzm", False)):
+        plan = core.load_images(directory, given, dry_run=True)
+        assert all(("--dest-tls-verify=false" in c) is off
+                   for c in plan["commands"])
+        assert all(c.split()[-1].startswith("docker://" +
+                                            registry_client.strip_scheme(given))
+                   for c in plan["commands"])
+
+
 def test_a_real_image_copier_is_refused_offline():
     import subprocess
     for tool in ("skopeo", "crane", "oras", "regctl"):

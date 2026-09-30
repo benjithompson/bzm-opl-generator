@@ -33,8 +33,10 @@ anything that breaks.
   or unread. It exits 1 when an image is missing. Pass the bundle's
   `--profile profile.json` for a docker bundle's names, and `--ca-file` for a
   registry signed by your own CA. Credentials come from `BZM_REGISTRY_USER` and
-  `BZM_REGISTRY_PASSWORD` or your docker config, never from a flag. See
-  [docs/images.md](docs/images.md).
+  `BZM_REGISTRY_PASSWORD` or your docker config, never from a flag. Prefix
+  the registry with `http://` or `https://` to choose the scheme. Without a
+  prefix, `localhost` and `127.0.0.0/8` are plain HTTP, as docker treats
+  them, and every other host is HTTPS. See [docs/images.md](docs/images.md).
 
 - **`images --pull --mirror` takes `--profile profile.json`**, and pushes to
   the same names as the bundle's own `bzm-opl-image-mirror.sh` for every
@@ -50,7 +52,9 @@ anything that breaks.
   digest, size, source, checksum and the name the agent asks for. Carry the
   directory across. There, `images --load <dir> --mirror <registry>` checks
   every checksum, pushes each image to the name the agent asks for, and then
-  runs the `--verify` check. The load needs no API key. skopeo is used when it
+  runs the `--verify` check over the same scheme as the push, so
+  `--mirror http://host:port` works for both tools. The load needs no API
+  key. skopeo is used when it
   is on `PATH`, else docker. The save checks free space against the sizes the
   registry answered with, and warns when it could not read them. `--dry-run`
   prints the commands only. The MCP server's `opl_bundle images` returns the
