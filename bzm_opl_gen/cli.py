@@ -16,7 +16,7 @@ Subcommands:
   ca-check     does a CA bundle verify the chain this network presents?
   sv-expose    emit a working Service+Ingress per deployed virtual service
   images       list / explain / pull / mirror / verify the images the location
-               actually needs
+               actually needs; save / load carry them to an air-gapped site
   review       print the security review a bundle carries, for an approval
                board
   livetest     start a bundle for real (a cluster, or docker compose) and
@@ -577,8 +577,11 @@ def _profile_options(a):
 
 
 def _verify(f, a):
-    out = core.verify_mirror(f, a.verify, options=_profile_options(a),
-                             ca_file=a.ca_file)
+    _print_verify(core.verify_mirror(f, a.verify, options=_profile_options(a),
+                                     ca_file=a.ca_file))
+
+
+def _print_verify(out):
     print(f"checking {out['registry']} (credentials: {out['credentials']})")
     for i in out["images"]:
         state = i["state"].upper() if i["state"] == "missing" else i["state"]
@@ -594,7 +597,65 @@ def _verify(f, a):
         sys.exit(1)
 
 
+def _announce(text):
+    print(f"+ {text}", flush=True)
+
+
+def _print_transfer(out):
+    """A save's or a load's plan and outcome; the commands were announced as
+    they ran, so a dry run prints them here."""
+    for c in out["commands"] if out["dry_run"] else []:
+        print(f"DRY-RUN: {c}")
+    for note in out.get("notes") or []:
+        print(f"note: {note}")
+    sys.stdout.flush()
+    for w in out["warnings"]:
+        print(f"WARN: {w}", file=sys.stderr)
+
+
+def _save(f, a):
+    out = core.save_images(f, a.save, options=_profile_options(a),
+                           all_images=a.all, tool=a.tool, dry_run=a.dry_run,
+                           announce=_announce)
+    space = out["space"]
+    print(f"saving {len(out['images'])} images to {out['directory']} with "
+          f"{out['tool']} ({out['archive_format']})")
+    for i in out["images"]:
+        size = f"{i['size_mb']} MB" if i["size_mb"] is not None else "size unread"
+        print(f"  {i['archive']}  <- {i['ref']}  ({size}, {i['source']})")
+    print(f"disk: {space['state']}"
+          + (f", {space['free_mb']} MB free" if space["free_mb"] is not None
+             else "")
+          + (f", {space['need_mb']} MB needed by the {space['sizes_read']} of "
+             f"{space['images']} sizes read" if space["sizes_read"]
+             else ", no image size read"))
+    _print_transfer(out)
+    if out["manifest"]:
+        print(f"wrote {out['manifest']} and {out['sums']}. Carry the whole "
+              f"directory across, then run images --load on the far side.")
+
+
+def _load(a):
+    out = core.load_images(a.load, a.mirror, options=_profile_options(a),
+                           tool=a.tool, ca_file=a.ca_file, dry_run=a.dry_run,
+                           announce=_announce)
+    print(f"loading {len(out['images'])} images from {out['directory']} into "
+          f"{out['registry']} with {out['tool']}; checksums {out['checksums']}")
+    for i in out["images"]:
+        print(f"  {i['archive']}  -> {i['target']}")
+    _print_transfer(out)
+    if out["verify"]:
+        _print_verify(out["verify"])
+
+
 def cmd_images(a):
+    if a.save and a.load:
+        sys.exit("--save and --load are two ends of one transfer; give one")
+    if a.load:
+        if not a.mirror:
+            sys.exit("--load needs --mirror <registry>, the registry the "
+                     "agent pulls from")
+        return _load(a)
     f = facts_mod.load(a.facts) if a.facts else None
     if a.explain and f is None and not a.harbor_id:
         # No location named: the whole catalogue.
@@ -604,6 +665,8 @@ def cmd_images(a):
         f = core.gather_facts(_client(a), a.harbor_id)
     if a.verify:
         return _verify(f, a)
+    if a.save:
+        return _save(f, a)
     if a.explain:
         _print_explain(core.image_catalog(f, lookup=a.lookup,
                                           all_images=a.all), a.format)
@@ -1254,8 +1317,8 @@ def main():
                    help="check the proxy rig too")
     w.set_defaults(fn=cmd_toolcheck)
 
-    i = sub.add_parser("images", help="list/explain/pull/mirror/verify the "
-                                      "location's images")
+    i = sub.add_parser("images", help="list/explain/pull/mirror/verify/"
+                                      "save/load the location's images")
     i.add_argument("--facts")
     i.add_argument("--api-key")
     i.add_argument("--harbor-id")
@@ -1279,14 +1342,31 @@ def main():
                         "the mirror script pushes it to; exits 1 if one is "
                         "missing. Credentials come from BZM_REGISTRY_USER and "
                         "BZM_REGISTRY_PASSWORD, or the docker config. Prefix "
-                        "http:// for a plain-HTTP registry")
+                        "http:// for a plain-HTTP registry; localhost and "
+                        "127.0.0.0/8 are plain HTTP unless prefixed https://, "
+                        "as docker treats them")
+    i.add_argument("--save", metavar="DIR",
+                   help="for a site that cannot reach BlazeMeter's registry: "
+                        "write each image to an archive file in DIR, with "
+                        "images-manifest.json and SHA256SUMS. Carry DIR "
+                        "across and run --load there")
+    i.add_argument("--load", metavar="DIR",
+                   help="push the archives a --save wrote in DIR to --mirror "
+                        "REGISTRY under the names the agent asks for, after "
+                        "checking every checksum, then check the registry. "
+                        "Needs no API key. REGISTRY takes http:// or https:// "
+                        "as --verify does")
+    i.add_argument("--tool", choices=["skopeo", "docker"],
+                   help="with --save or --load: the program that copies the "
+                        "images (default: skopeo when on PATH, else docker)")
     i.add_argument("--ca-file", metavar="PEM",
-                   help="with --verify: the CA that signed REGISTRY's "
-                        "certificate")
+                   help="with --verify or --load: the CA that signed "
+                        "REGISTRY's certificate")
     i.add_argument("--profile", metavar="PROFILE_JSON",
-                   help="with --verify or --mirror: the bundle's profile.json, "
-                        "whose format and crane_hook decide the names "
-                        "(default: a Kubernetes bundle)")
+                   help="with --verify, --mirror, --save or --load: the "
+                        "bundle's profile.json, whose format and crane_hook "
+                        "decide the names (default: a Kubernetes bundle; for "
+                        "--load, the profile the save recorded)")
     i.set_defaults(fn=cmd_images)
 
     r = sub.add_parser("review",

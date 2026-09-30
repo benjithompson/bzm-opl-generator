@@ -210,7 +210,9 @@ DOC_SUMMARIES = {
     "hardened-engines.md": "The restricted engine posture, and which images "
                            "have run under it.",
     "images.md": "What each image does and which functionality needs it, "
-                 "mirroring them, and checking a mirror with images --verify.",
+                 "mirroring them, carrying them to an air-gapped site with "
+                 "images --save and --load, and checking a mirror with "
+                 "images --verify.",
     "live-test.md": "The live rig: what it proves and what it costs.",
     "ca-trust.md": "A corporate TLS-inspecting CA: the four ways to supply it, "
                    "and checking it with ca-check before deploying.",
@@ -558,6 +560,12 @@ DESCRIPTIONS["opl_bundle"] = (
     "into that registry, under the names the bundle's own mirror script "
     "uses (pass the bundle's options, e.g. output_format, for a docker "
     "bundle), which writes to it -- confirm before calling it that way.\n"
+    "             For a site that cannot reach BlazeMeter's registry: "
+    "transfer='save' {facts, dir, all?, options?, tool?} plans saving each "
+    "image to an archive in dir; transfer='load' {dir, mirror, options?, "
+    "tool?} plans pushing a finished save to mirror. Both are dry runs: "
+    "they return the commands, and the user runs `images --save` and "
+    "`images --load` themselves.\n"
     "  review   -- {facts, options?}: the SECURITY-REVIEW.md that the "
     "bundle for these options carries, for a change-approval board or "
     "security team. What runs, images, network egress, TLS trust, RBAC "
@@ -605,6 +613,34 @@ def _bundle(action, args):
                 **({"note": "the AUTH_TOKEN in this file is redacted here and "
                             "intact on disk. opl_location reveal_token returns "
                             "the value -- and rotates it."} if redacted else {})}
+
+    if action == "images" and args.get("transfer") and \
+            not os.path.isabs(args.get("dir") or ""):
+        raise ToolError("transfer needs dir, an absolute path: a relative one "
+                        "resolves against this server's working directory")
+
+    if action == "images" and args.get("transfer") == "save":
+        facts, directory = _need(args, "facts", "dir")
+        # A plan only: the save pulls gigabytes, so the user runs it.
+        return {**core.save_images(
+            facts, directory, options=_no_secrets(args.get("options") or {}),
+            all_images=bool(args.get("all")), tool=args.get("tool"),
+            dry_run=True),
+            "next": [f"bzm-opl-gen images --save {directory} ... on a machine "
+                     f"that reaches BlazeMeter's registry (YOU run it)"]}
+
+    if action == "images" and args.get("transfer") == "load":
+        directory, mirror = _need(args, "dir", "mirror")
+        return {**core.load_images(
+            directory, mirror, options=_no_secrets(args["options"])
+            if args.get("options") is not None else None,
+            tool=args.get("tool"), dry_run=True),
+            "next": [f"bzm-opl-gen images --load {directory} --mirror {mirror} "
+                     f"on the air-gapped side (YOU run it)"]}
+
+    if action == "images" and args.get("transfer"):
+        raise ToolError(f"transfer is 'save' or 'load', not "
+                        f"{args['transfer']!r}")
 
     if action == "images":
         facts, = _need(args, "facts")
