@@ -976,6 +976,16 @@ def test_mirroring_images_is_annotated_rather_than_gated(fake_account):
     assert any("push reg.local/bzm/" in c for c in body["commands"])
 
 
+def test_the_security_review_is_served_without_a_token():
+    """`review` answers the document a bundle carries, through a real client,
+    and it holds no AUTH_TOKEN."""
+    body = ok("opl_bundle", "review", {"facts": FACTS,
+                                       "options": {"namespace": "ns1"}})
+    assert body["file"] == bundle_names.REVIEW_FILE
+    assert body["document"].startswith("# Security review:")
+    assert "## Kubernetes permissions" in body["document"]
+
+
 def test_listing_images_runs_no_docker(fake_account, monkeypatch):
     """The default is a list. Only `pull`/`mirror` shell out, so a session
     asking what a bundle needs cannot start pulling gigabytes by accident."""

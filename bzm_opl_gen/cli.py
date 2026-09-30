@@ -15,6 +15,8 @@ Subcommands:
   sv-expose    emit a working Service+Ingress per deployed virtual service
   images       list / explain / pull / mirror / verify the images the location
                actually needs
+  review       print the security review a bundle carries, for an approval
+               board
   livetest     start a bundle for real (a cluster, or docker compose) and
                verify the agent comes online
 """
@@ -590,6 +592,16 @@ def cmd_images(a):
                                   dry_run=a.dry_run, all_images=a.all,
                                   options=_profile_options(a))["commands"]:
         print(("DRY-RUN: " if a.dry_run else "+ ") + cmd)
+
+
+def cmd_review(a):
+    doc = core.security_review(facts_mod.load(a.facts), _profile_options(a))
+    if not a.output:
+        print(doc, end="")
+        return
+    with open(a.output, "w") as fh:
+        fh.write(doc)
+    print(f"wrote {a.output}")
 
 
 def _regenerator(facts, a, ship_id, auth_token):
@@ -1220,6 +1232,17 @@ def main():
                         "whose format and crane_hook decide the names "
                         "(default: a Kubernetes bundle)")
     i.set_defaults(fn=cmd_images)
+
+    r = sub.add_parser("review",
+                       help="print the security review (SECURITY-REVIEW.md) "
+                            "that the bundle for these options carries")
+    r.add_argument("--facts", default="facts.json")
+    r.add_argument("--profile", metavar="PROFILE_JSON",
+                   help="the options, such as a bundle's profile.json "
+                        "(default: every option at its default)")
+    r.add_argument("-o", "--output", metavar="FILE",
+                   help="write the document to FILE instead of stdout")
+    r.set_defaults(fn=cmd_review)
 
     t = sub.add_parser("livetest", help="start a bundle for real, verify the "
                                         "agent comes online")

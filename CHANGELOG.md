@@ -13,6 +13,19 @@ anything that breaks.
 
 ### Added
 
+- **Every bundle carries `SECURITY-REVIEW.md`**, one document for a
+  change-approval board or security team. It says what the agent runs, the
+  images it pulls, the hosts and ports it connects to, the proxy and CA in
+  force, the exact RBAC rules the bundle grants, crane's security contexts and
+  the engine posture, requests and limits at full concurrency, and what each
+  Secret holds. The RBAC rules, security contexts and Secret keys are read from
+  the bundle's own rendered objects, so the document matches what you apply. It
+  never contains the AUTH_TOKEN, a proxy password or a private key. A docker
+  bundle describes the container and the docker socket instead.
+  `bzm-opl-gen review --facts facts.json --profile profile.json` prints it
+  without writing a bundle, and the MCP server has `opl_bundle review`. See
+  [docs/security-review.md](docs/security-review.md).
+
 - **Every bundle carries `IMAGES.md`.** It lists the images the agent pulls,
   what each one does, which functionality needs it, when it is pulled, and
   whether that was seen in a live run. With `--private-registry` it also lists

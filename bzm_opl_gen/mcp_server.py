@@ -109,7 +109,9 @@ options.md (every generate option), preflight.md (evidence files and what the
 checks mean), triage.md (what a deployed namespace shows, and each fix),
 capacity-planning.md (sizing a cluster nobody has yet), helm.md
 and docker.md (the two non-manifest output formats), service-virtualization.md,
-hardened-engines.md, images.md (what each image does, mirroring and checking
+hardened-engines.md, security-review.md (the document an approval board
+reads: what the agent runs, reaches and may do), images.md (what each image
+does, mirroring and checking
 a mirror), live-test.md, ca-trust.md (a corporate CA, and the
 `bzm-opl-gen ca-check` command the customer runs on their own network to test
 it). Read the one that covers the question rather
@@ -218,6 +220,9 @@ DOC_SUMMARIES = {
     "mcp.md": "This server: its tools, its gates, and what it will not do.",
     "triage.md": "After deploying: the known failures triage recognises in "
                  "a namespace, and the fix for each.",
+    "security-review.md": "SECURITY-REVIEW.md, the document every bundle "
+                          "carries for an approval board, and opl_bundle "
+                          "review.",
 }
 
 
@@ -526,7 +531,7 @@ def _after_facts(facts):
 
 # -- opl_bundle ----------------------------------------------------------------
 
-BUNDLE_ACTIONS = ("generate", "read", "options", "images")
+BUNDLE_ACTIONS = ("generate", "read", "options", "images", "review")
 
 DESCRIPTIONS["opl_bundle"] = (
     "The manifests, written to a directory you name.\n"
@@ -548,6 +553,11 @@ DESCRIPTIONS["opl_bundle"] = (
     "into that registry, under the names the bundle's own mirror script "
     "uses (pass the bundle's options, e.g. output_format, for a docker "
     "bundle), which writes to it -- confirm before calling it that way.\n"
+    "  review   -- {facts, options?}: the SECURITY-REVIEW.md that the "
+    "bundle for these options carries, for a change-approval board or "
+    "security team. What runs, images, network egress, TLS trust, RBAC "
+    "rules, pod security, resources and secrets. Writes nothing and never "
+    "contains the AUTH_TOKEN.\n"
     "Applying the bundle is yours: `kubectl apply -f <out_dir>`. No "
     "action on this tool touches a cluster at all.")
 
@@ -610,6 +620,15 @@ def _bundle(action, args):
             platform=args.get("platform", "linux/amd64"),
             dry_run=bool(args.get("dry_run")), all_images=bool(args.get("all")),
             options=_no_secrets(args.get("options") or {}))
+
+    if action == "review":
+        facts, = _need(args, "facts")
+        options = _no_secrets(args.get("options") or {})
+        return {"document": core.security_review(facts, options),
+                "file": bundle_names.REVIEW_FILE,
+                "next": ["hand the document to whoever approves the "
+                         "deployment; every generated bundle carries the same "
+                         f"file as {bundle_names.REVIEW_FILE}"]}
 
     raise _unknown(action, BUNDLE_ACTIONS)
 

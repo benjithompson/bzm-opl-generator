@@ -276,6 +276,15 @@ def location_rows(facts, all_images=False):
     return rows
 
 
+def bundle_rows(facts, o):
+    """The rows one bundle's agent pulls: the location's, plus crane-hook's
+    where the bundle carries the check."""
+    rows = location_rows(facts)
+    if o.get("crane_hook") and "crane_hook" not in ignored_options(o):
+        rows.append(_hook_row(True))
+    return rows
+
+
 def catalogue_rows(release_pins=None):
     """Every image the catalogue knows, for no location in particular:
     `required` is None. `release_pins` moves each pinned image to the newest
@@ -290,7 +299,8 @@ def catalogue_rows(release_pins=None):
     return rows
 
 
-def _functionality_cell(r):
+def functionality_cell(r):
+    """A row's functionalities as a table cell."""
     if r["category"] == AGENT_CATEGORY:
         return "every"
     if r["category"] == HOOK_CATEGORY:
@@ -298,7 +308,8 @@ def _functionality_cell(r):
     return ", ".join(f"`{f}`" for f in r["functionalities"]) or "none"
 
 
-def _cell(text):
+def cell(text):
+    """Text safe inside a Markdown table cell."""
     return str(text).replace("|", "\\|")
 
 
@@ -352,9 +363,7 @@ def images_md(facts, o):
     """IMAGES.md: the images this bundle's agent pulls, what each is for, how
     to mirror them and how to keep a mirror current. Written from the facts
     alone -- no registry is asked, so no digest or size appears."""
-    rows = location_rows(facts)
-    if o.get("crane_hook") and "crane_hook" not in ignored_options(o):
-        rows.append(_hook_row(True))
+    rows = bundle_rows(facts, o)
     reg = (o.get("private_registry") or "").rstrip("/")
     harbor = facts.get("harbor_id")
     harbor_arg = "<harbor-id>" if is_placeholder(harbor) else harbor
@@ -365,8 +374,8 @@ def images_md(facts, o):
              "|---|---|---|---|---|"]
     for r in rows:
         ref = f"`{r['ref']}`" + (" (floating tag)" if r["tag_mutable"] else "")
-        table.append(f"| {ref} | {_cell(r['purpose'])} | {_functionality_cell(r)} "
-                     f"| {_cell(r['pulled_when'])} | {'yes' if r['verified'] else 'no'} |")
+        table.append(f"| {ref} | {cell(r['purpose'])} | {functionality_cell(r)} "
+                     f"| {cell(r['pulled_when'])} | {'yes' if r['verified'] else 'no'} |")
     floating = [r for r in rows if r["tag_mutable"]]
     floating_note = ""
     if floating:

@@ -141,6 +141,10 @@ its answer is what you raise the cluster request *with*
 `out/README.md` is written for whoever receives the bundle, and `out/IMAGES.md`
 lists the images the agent pulls and what each does; `out/profile.json`
 is the resolved options minus the token, replayed with `generate --profile`.
+`out/SECURITY-REVIEW.md` is for whoever approves the deployment: what the agent
+runs, the hosts it connects to, its RBAC rules, pod security, resources and
+secrets. `bzm-opl-gen review` prints it without writing a bundle
+([docs/security-review.md](docs/security-review.md)).
 
 Also: `--format helm` for a chart ([docs/helm.md](docs/helm.md)),
 `--format docker` for one agent as one container
@@ -227,6 +231,7 @@ option or only narrows it
 | [docs/service-virtualization.md](docs/service-virtualization.md) | ingress backends for `mockServices`, and `sv-expose` |
 | [docs/images.md](docs/images.md) | `images` — what each image does, mirroring, and checking a mirror |
 | [docs/preflight.md](docs/preflight.md) | `doctor`, `suggest`, `toolcheck`, engine sizing |
+| [docs/security-review.md](docs/security-review.md) | `review` — the document for a change-approval board, in every bundle |
 | [docs/ca-trust.md](docs/ca-trust.md) | `ca-check` — a corporate CA, checked against the network before deploying |
 | [docs/triage.md](docs/triage.md) | `triage` — after deploying, the known failures in a namespace and the fix for each |
 | [docs/live-test.md](docs/live-test.md) | the live rig: registry, proxy + CA, egress containment |

@@ -57,7 +57,7 @@ servers use.
 |---|---|
 | `opl_location` | `list` · `show` · `whoami` · `create` · `create_agent` · `reveal_token` · `delete`\* |
 | `opl_facts` | `gather` · `manual` |
-| `opl_bundle` | `generate` · `read` · `options` · `images` |
+| `opl_bundle` | `generate` · `read` · `options` · `images` · `review` |
 | `opl_plan` | `capacity` |
 | `opl_preflight` | `doctor` · `suggest` · `toolcheck` |
 | `opl_agent` | `status` · `triage` · `livetest`\* |

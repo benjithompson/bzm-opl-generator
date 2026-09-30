@@ -903,6 +903,16 @@ def _docker(args, dry_run):
     return " ".join(cmd)
 
 
+def security_review(facts, options=None):
+    """The SECURITY-REVIEW.md the bundle for `options` carries, rendered
+    without writing a file or resolving a token."""
+    try:
+        files = gen_mod.generate(facts, dict(options or {}))
+    except (ValueError, KeyError) as e:
+        raise BadRequest(str(e))
+    return files[bundle_names.REVIEW_FILE]
+
+
 def bundle_images(facts, all_images=False):
     """Every image reference this location's bundle will pull (crane first)."""
     return facts_mod.image_refs(facts, all_images=all_images)
