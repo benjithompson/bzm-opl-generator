@@ -964,6 +964,12 @@ class EngineHeapWatch:
         self.jvms = jvms
         self.done = any(j["jmeter"] for j in jvms)
 
+    def jmeter_xmx(self):
+        """The largest -Xmx read off a JMeter JVM, or None where none was read."""
+        found = [j["xmx"] for j in self.jvms or ()
+                 if j["jmeter"] and j["xmx"] is not None]
+        return max(found) if found else None
+
     def note(self):
         """The line to print. Only -Xmx values that were read are reported."""
         if self.jvms is None:

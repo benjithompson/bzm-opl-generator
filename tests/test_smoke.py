@@ -598,12 +598,46 @@ def test_a_test_that_does_not_run_here_is_not_started(cluster):
     assert not any(c[0] == "update_test" for c in account.calls)
 
 
-def test_a_script_test_s_target_is_unread_and_the_run_goes_ahead(cluster):
+def test_a_script_test_s_target_is_proven_by_the_engine_crane_starts(cluster):
+    """The API hides a script's locations; this run's engine shows them."""
     cluster(_engine_cluster(engine_pod()))
     account = FakeAccount(test={"name": "taurus script", "executions": []})
     doc = run(account, run_test=TEST_ID)
-    assert status(doc)["test-target"] == smoke.UNREAD
+    got = checks(doc)["test-target"]
+    assert got["status"] == PASS and "started an engine" in got["detail"]
     assert ("start_test", TEST_ID) in account.calls
+
+
+def test_a_script_test_s_target_stays_unread_when_no_engine_starts(cluster):
+    cluster(healthy_cluster())
+    account = FakeAccount(test={"name": "taurus script", "executions": []})
+    doc = run(account, run_test=TEST_ID, engine_timeout=5)
+    assert status(doc)["test-target"] == smoke.UNREAD
+    assert status(doc)["engine-pod"] == smoke.FAIL
+
+
+# Measured: Taurus starts JMeter with the heap on its own command line.
+JMETER = ("PID 606: /usr/bin/java -Xms3328m -Xmx6656m -jar "
+          "/shared/.bzt/jmeter-taurus/5.5/bin/ApacheJMeter.jar -j /tmp/log")
+JETPACK = ("PID 625: /usr/lib/jvm/java-11-openjdk-amd64/bin/java -jar "
+           "/usr/local/taurus-cloud/files/jetpack.jar /tmp/jetpack.properties")
+
+
+def test_a_heap_the_pod_spec_lacks_is_read_off_the_running_jvm(cluster):
+    fake = cluster(dict(_engine_cluster(engine_pod(env=[{"name": "X", "value": "1"}])),
+                        exec=(0, JMETER + "\n" + JETPACK + "\n")))
+    doc = run(FakeAccount(masters=("RUNNING", "ENDED")), run_test=TEST_ID)
+    got = checks(doc)["engine-heap"]
+    assert got["status"] == PASS, got
+    assert "6656Mi" in got["detail"] and "81%" in got["detail"]
+    assert "jetpack.jar" in got["detail"]
+    assert any("exec" in c for c in fake.cmds)
+
+
+def test_a_run_that_ends_before_the_jvm_is_read_leaves_the_heap_unread(cluster):
+    cluster(_engine_cluster(engine_pod(env=[{"name": "X", "value": "1"}])))
+    doc = run(FakeAccount(masters=("ENDED",)), run_test=TEST_ID)
+    assert status(doc)["engine-heap"] == smoke.UNREAD
 
 
 def test_no_test_starts_on_an_agent_that_already_failed(cluster):

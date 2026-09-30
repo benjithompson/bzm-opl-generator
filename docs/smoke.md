@@ -74,8 +74,9 @@ test whose locations do not include this location is a `FAIL`, and the test is
 not started. To point it here, open the test in BlazeMeter and choose the
 private location under Load Distribution. For a Taurus script, name it under
 `execution` as `locations: harbor-<harbor-id>: 1`. A Taurus script test keeps its
-locations in the script, which the API does not show, so its target is `UNREAD`
-and the run goes ahead.
+locations in the script, which the API does not show, so the run goes ahead.
+When crane starts an engine in the namespace for the run, that proves the target
+and `test-target` passes; when none starts, it stays `UNREAD`.
 
 No test starts when an earlier check failed or the agent is not reporting. The
 stage then shows `SKIP`.
@@ -87,7 +88,7 @@ stage then shows `SKIP`.
 | `engine-size` | the engine's limits are the ones in the ConfigMap |
 | `engine-qos` | the engine's QoS class is `Guaranteed`: its requests equal its limits |
 | `engine-config` | the engine image comes from your registry (with a private registry), and the CA bundle and `HTTPS_PROXY` reach the engine where they are configured |
-| `engine-heap` | the JVM heap is under the memory limit and more than half of it. Outside that range it is a `WARN` |
+| `engine-heap` | the JVM heap is under the memory limit and more than half of it. Outside that range it is a `WARN`. When the pod spec sets no `-Xmx`, the heap is read from the JMeter process while the run is under way: Taurus sets it there (measured: `-Xmx6656m` in an 8Gi engine). A run that ends before JMeter is read leaves it `UNREAD` |
 | `run-status` | the run ends as `ENDED` within `--timeout` |
 | `run-samples` | the run produced samples, and not every sample failed |
 | `engine-exit` | Taurus exited 0. An engine that stops partway can still end as `ENDED` |

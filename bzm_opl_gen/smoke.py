@@ -833,19 +833,25 @@ def engine_pod_checks(pod, data, cluster):
                      + ("; CA bundle mounted" if opts["ca_existing_configmap"] else "")
                      + ("; HTTPS_PROXY set" if opts["proxy"] else "")))
     heap = livetest.engine_heap_bytes(pod)
-    note = livetest.engine_heap_note(pod)
+    if heap is not None:
+        # Otherwise engine_run reads the heap off the running JVM.
+        out.append(heap_check(heap, pod, livetest.engine_heap_note(pod)))
+    return out
+
+
+def heap_check(heap, pod, note):
+    """The engine heap against the pod's memory limit; UNREAD where no heap
+    was read."""
     limit = next((parse_memory(m) for m in
                   ((c.get("resources") or {}).get("limits", {}).get("memory")
                    for c in pod["spec"].get("containers", [])) if m), None)
     if heap is None:
-        out.append(check("engine-heap", UNREAD, note))
-    elif limit is not None and (heap >= limit or heap * 2 <= limit):
-        out.append(check("engine-heap", WARN, note,
-                         "Set the engine heap on the location in BlazeMeter to "
-                         "about three quarters of the memory limit."))
-    else:
-        out.append(check("engine-heap", PASS, note))
-    return out
+        return check("engine-heap", UNREAD, note)
+    if limit is not None and (heap >= limit or heap * 2 <= limit):
+        return check("engine-heap", WARN, note,
+                     "Set the engine heap on the location in BlazeMeter to "
+                     "about three quarters of the memory limit.")
+    return check("engine-heap", PASS, note)
 
 
 def _engine_names(pods):
@@ -927,14 +933,28 @@ def engine_run(client, cli, namespace, test_id, harbor_id, cluster, blocked=None
                                 "The triage below reads crane's log, where a "
                                 "refused engine (quota, Pod Security, webhook) "
                                 "shows.")]
+        if target.status == UNREAD:
+            # One run at a time per agent, so this run's engine proves the target.
+            out[0] = check("test-target", PASS,
+                           f"crane started an engine in {namespace} for this "
+                           f"run, so the test's script names this location")
         out.append(check("engine-pod", PASS,
                          f"{pod['metadata']['name']} ({(pod.get('status') or {}).get('phase')})"))
         out += engine_pod_checks(pod, data, cluster)
+        # Taurus puts the JMeter heap on its own command line once the run is
+        # under way, so a heap the pod spec lacks is read off the running JVM.
+        watch = (None if livetest.engine_heap_bytes(pod) is not None
+                 else livetest.EngineHeapWatch(cli, namespace, pod))
         try:
-            status = livetest.wait_master_done(client, master_id, run_timeout)
+            status = livetest.wait_master_done(
+                client, master_id, run_timeout,
+                while_running=watch.poll if watch else None)
         except api.BzmApiError as e:
             out.append(check("run-status", UNREAD, f"the run's status could not be read: {e}"))
             return out
+        finally:
+            if watch:
+                out.append(heap_check(watch.jmeter_xmx(), pod, watch.note()))
         if status != "ENDED":
             out.append(check("run-status", FAIL,
                              f"the run is {status}, not ENDED, after {run_timeout}s"
