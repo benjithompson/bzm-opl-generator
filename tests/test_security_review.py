@@ -198,8 +198,10 @@ def test_unrestricted_engines_are_named_as_privileged():
 
 def test_the_hook_pod_is_judged_by_its_own_context():
     md = review({**BASE, "crane_hook": True})
-    assert "crane-hook check pod does not meet" in flat(md)
-    assert "capabilities dropped (drop: ALL)" in flat(md)
+    assert "crane-hook check pod meets the `restricted`" in flat(md)
+    assert security_review.restricted_gaps(["runAsNonRoot: true"]) == [
+        "allowPrivilegeEscalation: false", "capabilities dropped (drop: ALL)",
+        "seccompProfile: RuntimeDefault"]
 
 
 # -- network, trust, resources ---------------------------------------------------

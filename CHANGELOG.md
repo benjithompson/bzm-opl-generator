@@ -206,6 +206,12 @@ anything that breaks.
 
 ### Fixed
 
+- **The crane-hook check pod now meets the `restricted` Pod Security
+  Standard.** It drops every capability and sets the `RuntimeDefault` seccomp
+  profile, as crane's own pod does, in the manifests (`crane_hook`) and in the
+  chart's `helm test` pod. Before, a namespace that enforces `restricted`
+  refused the check pod. On OpenShift the SCC still assigns its UID.
+
 - **A bundle made without an account deployed an old agent.** Manual-entry
   facts named crane and the other images by `latest`, and on BlazeMeter's
   registry `latest` names releases far older than the newest, so the agent

@@ -38,6 +38,10 @@ spec:
   automountServiceAccountToken: true
   # Runs once; a failed check is reported by the exit code, not retried.
   restartPolicy: "Never"
+  # As crane's own pod: restricted Pod Security admission accepts it.
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: cranehook-ctr
       image: ${HOOK_IMAGE}
@@ -45,6 +49,9 @@ spec:
       securityContext:
         allowPrivilegeEscalation: false
         runAsNonRoot: true
+        capabilities:
+          drop:
+            - ALL
 ${HOOK_UID_BLOCK}      env:
         - name: WORKING_NAMESPACE
           value: ${NAMESPACE}
