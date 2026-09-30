@@ -41,6 +41,24 @@ NODES = "nodes"
 INGRESSCLASSES = "ingressclasses"
 SCOPED = "scoped"                 # limitrange, resourcequota and serviceaccount
                                   # from one `get`, hence one section
+# Admission policy engines. Each is a document, null (refused), or NOT_SERVED
+# where the API server serves no such resource: the engine is not installed.
+KYVERNO_CLUSTERPOLICIES = "kyverno_clusterpolicies"
+KYVERNO_POLICIES = "kyverno_policies"          # in the target namespace only
+GATEKEEPER_TEMPLATES = "gatekeeper_templates"
+GATEKEEPER_CONSTRAINTS = "gatekeeper_constraints"
+ADMISSION_POLICIES = "validating_admission_policies"
+ADMISSION_POLICY_BINDINGS = "validating_admission_policy_bindings"
+VALIDATING_WEBHOOKS = "validating_webhooks"   # always served: document or null
+
+# The value written for a resource type the API server does not serve, and
+# the words kubectl (and oc) use for it on stderr.
+NOT_SERVED = "not-served"
+NOT_SERVED_ERROR = "doesn't have a resource type"
+# The raw sections that may hold NOT_SERVED.
+MAY_BE_UNSERVED = (KYVERNO_CLUSTERPOLICIES, KYVERNO_POLICIES,
+                   GATEKEEPER_TEMPLATES, GATEKEEPER_CONSTRAINTS,
+                   ADMISSION_POLICIES, ADMISSION_POLICY_BINDINGS)
 
 # -- inventory: names only, never contents ------------------------------------
 
@@ -91,7 +109,11 @@ DOCUMENT = {
     COLLECTED_AT: {},
     NAMESPACE: {},
     CLI: {},
-    RAW: {NODES: {}, INGRESSCLASSES: {}, NAMESPACE: {}, SCOPED: {}},
+    RAW: {NODES: {}, INGRESSCLASSES: {}, NAMESPACE: {}, SCOPED: {},
+          KYVERNO_CLUSTERPOLICIES: {}, KYVERNO_POLICIES: {},
+          GATEKEEPER_TEMPLATES: {}, GATEKEEPER_CONSTRAINTS: {},
+          ADMISSION_POLICIES: {}, ADMISSION_POLICY_BINDINGS: {},
+          VALIDATING_WEBHOOKS: {}},
     INVENTORY: {CONFIGMAPS: {}, SECRETS: {}},
     PERMISSIONS: {
         NAMESPACED: {CREATE_SERVICEACCOUNTS: {}, CREATE_ROLES: {},

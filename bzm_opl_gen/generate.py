@@ -9,14 +9,16 @@ import json
 import os
 import re
 
-from . import image_catalog, render_docker, render_helm, render_manifests
+from . import (image_catalog, render_docker, render_helm, render_manifests,
+               security_review)
 from .bundle_env import extra_env
 from .bundle_names import (APPLY_ORDER, CHART_DIR, CONFIGMAP_FILE,
                            DOCKER_CA_FILE, DOCKER_COMPOSE_FILE,
                            DOCKER_ENV_FILE, DOCKER_RUN_FILE,
                            DOCKER_SV_CERT_FILE, DOCKER_SV_KEY_FILE,
                            HELM_CHART_FILE, HELM_VALUES_FILE, IMAGES_FILE,
-                           PREVIEW_TAIL, PROFILE_FILE, SECRET_FILE)
+                           PREVIEW_TAIL, PROFILE_FILE, REVIEW_FILE,
+                           SECRET_FILE)
 from .bundle_options import (DEFAULT_OPTIONS, OUTPUT_FORMATS,
                              auto_update, engine_size,
                              resolve_engine_limits, service_account)
@@ -70,11 +72,17 @@ def generate(facts, options):
 
     if o["output_format"] == "docker":
         out = render_docker.render(facts, o)
+        objects = None
     elif o["output_format"] == "helm":
         out = render_helm.render(facts, o, ca)
+        # The chart renders the same objects as the manifests (held equal by
+        # tests/helm_parity.py), so the review reads those.
+        objects = render_manifests.render(facts, o, ca, sv, sa)
     else:
         out = render_manifests.render(facts, o, ca, sv, sa)
+        objects = out
     out[IMAGES_FILE] = image_catalog.images_md(facts, o)
+    out[REVIEW_FILE] = security_review.review_md(facts, o, objects)
     out[PROFILE_FILE] = profile_json(o)
     return out
 

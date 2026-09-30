@@ -917,6 +917,37 @@ def test_livetest_is_refused_by_default():
     assert mcp_server.ENABLE_LIVETEST_ENV in text
 
 
+def test_smoke_reads_the_deployed_agent_and_says_what_is_left(fake_account,
+                                                             monkeypatch):
+    """Stages 1 to 3 need no gate: they only read."""
+    fake_account._harbor["ships"][0]["lastHeartBeat"] = time.time()
+    fake_account._harbor.update(slots=1, threadsPerEngine=500,
+                                funcIds=["performance"])
+    monkeypatch.setattr(kube, "cli_tool", lambda: "kubectl")
+    monkeypatch.setattr(kube, "quiet", lambda cmd, **k: subprocess.CompletedProcess(
+        cmd, 1, "", "Error from server (Forbidden): forbidden"))
+    body = ok("opl_agent", "smoke", {"namespace": "bzm", "harbor_id": "h1",
+                                     "ship_id": "s1"})
+    assert body["ok"] is True
+    assert [s["stage"] for s in body["stages"]] == ["cluster", "blazemeter",
+                                                    "configuration"]
+    assert "some reads were refused" in " ".join(body["next"])
+    assert "--run-test" in " ".join(body["next"])
+
+
+def test_smoke_starts_no_test_unless_the_live_rig_is_allowed(fake_account,
+                                                             monkeypatch):
+    called = []
+    monkeypatch.setattr(core, "smoke", lambda *a, **k: called.append(k) or {})
+    text = err("opl_agent", "smoke", {"namespace": "bzm", "run_test": 42})
+    assert mcp_server.ENABLE_LIVETEST_ENV in text and called == []
+    monkeypatch.setenv(mcp_server.ENABLE_LIVETEST_ENV, "1")
+    monkeypatch.setattr(core, "smoke", lambda *a, **k: called.append(k) or {
+        "ok": True, "counts": {}, "stages": []})
+    ok("opl_agent", "smoke", {"namespace": "bzm", "run_test": 42})
+    assert called[0]["run_test"] == 42
+
+
 def test_the_gates_are_read_when_called_not_when_built(fake_account, monkeypatch):
     """Otherwise a client that sets the variable still has to restart the
     server, and the refusal message would be a lie about what is needed."""
@@ -974,6 +1005,16 @@ def test_mirroring_images_is_annotated_rather_than_gated(fake_account):
               {"facts": FACTS, "mirror": "reg.local/bzm", "dry_run": True})
     assert body["dry_run"] is True
     assert any("push reg.local/bzm/" in c for c in body["commands"])
+
+
+def test_the_security_review_is_served_without_a_token():
+    """`review` answers the document a bundle carries, through a real client,
+    and it holds no AUTH_TOKEN."""
+    body = ok("opl_bundle", "review", {"facts": FACTS,
+                                       "options": {"namespace": "ns1"}})
+    assert body["file"] == bundle_names.REVIEW_FILE
+    assert body["document"].startswith("# Security review:")
+    assert "## Kubernetes permissions" in body["document"]
 
 
 def test_listing_images_runs_no_docker(fake_account, monkeypatch):
@@ -1145,3 +1186,39 @@ def test_mirroring_images_uses_the_bundle_s_own_names(fake_account):
                "options": {"output_format": "docker"}})
     assert any(c.endswith("reg.local/bzm/taurus-cloud:latest")
                for c in body["commands"] if " push " in c)
+
+
+def test_an_image_transfer_is_only_ever_a_plan(fake_account, monkeypatch,
+                                               tmp_path):
+    """Save and load pull and push gigabytes, so the MCP server answers with
+    the commands and runs none of them, whatever the arguments say."""
+    from bzm_opl_gen import image_transfer
+    monkeypatch.setattr(image_transfer, "available", lambda: {"skopeo"})
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail(
+        "an MCP transfer ran a command"))
+    save = str(tmp_path / "save")
+    body = ok("opl_bundle", "images", {"facts": FACTS, "transfer": "save",
+                                       "dir": save, "dry_run": False})
+    assert body["dry_run"] is True and body["manifest"] is None
+    assert all(" skopeo " in c for c in body["commands"])
+    assert not os.path.exists(save)
+    # A load plan reads a finished save's manifest and pushes nothing.
+    os.makedirs(save)
+    with open(os.path.join(save, image_transfer.MANIFEST_FILE), "w") as fh:
+        json.dump({"format": image_transfer.MANIFEST_FORMAT, "facts": FACTS,
+                   "all_images": False, "options": {}, "tool": "skopeo",
+                   "archive_format": image_transfer.OCI_ARCHIVE,
+                   "images": [dict(i, sha256="0" * 64, bytes=1)
+                              for i in body["images"]]}, fh)
+    plan = ok("opl_bundle", "images", {"transfer": "load", "dir": save,
+                                       "mirror": "reg.local/bzm"})
+    assert plan["dry_run"] is True and plan["verify"] is None
+    assert plan["commands"][0].endswith("docker://reg.local/bzm/crane:3.7.55")
+
+
+def test_an_image_transfer_needs_an_absolute_dir(fake_account):
+    assert "absolute" in err("opl_bundle", "images",
+                             {"facts": FACTS, "transfer": "save",
+                              "dir": "relative/save"})
+    assert "'save' or 'load'" in err("opl_bundle", "images",
+                                     {"transfer": "copy", "dir": "/abs"})

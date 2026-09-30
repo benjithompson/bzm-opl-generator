@@ -60,6 +60,10 @@ spec:
   serviceAccountName: {{ include "bzm-opl.serviceAccountName" . }}
   automountServiceAccountToken: true
   restartPolicy: "Never"
+  {{- /* As crane's own pod: restricted Pod Security admission accepts it. */}}
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: cranehook-ctr
       image: {{ include "bzm-opl.hookImage" . | quote }}
@@ -67,6 +71,10 @@ spec:
       securityContext:
         allowPrivilegeEscalation: false
         runAsNonRoot: true
+        capabilities:
+          drop:
+            - ALL
+        {{- /* On OpenShift the SCC assigns the UID. */}}
         {{- if ne .Values.platform "openshift" }}
         runAsUser: {{ .Values.runAsUser }}
         runAsGroup: {{ .Values.runAsUser }}

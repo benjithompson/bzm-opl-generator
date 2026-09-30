@@ -1,4 +1,4 @@
-# Images: what each one does, mirroring, and keeping a mirror current
+# Images: what each one does, mirroring, air-gapped sites, and keeping a mirror current
 
 A private location pulls BlazeMeter's container images from
 `gcr.io/verdant-bulwark-278`. A cluster that cannot reach that registry needs
@@ -115,6 +115,117 @@ Keep the names the script uses. `images --pull --mirror <registry>` does the
 same copy from this tool, to the same names; pass the bundle's
 `--profile profile.json` for a docker bundle's names.
 
+## Air-gapped sites
+
+The mirror script and `--pull --mirror` need one host that reaches both
+BlazeMeter's registry and yours. An air-gapped site has no such host. For that
+site, save the images to files on a connected machine, carry the files
+across, and load them into your registry on the far side.
+
+1. On a connected machine, save the images:
+
+   ```
+   bzm-opl-gen images --api-key api-key.json --harbor-id <harbor-id> \
+       --save /media/bzm-images --profile out/profile.json
+   ```
+
+   The command writes one archive file per image, `images-manifest.json` and
+   `SHA256SUMS` into the directory. It saves the images the mirror script
+   copies: the agent, the images the location's funcIds select (every image
+   with `--all`), and the `crane_hook` image when the profile enables it.
+   `--facts facts.json` works in place of the API key.
+2. Carry the whole directory to the air-gapped side. Check it there with
+   `sha256sum -c SHA256SUMS` if you want to; the load checks it again.
+3. On the air-gapped side, load the images into your registry:
+
+   ```
+   bzm-opl-gen images --load /media/bzm-images --mirror registry.example.com/blazemeter
+   ```
+
+   The load needs no API key and no network access to BlazeMeter. It pushes
+   each image to the name the agent asks for, the same name the mirror script
+   uses. Then it runs the `--verify` check and reports each image as
+   `present`, `missing` or `unread`. It exits 1 when an image is missing.
+
+Add `--dry-run` to either command to print the commands and run none.
+
+### The tools
+
+| tool | used when | the archive |
+|---|---|---|
+| `skopeo` | on `PATH` (preferred) | `oci-archive`: the compressed layers, copied from BlazeMeter's registry with no docker daemon |
+| `docker` | skopeo is not on `PATH`, or `--tool docker` | `docker save` output: the layers uncompressed, so the files are larger |
+
+- Both copy the `linux/amd64` image. BlazeMeter publishes no other.
+- skopeo copies each image by the digest it read from the registry just before,
+  so the file holds exactly the image the manifest names.
+- An `oci-archive` file loads only with skopeo. A `docker save` file loads
+  with skopeo or with `docker load`, `docker tag` and `docker push`.
+- A `docker save` file holds the layers uncompressed, so the push compresses
+  them again. The image in your registry then has a digest different from
+  the digest in BlazeMeter's registry and in `images-manifest.json`. This was
+  measured: `crane:3.7.55` pushed from a `docker save` file got the digest
+  `sha256:3004be93…`, not the digest BlazeMeter's registry gives. The agent
+  pulls by tag, so a different digest does not stop it. Compare the tag, not
+  the digest, when you check a mirror.
+- The command prints each command before it runs it, prefixed `+ `.
+- skopeo runs with `TMPDIR` set to the save directory, because it unpacks each
+  image there for a moment. A small `/var/tmp` then does not stop it.
+
+### What the save writes
+
+`images-manifest.json` records, for each image:
+
+| field | meaning |
+|---|---|
+| `ref` | the image in BlazeMeter's registry |
+| `digest` | the digest the registry answered with at save time; empty when the registry could not be read |
+| `size_mb` | the compressed linux/amd64 size the registry answered with; empty when it could not be read |
+| `source` | where the version came from: `location-versions`, `agent-inventory`, `registry-newest` or `catalogue` |
+| `archive`, `bytes`, `sha256` | the file, its length and its SHA-256, measured after the save |
+| `target_path` | the name below your registry prefix that the agent asks for, for the profile the save used |
+
+It also records the facts and the profile the save used, without the
+AUTH_TOKEN or the virtual-service key, so the load needs neither the account nor
+the bundle. The load uses the recorded profile unless you give `--profile`.
+
+The save writes `images-manifest.json` last. A save that stops part of the way
+leaves no manifest, and the load refuses that directory. Run the save again.
+
+### Checks
+
+| check | when | result |
+|---|---|---|
+| free space | before the save | The need is the sum of the compressed sizes the registry answered with. skopeo also needs space for the largest image a second time. Less free space than that stops the save. When a size could not be read, or the tool is docker (its files are uncompressed, by an amount nobody publishes), the command warns and continues. It never states a need it did not read. |
+| checksums | before the first push | Each archive must be present, have the length and SHA-256 the save recorded, and agree with `SHA256SUMS`. One damaged file stops the load before anything is pushed, and the message names the file. |
+| free space | before a skopeo load | skopeo unpacks each archive in the save directory. Less free space than the largest archive stops the load. |
+| the registry | after the load | the `--verify` check below |
+
+### Credentials and certificates
+
+- Pulling from BlazeMeter's registry needs no credentials.
+- skopeo pushes with `BZM_REGISTRY_USER` and `BZM_REGISTRY_PASSWORD` when you
+  set them. The command writes them to a temporary auth file that only you can
+  read, and deletes it after. The password is never on a command line. Without
+  the two variables, skopeo uses its own login (`skopeo login`) or your docker
+  config.
+- docker pushes with the `docker login` already in place.
+- `--ca-file <pem>` reaches skopeo as a certificate directory. docker reads a
+  registry CA only from `/etc/docker/certs.d/<host>/ca.crt`, so for docker
+  `--ca-file` applies to the check after the push only.
+- `--mirror` takes a scheme. `--mirror http://registry.local:5000/bzm` is a
+  registry that serves plain HTTP. The pushed names never carry the scheme,
+  and the check after the push uses the same scheme as the push. Without a
+  scheme, the rule is docker's own: `localhost` and `127.0.0.0/8` are plain
+  HTTP, and every other host is HTTPS. Write `https://localhost:…` for a
+  local registry that serves TLS.
+- docker pushes to a plain-HTTP registry other than `localhost` and
+  `127.0.0.0/8` only when the registry is in the daemon's
+  `insecure-registries`. The load says so when this applies.
+
+The MCP server's `opl_bundle images` plans a save or a load
+(`transfer: "save"` or `"load"`) and returns the commands. It never runs them.
+
 ## Checking a mirror
 
 ```
@@ -139,6 +250,9 @@ pushes it to, and reports it as `present`, `missing` or `unread`:
   command-line value.
 - `--ca-file <pem>` trusts a registry whose certificate your own CA signed.
 - Prefix the registry with `http://` for a registry that serves plain HTTP.
+  Without a prefix, `localhost` and `127.0.0.0/8` are plain HTTP, as docker
+  treats them, and every other host is HTTPS. Prefix `https://` for a local
+  registry that serves TLS.
 
 ## Keeping a mirror current
 

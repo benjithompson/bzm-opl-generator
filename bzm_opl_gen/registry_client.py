@@ -102,6 +102,28 @@ def split_ref(ref):
     return scheme, host, path, tag
 
 
+def is_loopback(host):
+    """localhost or 127.0.0.0/8, with or without a port: the registries
+    docker pushes to without TLS unless told otherwise."""
+    name = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    if name == "localhost":
+        return True
+    parts = name.split(".")
+    return (len(parts) == 4 and parts[0] == "127"
+            and all(p.isdigit() and int(p) < 256 for p in parts))
+
+
+def registry_scheme(registry):
+    """The scheme to speak to a registry prefix: its own `http://` or
+    `https://`, else docker's rule -- plain HTTP for localhost and
+    127.0.0.0/8, HTTPS for every other host."""
+    for prefix in ("http://", "https://"):
+        if registry.startswith(prefix):
+            return prefix[:-3]
+    return "http" if is_loopback(strip_scheme(registry).split("/")[0]) \
+        else "https"
+
+
 def strip_scheme(registry):
     """A registry prefix as an image reference writes it: no scheme, no
     trailing slash."""

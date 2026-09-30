@@ -10,24 +10,30 @@ Subcommands:
   generate     render manifests from facts + customer parameters
   doctor       preflight a cluster: can it schedule the location's concurrency?
   triage       after deploying: name the known failures in the namespace, with fixes
+  smoke        after deploying: check the agent in the cluster, in BlazeMeter and
+               in its configuration; --run-test starts one real engine run
   suggest      what a cluster's evidence implies about the generate options
   ca-check     does a CA bundle verify the chain this network presents?
   sv-expose    emit a working Service+Ingress per deployed virtual service
   images       list / explain / pull / mirror / verify the images the location
-               actually needs
+               actually needs; save / load carry them to an air-gapped site
+  review       print the security review a bundle carries, for an approval
+               board
   livetest     start a bundle for real (a cluster, or docker compose) and
                verify the agent comes online
 """
 
 import argparse
 import collections
+import contextlib
 import json
 import os
 import sys
 
 from . import (api, bundle_check, ca_check, core, doctor, facts as facts_mod,
-               generate as gen_mod, kube, livetest, plan, suggest as suggest_mod,
-               sv_read, triage as triage_mod, verdict, workstation)
+               generate as gen_mod, kube, livetest, plan, smoke as smoke_mod,
+               suggest as suggest_mod, sv_read, triage as triage_mod, verdict,
+               workstation)
 from . import bundle_names, bundle_options, ca_trust, footprint, service_virt
 
 
@@ -460,6 +466,29 @@ def cmd_triage(a):
     sys.exit(0 if doc["ok"] else 1)
 
 
+def cmd_smoke(a):
+    """Check an agent that is already deployed; --run-test also starts a test.
+
+    Exit 1 for a FAIL only: an unread, skipped or warned check exits 0, as in
+    doctor and triage. With --json, progress goes to stderr."""
+    out = sys.stderr if a.json else sys.stdout
+
+    def notify(line):
+        print(line, file=out, flush=True)
+
+    # The engine-run helpers print progress; stdout stays the JSON document.
+    with contextlib.redirect_stdout(out):
+        doc = core.smoke(_client(a), a.namespace, harbor_id=a.harbor_id,
+                         ship_id=a.ship_id, run_test=a.run_test,
+                         engine_timeout=a.engine_timeout,
+                         run_timeout=a.timeout, notify=notify)
+    if a.json:
+        print(json.dumps(doc, indent=2))
+    else:
+        smoke_mod.report(doc)
+    sys.exit(0 if doc["ok"] else 1)
+
+
 def cmd_toolcheck(a):
     """Preflight the workstation against the rig flags you intend to pass."""
     opts = {"cluster": a.cluster, "local_registry": a.local_registry,
@@ -548,8 +577,11 @@ def _profile_options(a):
 
 
 def _verify(f, a):
-    out = core.verify_mirror(f, a.verify, options=_profile_options(a),
-                             ca_file=a.ca_file)
+    _print_verify(core.verify_mirror(f, a.verify, options=_profile_options(a),
+                                     ca_file=a.ca_file))
+
+
+def _print_verify(out):
     print(f"checking {out['registry']} (credentials: {out['credentials']})")
     for i in out["images"]:
         state = i["state"].upper() if i["state"] == "missing" else i["state"]
@@ -565,7 +597,65 @@ def _verify(f, a):
         sys.exit(1)
 
 
+def _announce(text):
+    print(f"+ {text}", flush=True)
+
+
+def _print_transfer(out):
+    """A save's or a load's plan and outcome; the commands were announced as
+    they ran, so a dry run prints them here."""
+    for c in out["commands"] if out["dry_run"] else []:
+        print(f"DRY-RUN: {c}")
+    for note in out.get("notes") or []:
+        print(f"note: {note}")
+    sys.stdout.flush()
+    for w in out["warnings"]:
+        print(f"WARN: {w}", file=sys.stderr)
+
+
+def _save(f, a):
+    out = core.save_images(f, a.save, options=_profile_options(a),
+                           all_images=a.all, tool=a.tool, dry_run=a.dry_run,
+                           announce=_announce)
+    space = out["space"]
+    print(f"saving {len(out['images'])} images to {out['directory']} with "
+          f"{out['tool']} ({out['archive_format']})")
+    for i in out["images"]:
+        size = f"{i['size_mb']} MB" if i["size_mb"] is not None else "size unread"
+        print(f"  {i['archive']}  <- {i['ref']}  ({size}, {i['source']})")
+    print(f"disk: {space['state']}"
+          + (f", {space['free_mb']} MB free" if space["free_mb"] is not None
+             else "")
+          + (f", {space['need_mb']} MB needed by the {space['sizes_read']} of "
+             f"{space['images']} sizes read" if space["sizes_read"]
+             else ", no image size read"))
+    _print_transfer(out)
+    if out["manifest"]:
+        print(f"wrote {out['manifest']} and {out['sums']}. Carry the whole "
+              f"directory across, then run images --load on the far side.")
+
+
+def _load(a):
+    out = core.load_images(a.load, a.mirror, options=_profile_options(a),
+                           tool=a.tool, ca_file=a.ca_file, dry_run=a.dry_run,
+                           announce=_announce)
+    print(f"loading {len(out['images'])} images from {out['directory']} into "
+          f"{out['registry']} with {out['tool']}; checksums {out['checksums']}")
+    for i in out["images"]:
+        print(f"  {i['archive']}  -> {i['target']}")
+    _print_transfer(out)
+    if out["verify"]:
+        _print_verify(out["verify"])
+
+
 def cmd_images(a):
+    if a.save and a.load:
+        sys.exit("--save and --load are two ends of one transfer; give one")
+    if a.load:
+        if not a.mirror:
+            sys.exit("--load needs --mirror <registry>, the registry the "
+                     "agent pulls from")
+        return _load(a)
     f = facts_mod.load(a.facts) if a.facts else None
     if a.explain and f is None and not a.harbor_id:
         # No location named: the whole catalogue.
@@ -575,6 +665,8 @@ def cmd_images(a):
         f = core.gather_facts(_client(a), a.harbor_id)
     if a.verify:
         return _verify(f, a)
+    if a.save:
+        return _save(f, a)
     if a.explain:
         _print_explain(core.image_catalog(f, lookup=a.lookup,
                                           all_images=a.all), a.format)
@@ -590,6 +682,16 @@ def cmd_images(a):
                                   dry_run=a.dry_run, all_images=a.all,
                                   options=_profile_options(a))["commands"]:
         print(("DRY-RUN: " if a.dry_run else "+ ") + cmd)
+
+
+def cmd_review(a):
+    doc = core.security_review(facts_mod.load(a.facts), _profile_options(a))
+    if not a.output:
+        print(doc, end="")
+        return
+    with open(a.output, "w") as fh:
+        fh.write(doc)
+    print(f"wrote {a.output}")
 
 
 def _regenerator(facts, a, ship_id, auth_token):
@@ -1175,6 +1277,35 @@ def main():
                          "warnings, and what could not be read")
     tr.set_defaults(fn=cmd_triage)
 
+    sm = sub.add_parser("smoke",
+                        help="after deploying: check the agent in the cluster, "
+                             "in BlazeMeter and in its configuration")
+    sm.add_argument("--api-key", help="api-key.json (default: the environment "
+                                      "or the saved key)")
+    sm.add_argument("-n", "--namespace", required=True,
+                    help="the namespace the agent was deployed to")
+    sm.add_argument("--harbor-id", help="the location id (default: read from "
+                                        "the deployed ConfigMap)")
+    sm.add_argument("--ship-id", help="the agent id (default: read from the "
+                                      "deployed ConfigMap)")
+    sm.add_argument("--run-test", metavar="TEST_ID",
+                    help="also START this test, a real run in your account, and "
+                         "check the engine crane creates for it. The test must "
+                         "already run on this location; it is never changed")
+    sm.add_argument("--engine-timeout", type=int,
+                    default=smoke_mod.DEFAULT_ENGINE_TIMEOUT, metavar="SECONDS",
+                    help="with --run-test: how long to wait for the engine pod "
+                         f"(default {smoke_mod.DEFAULT_ENGINE_TIMEOUT})")
+    sm.add_argument("--timeout", type=int, default=smoke_mod.DEFAULT_RUN_TIMEOUT,
+                    metavar="SECONDS",
+                    help="with --run-test: how long to wait for the run to end "
+                         "before stopping it "
+                         f"(default {smoke_mod.DEFAULT_RUN_TIMEOUT})")
+    sm.add_argument("--json", action="store_true",
+                    help="the report as data: every check by stage, and the "
+                         "triage when a check failed")
+    sm.set_defaults(fn=cmd_smoke)
+
     w = sub.add_parser("toolcheck",
                        help="does this workstation have what livetest shells "
                             "out to? (run before a 12-20 minute rig run)")
@@ -1186,8 +1317,8 @@ def main():
                    help="check the proxy rig too")
     w.set_defaults(fn=cmd_toolcheck)
 
-    i = sub.add_parser("images", help="list/explain/pull/mirror/verify the "
-                                      "location's images")
+    i = sub.add_parser("images", help="list/explain/pull/mirror/verify/"
+                                      "save/load the location's images")
     i.add_argument("--facts")
     i.add_argument("--api-key")
     i.add_argument("--harbor-id")
@@ -1211,15 +1342,43 @@ def main():
                         "the mirror script pushes it to; exits 1 if one is "
                         "missing. Credentials come from BZM_REGISTRY_USER and "
                         "BZM_REGISTRY_PASSWORD, or the docker config. Prefix "
-                        "http:// for a plain-HTTP registry")
+                        "http:// for a plain-HTTP registry; localhost and "
+                        "127.0.0.0/8 are plain HTTP unless prefixed https://, "
+                        "as docker treats them")
+    i.add_argument("--save", metavar="DIR",
+                   help="for a site that cannot reach BlazeMeter's registry: "
+                        "write each image to an archive file in DIR, with "
+                        "images-manifest.json and SHA256SUMS. Carry DIR "
+                        "across and run --load there")
+    i.add_argument("--load", metavar="DIR",
+                   help="push the archives a --save wrote in DIR to --mirror "
+                        "REGISTRY under the names the agent asks for, after "
+                        "checking every checksum, then check the registry. "
+                        "Needs no API key. REGISTRY takes http:// or https:// "
+                        "as --verify does")
+    i.add_argument("--tool", choices=["skopeo", "docker"],
+                   help="with --save or --load: the program that copies the "
+                        "images (default: skopeo when on PATH, else docker)")
     i.add_argument("--ca-file", metavar="PEM",
-                   help="with --verify: the CA that signed REGISTRY's "
-                        "certificate")
+                   help="with --verify or --load: the CA that signed "
+                        "REGISTRY's certificate")
     i.add_argument("--profile", metavar="PROFILE_JSON",
-                   help="with --verify or --mirror: the bundle's profile.json, "
-                        "whose format and crane_hook decide the names "
-                        "(default: a Kubernetes bundle)")
+                   help="with --verify, --mirror, --save or --load: the "
+                        "bundle's profile.json, whose format and crane_hook "
+                        "decide the names (default: a Kubernetes bundle; for "
+                        "--load, the profile the save recorded)")
     i.set_defaults(fn=cmd_images)
+
+    r = sub.add_parser("review",
+                       help="print the security review (SECURITY-REVIEW.md) "
+                            "that the bundle for these options carries")
+    r.add_argument("--facts", default="facts.json")
+    r.add_argument("--profile", metavar="PROFILE_JSON",
+                   help="the options, such as a bundle's profile.json "
+                        "(default: every option at its default)")
+    r.add_argument("-o", "--output", metavar="FILE",
+                   help="write the document to FILE instead of stdout")
+    r.set_defaults(fn=cmd_review)
 
     t = sub.add_parser("livetest", help="start a bundle for real, verify the "
                                         "agent comes online")

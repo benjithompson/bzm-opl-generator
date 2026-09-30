@@ -830,6 +830,22 @@ def test_the_cluster_check_follows_the_platform_uid_rule():
     assert "runAsUser" not in ocp["cranehook"]["spec"]["containers"][0]["securityContext"]
 
 
+@pytest.mark.parametrize("platform", ["k8s", "openshift"])
+def test_the_cluster_check_pod_has_cranes_restricted_posture(platform):
+    """crane-hook's pod carries what restricted Pod Security admission
+    requires, as crane's own pod does, on both platforms."""
+    files = gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True,
+                                 "platform": platform})
+    hook = _hook_docs(files)["cranehook"]["spec"]
+    crane = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
+    assert hook["securityContext"] == crane["securityContext"] == \
+        {"seccompProfile": {"type": "RuntimeDefault"}}
+    sc = hook["containers"][0]["securityContext"]
+    assert sc == crane["containers"][0]["securityContext"]
+    assert sc["runAsNonRoot"] is True and sc["allowPrivilegeEscalation"] is False
+    assert sc["capabilities"] == {"drop": ["ALL"]}
+
+
 def test_the_cluster_check_is_told_about_the_ingress_it_should_check():
     """crane-hook gets the SV ingress env only when an ingress is
     configured."""
