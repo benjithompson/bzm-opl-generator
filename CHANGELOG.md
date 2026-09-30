@@ -254,6 +254,37 @@ anything that breaks.
 
 ### Fixed
 
+- **Engines could not pull from a registry that needs credentials.** Crane
+  does not pass its `pull_secret` to the engine pods it creates: they run as
+  the namespace's `default` ServiceAccount with no pull secret (measured on
+  crane 3.8.0). With `pull_secret` set, the README now creates the Secret and
+  adds it to that ServiceAccount without replacing the pull secrets already
+  there. The option docs, chart comments, `triage` and the security review say
+  the same. `registry_auth` is documented by BlazeMeter for docker agents only.
+
+- **`triage` missed a crane that cannot reach BlazeMeter.** Behind an
+  unreachable proxy, crane waits at its first call to BlazeMeter and its pod
+  still shows Ready. `triage` now reports it and names the proxy, and `smoke`
+  names the proxy in its fix. `triage` also reports findings from deleted pods
+  as history notes that do not fail, explains the ServiceAccount event that
+  alphabetical apply order causes, and no longer lists harmless or duplicate
+  lines as unrecognised. It never prints an AUTH_TOKEN or a URL password.
+
+- **A token with a line break was accepted.** `auth_token` holding whitespace
+  or more than one line is refused with a message that does not show it. Crane
+  sent it as written, BlazeMeter answered 404, and the agent restarted as if
+  its token had been revoked.
+
+- **`livetest` could not read the engine heap.** With no `engineXmx` on the
+  location, Taurus sets the JMeter heap inside the engine (measured:
+  `-Xmx6656m` in an 8Gi engine), so the pod spec never holds it. `livetest`
+  now reads it from the running JVM, and prints `heartbeat=never` for an agent
+  that has not reported.
+
+- **`SECURITY-REVIEW.md` did not say that crane logs its AUTH_TOKEN** at
+  startup (measured on crane 3.8.0). It now does, with the RBAC and log
+  shipping controls that keep the token private.
+
 - **The crane-hook check pod now meets the `restricted` Pod Security
   Standard.** It drops every capability and sets the `RuntimeDefault` seccomp
   profile, as crane's own pod does, in the manifests (`crane_hook`) and in the
