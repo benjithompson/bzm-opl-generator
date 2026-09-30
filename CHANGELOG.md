@@ -13,6 +13,19 @@ anything that breaks.
 
 ### Added
 
+- **`doctor` reads admission policy engines.** Kyverno policies, Gatekeeper
+  constraints and ValidatingAdmissionPolicy bindings that enforce on the
+  namespace are judged against the pods the bundle and crane create. A policy
+  that refuses crane or the engine pods (a `latest` tag, a registry not on the
+  allowed list, a read-only root filesystem, a missing label) is a FAIL that
+  names the image or field and the option or policy exception that fixes it.
+  Policies in audit mode, or scoped to other namespaces, are counted and not
+  judged. Other validating webhooks on pods are named for review. An engine
+  that is not installed is a PASS; one whose policies could not be read is a
+  WARN. The evidence collector reads the same objects, and writes
+  `"not-served"` for a policy resource the cluster does not have. See
+  [docs/preflight.md](docs/preflight.md#admission-policy-engines).
+
 - **Every bundle carries `IMAGES.md`.** It lists the images the agent pulls,
   what each one does, which functionality needs it, when it is pulled, and
   whether that was seen in a live run. With `--private-registry` it also lists

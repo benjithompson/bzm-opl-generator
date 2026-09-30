@@ -23,7 +23,7 @@ import functools
 import json
 import os
 
-from . import kube, plan, verdict
+from . import admission_policy, kube, plan, verdict
 # Aliased: every check takes a `facts` argument, and evaluate() an `evidence`.
 from . import evidence as evidence_mod
 from . import facts as facts_mod
@@ -900,6 +900,82 @@ def check_admission(facts, opts, cluster):
                   f"(a cluster-wide default may still apply)")]
 
 
+# -- admission policy engines -------------------------------------------------
+#
+# Each reads its engine's objects cluster-wide, plus the namespace (for
+# namespace selectors) and its LimitRanges (defaults reach crane's test-job
+# pods before a policy judges them). Those two have their own checks' unread
+# verdicts, so here a null one only makes a policy's reach undecided.
+
+def _policy_unread(what, rbac):
+    return (f"{what} could not be read, so whether one refuses the pods crane "
+            f"creates is unverified. A refusal lands after the agent reads "
+            f"online, so a run hangs. Reading them needs {rbac}")
+
+
+@reads("kyverno_clusterpolicies", "policy: Kyverno",
+       _policy_unread("the cluster's Kyverno ClusterPolicies",
+                      "list on clusterpolicies.kyverno.io"))
+@reads("kyverno_policies")
+@reads("namespace")
+@reads("limitranges")
+def check_kyverno(facts, opts, cluster):
+    """Kyverno policies in Enforce mode that reach the namespace, judged
+    against the pods the bundle and crane create."""
+    return admission_policy.kyverno_checks(
+        cluster["kyverno_clusterpolicies"], cluster["kyverno_policies"],
+        cluster["namespace"], cluster["limitranges"], facts, opts)
+
+
+@reads("gatekeeper_constraints", "policy: Gatekeeper",
+       _policy_unread("the cluster's Gatekeeper constraints",
+                      "list on the constraints.gatekeeper.sh resources"))
+@reads("gatekeeper_templates")
+@reads("namespace")
+@reads("limitranges")
+def check_gatekeeper(facts, opts, cluster):
+    """Gatekeeper constraints with enforcementAction deny that reach the
+    namespace. Templates only describe a kind this module does not know."""
+    return admission_policy.gatekeeper_checks(
+        cluster["gatekeeper_constraints"], cluster["gatekeeper_templates"],
+        cluster["namespace"], cluster["limitranges"], facts, opts)
+
+
+# One sentence for either half: a policy is judged only with its bindings.
+_VAP_UNREAD = _policy_unread(
+    "the cluster's ValidatingAdmissionPolicies or their bindings",
+    "list on validatingadmissionpolicies and "
+    "validatingadmissionpolicybindings")
+
+
+@reads("validating_admission_policies", "policy: ValidatingAdmissionPolicy",
+       _VAP_UNREAD)
+@reads("validating_admission_policy_bindings",
+       "policy: ValidatingAdmissionPolicy", _VAP_UNREAD)
+@reads("namespace")
+@reads("limitranges")
+def check_admission_policies(facts, opts, cluster):
+    """ValidatingAdmissionPolicies bound with validationActions Deny."""
+    return admission_policy.vap_checks(
+        cluster["validating_admission_policies"],
+        cluster["validating_admission_policy_bindings"],
+        cluster["namespace"], cluster["limitranges"], facts, opts)
+
+
+@defers_to(check_kyverno, check_gatekeeper)
+@reads("validating_webhooks", "policy: other webhooks",
+       "the cluster's validating webhook configurations could not be read, "
+       "so whether another admission webhook inspects the pods crane creates "
+       "is unverified. Reading them needs list on "
+       "validatingwebhookconfigurations")
+@reads("namespace")
+def check_policy_webhooks(facts, opts, cluster):
+    """Other validating webhooks on pod creation, named: what they enforce
+    cannot be read. Kyverno's and Gatekeeper's are theirs to report."""
+    return admission_policy.webhook_checks(cluster["validating_webhooks"],
+                                           cluster["namespace"], opts)
+
+
 # -- service account ----------------------------------------------------------
 
 def _brings_its_own_account(opts):
@@ -1120,7 +1196,40 @@ def gather_cluster(cli, namespace):
         "serviceaccounts": accounts,
         # kget_named: {} for "not created yet", None for "not allowed to look".
         "namespace": kube.kget_named(cli, None, "ns", namespace),
+        **_gather_policies(cli, namespace),
     }
+
+
+# Policy sections and what `get` reads each with; namespace-scoped only for
+# Kyverno's Policy, which applies to its own namespace alone.
+POLICY_READS = (
+    (evidence_mod.KYVERNO_CLUSTERPOLICIES, False, "clusterpolicies.kyverno.io"),
+    (evidence_mod.KYVERNO_POLICIES, True, "policies.kyverno.io"),
+    (evidence_mod.GATEKEEPER_TEMPLATES, False,
+     "constrainttemplates.templates.gatekeeper.sh"),
+    # A category: every constraint kind the templates define.
+    (evidence_mod.GATEKEEPER_CONSTRAINTS, False, "constraints"),
+    (evidence_mod.ADMISSION_POLICIES, False,
+     "validatingadmissionpolicies.admissionregistration.k8s.io"),
+    (evidence_mod.ADMISSION_POLICY_BINDINGS, False,
+     "validatingadmissionpolicybindings.admissionregistration.k8s.io"),
+)
+
+
+def _served_items(document):
+    """`.items`, NOT_SERVED passed through, or None for a failed read."""
+    if document == evidence_mod.NOT_SERVED:
+        return document
+    return _items(document)
+
+
+def _gather_policies(cli, namespace):
+    sections = {key: _served_items(kube.kget_served(
+                    cli, namespace if namespaced else None, kind))
+                for key, namespaced, kind in POLICY_READS}
+    sections[evidence_mod.VALIDATING_WEBHOOKS] = _items(
+        kube.kget(cli, None, "validatingwebhookconfigurations"))
+    return sections
 
 
 # -- evidence file ------------------------------------------------------------
@@ -1166,6 +1275,10 @@ def cluster_from_evidence(doc, namespace=None):
         "serviceaccounts": accounts,
         # Null, not {}: {} would tell check_admission the namespace is missing.
         "namespace": _section(raw, evidence_mod.NAMESPACE),
+        **{key: _served_items(_section(raw, key))
+           for key in evidence_mod.MAY_BE_UNSERVED},
+        evidence_mod.VALIDATING_WEBHOOKS: _items(
+            _section(raw, evidence_mod.VALIDATING_WEBHOOKS)),
     }
     # Probing needs a pod in the namespace, which a collector must not create;
     # {} is check_egress's "not probed".
@@ -1176,6 +1289,9 @@ def _section(raw, key):
     """One `raw` section as collected, or None; anything else is a ValueError
     (files come back by mail, sometimes trimmed)."""
     document = raw.get(key)
+    if (key in evidence_mod.MAY_BE_UNSERVED
+            and document == evidence_mod.NOT_SERVED):
+        return document
     if document is not None and not isinstance(document, dict):
         raise ValueError(f"cluster evidence: raw.{key} should be the kubectl "
                          f"document as collected, or null for a section that "
@@ -1387,8 +1503,9 @@ def _oneshot_curl(cli, namespace, targets, opts, ca_pem=None):
 CHECKS = _ordered((check_location, check_threads_per_engine, check_engine_heap,
                    check_crane_pool, check_capacity, check_engine_packing,
                    check_disk, check_limitrange, check_resourcequota,
-                   check_admission, check_service_account, check_ingress_class,
-                   check_egress))
+                   check_admission, check_kyverno, check_gatekeeper,
+                   check_admission_policies, check_policy_webhooks,
+                   check_service_account, check_ingress_class, check_egress))
 
 
 def resolve_namespace(namespace, opts):
@@ -1416,6 +1533,8 @@ def evaluate(facts, opts, namespace, cluster_data=None, probes=None, cli=None,
     # overrides, so every check judges the size the bundle will carry.
     opts.update(resolve_engine_limits(facts, opts))
     namespace = resolve_namespace(namespace, opts)
+    # The namespace preflighted, which policy scopes are judged against.
+    opts["namespace"] = namespace
     if cluster_data is None or probes is None:
         cli = cli or kube.cli_tool()
     if cluster_data is None:

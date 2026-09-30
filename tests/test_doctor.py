@@ -55,6 +55,22 @@ NS_BASELINE = {"metadata": {"name": "blazemeter",
                             "labels": {"pod-security.kubernetes.io/enforce": "baseline"}}}
 
 
+# The admission policy sections, and a cluster that runs no policy engine: no
+# Kyverno or Gatekeeper CRDs, no ValidatingAdmissionPolicy, no webhooks.
+POLICY_SECTIONS = ("kyverno_clusterpolicies", "kyverno_policies",
+                   "gatekeeper_templates", "gatekeeper_constraints",
+                   "validating_admission_policies",
+                   "validating_admission_policy_bindings",
+                   "validating_webhooks")
+NO_POLICY_ENGINE = {"kyverno_clusterpolicies": evidence.NOT_SERVED,
+                    "kyverno_policies": evidence.NOT_SERVED,
+                    "gatekeeper_templates": evidence.NOT_SERVED,
+                    "gatekeeper_constraints": evidence.NOT_SERVED,
+                    "validating_admission_policies": [],
+                    "validating_admission_policy_bindings": [],
+                    "validating_webhooks": []}
+
+
 def _find(checks, needle):
     hits = [c for c in checks if needle in c.name]
     assert hits, f"no check matching {needle!r} in {[c.name for c in checks]}"
@@ -1239,6 +1255,8 @@ def test_gather_cluster_splits_one_namespaced_get_by_kind(monkeypatch):
 
     monkeypatch.setattr(kube, "kget", fake_kget)
     monkeypatch.setattr(kube, "kget_named", fake_kget)
+    monkeypatch.setattr(kube, "kget_served",
+                        lambda *a, **k: evidence.NOT_SERVED)
     data = doctor.gather_cluster("kubectl", "ns1")
     assert [n["metadata"]["name"] for n in data["nodes"]] == ["a"]
     assert data["limitranges"] == [dict(LR_MATCHING, kind="LimitRange")]
@@ -1256,17 +1274,20 @@ def test_gather_cluster_survives_a_missing_namespace(monkeypatch):
     normal pre-flight case, not a crash."""
     monkeypatch.setattr(kube, "kget", lambda *a, **k: {})
     monkeypatch.setattr(kube, "kget_named", lambda *a, **k: {})
+    monkeypatch.setattr(kube, "kget_served", lambda *a, **k: None)
     data = doctor.gather_cluster("kubectl", "ns1")
     # A failed get ({} from kget) is None, not [], so a denied list is unread
     # rather than empty. The namespace stays {}: "not created yet".
     assert data == {"nodes": None, "ingressclasses": None, "limitranges": None,
-                    "quotas": None, "serviceaccounts": None, "namespace": {}}
+                    "quotas": None, "serviceaccounts": None, "namespace": {},
+                    **dict.fromkeys(POLICY_SECTIONS)}
 
 
 def test_a_namespace_nobody_may_read_is_unread_not_absent(monkeypatch):
     """A refused `get ns` is None (unread), not {} (absent)."""
     monkeypatch.setattr(kube, "kget", lambda *a, **k: {})
     monkeypatch.setattr(kube, "kget_named", lambda *a, **k: None)
+    monkeypatch.setattr(kube, "kget_served", lambda *a, **k: None)
     data = doctor.gather_cluster("kubectl", "ns1")
     assert data["namespace"] is None
     [check] = doctor.run_check(doctor.check_admission, FACTS, {}, data)
@@ -1288,6 +1309,7 @@ def test_gather_cluster_keeps_unreadable_ingressclasses_apart_from_empty(
     monkeypatch.setattr(kube, "kget_named",
                         lambda cli, ns, kind, name=None:
                         served if kind == "ingressclass" else {})
+    monkeypatch.setattr(kube, "kget_served", lambda *a, **k: None)
     data = doctor.gather_cluster("kubectl", "ns1")
     assert data["ingressclasses"] == expected
     assert _statuses(doctor.check_ingress_class(FACTS, SV_NGINX, data)) == {status}
@@ -1300,9 +1322,11 @@ def test_gather_cluster_keeps_unreadable_ingressclasses_apart_from_empty(
 # section with no key at all raises MissingSection.
 
 UNREAD_ALL = {"nodes": None, "ingressclasses": None, "limitranges": None,
-              "quotas": None, "serviceaccounts": None, "namespace": None}
+              "quotas": None, "serviceaccounts": None, "namespace": None,
+              **dict.fromkeys(POLICY_SECTIONS)}
 EMPTY_ALL = {"nodes": [], "ingressclasses": [], "limitranges": [],
-             "quotas": [], "serviceaccounts": [], "namespace": {}}
+             "quotas": [], "serviceaccounts": [], "namespace": {},
+             **dict.fromkeys(POLICY_SECTIONS, [])}
 
 # Every check that reads a cluster section, with the sections it declares and
 # the options that make it read them. The three not here -- check_location,
@@ -1318,6 +1342,14 @@ DECLARING = {
     doctor.check_admission: ("namespace",),
     doctor.check_service_account: ("serviceaccounts",),
     doctor.check_ingress_class: ("ingressclasses",),
+    doctor.check_kyverno: ("kyverno_clusterpolicies", "kyverno_policies",
+                           "namespace", "limitranges"),
+    doctor.check_gatekeeper: ("gatekeeper_constraints", "gatekeeper_templates",
+                              "namespace", "limitranges"),
+    doctor.check_admission_policies: ("validating_admission_policies",
+                                      "validating_admission_policy_bindings",
+                                      "namespace", "limitranges"),
+    doctor.check_policy_webhooks: ("validating_webhooks", "namespace"),
     doctor.check_egress: ("probes",),
 }
 FACTS_ONLY = (doctor.check_location, doctor.check_threads_per_engine,
@@ -1454,6 +1486,7 @@ def test_every_declared_section_is_one_the_cluster_data_actually_carries(
     else:
         monkeypatch.setattr(kube, "kget", lambda *a, **k: {})
         monkeypatch.setattr(kube, "kget_named", lambda *a, **k: {})
+        monkeypatch.setattr(kube, "kget_served", lambda *a, **k: None)
         carried = set(doctor.gather_cluster("kubectl", "ns1"))
     for check, keys in DECLARING.items():
         for key in keys:
@@ -1573,7 +1606,7 @@ def test_a_declared_check_says_something_different_when_it_did_look(check):
 # -- run() ------------------------------------------------------------------
 
 HEALTHY = {"nodes": [_big("a"), _big("b")], "limitranges": [LR_MATCHING],
-           "quotas": [], "namespace": NS_BASELINE}
+           "quotas": [], "namespace": NS_BASELINE, **NO_POLICY_ENGINE}
 
 
 def test_run_healthy_cluster_has_no_failures(capsys):
@@ -1590,7 +1623,8 @@ def test_run_broken_cluster_fails(capsys):
               "limitranges": [],
               "quotas": [_quota(hard={"pods": "1"}, used={"pods": "0"})],
               "namespace": {"metadata": {"labels":
-                            {"pod-security.kubernetes.io/enforce": "restricted"}}}}
+                            {"pod-security.kubernetes.io/enforce": "restricted"}}},
+              **NO_POLICY_ENGINE}
     checks = doctor.run({**FACTS, "threads_per_engine": None},
                         {"platform": "k8s"}, "blazemeter",
                         cluster_data=broken, probes={doctor.API_PROBE_URL: 28})
