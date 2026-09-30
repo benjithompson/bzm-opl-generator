@@ -230,12 +230,12 @@ def test_each_ca_mode_is_named(extra, words):
 
 def test_the_proxy_is_shown_without_its_credentials():
     o = {**BASE, "proxy": {"http": "http://px:3128", "https": "http://px:3128",
-                           "username": "proxyuser", "password": "pr0xy-pa55",
+                           "username": "proxyuser", "password": "xyzzy plugh",
                            "no_proxy": "*.corp.example"}}
     md = review(o)
     assert "HTTPS_PROXY=http://<credentials>@px:3128" in flat(md)
     assert "NO_PROXY=*.corp.example" in flat(md)
-    assert "proxyuser" not in md and "pr0xy-pa55" not in md
+    assert "proxyuser" not in md and "xyzzy plugh" not in md
     assert "--proxy <proxy-url>" in flat(md)
 
 
@@ -280,11 +280,11 @@ def test_an_uncovered_functionality_is_named():
 def test_the_review_never_carries_a_credential(fmt, use_secret):
     o = {**BASE, "output_format": fmt, "use_secret": use_secret,
          "proxy": {"http": "http://px:3128", "username": "u",
-                   "password": "pr0xy-pa55"}}
+                   "password": "xyzzy plugh"}}
     if fmt == "docker":
         o.update(sv_hostname=SV_HOST, sv_tls_cert=SV_CERT, sv_tls_key=SV_KEY)
     md = review(o)
-    assert TOKEN not in md and "pr0xy-pa55" not in md
+    assert TOKEN not in md and "xyzzy plugh" not in md
     assert "PRIVATE KEY" not in md
     if not use_secret:
         assert "AUTH_TOKEN is in plain text" in flat(md)

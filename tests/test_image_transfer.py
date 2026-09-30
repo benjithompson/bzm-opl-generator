@@ -409,7 +409,7 @@ def test_credentials_reach_skopeo_in_a_private_file_never_the_command(
         tmp_path, tools, run, registry, monkeypatch):
     directory = _saved(tmp_path, tools, run, registry)
     monkeypatch.setenv(registry_client.USER_ENV, "robot")
-    monkeypatch.setenv(registry_client.PASSWORD_ENV, "s3cret-pw")
+    monkeypatch.setenv(registry_client.PASSWORD_ENV, "xyzzy plugh")
     monkeypatch.setattr(core, "verify_mirror", lambda *a, **k: None)
     seen = {}
 
@@ -421,7 +421,7 @@ def test_credentials_reach_skopeo_in_a_private_file_never_the_command(
         return subprocess.CompletedProcess(argv, 0, "", "")
     monkeypatch.setattr("subprocess.run", spy)
     out = core.load_images(directory, "http://reg.corp:5000/bzm")
-    assert "s3cret-pw" not in " ".join(out["commands"])
+    assert "xyzzy plugh" not in " ".join(out["commands"])
     assert seen["mode"] == 0o600
     # A dry run writes no auth file and names the one a real run would.
     plan = core.load_images(directory, "reg.corp/bzm", dry_run=True)
