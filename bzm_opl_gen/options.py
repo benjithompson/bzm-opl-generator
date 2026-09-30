@@ -80,9 +80,6 @@ GROUPS = [
      "All unset by default: crane has its own defaults and this generator only "
      "overrides them when asked. `bzm-opl-gen doctor` checks whatever you set "
      "against real node capacity."),
-    ("Cluster checks",
-     "Objects that check the cluster rather than serve tests on it. Applying "
-     "the bundle without them deploys exactly the same agent."),
     ("Agent environment",
      "For BlazeMeter agent variables that have no option above, without "
      "hand-editing a generated file that the next `generate` overwrites."),
@@ -510,20 +507,6 @@ OPTIONS = [
             "reservation -- a pod that exceeds an ephemeral-storage limit is evicted "
             "mid-run, which surfaces as a test that stops rather than as a resource "
             "error, so leave headroom over `engine_ephemeral_request_mb`."),
-    # ---- Cluster checks ------------------------------------------------
-    Option(
-        "crane_hook", "boolean", "Cluster checks",
-        summary="Add crane-hook: a one-shot Pod that checks the cluster before the agent runs.",
-        doc="Adds [crane-hook](https://github.com/Blazemeter/crane-hook) to the "
-            "bundle -- a one-shot Pod with its own read-only Role and "
-            "RoleBinding that checks node capacity, egress to BlazeMeter and the "
-            "registries, the RBAC the agent needs, and (for service "
-            "virtualization) the ingress and its TLS secret. It exits 0 or 1; "
-            "`kubectl logs cranehook` is the report, and you delete it when "
-            "done. Under `--format helm` it becomes the chart's `helm test` "
-            "hook, run by `helm test <release>`. With `private_registry` its "
-            "image is added to the mirror script, since it is not in the "
-            "location's image list."),
     # ---- Agent environment ---------------------------------------------
     Option(
         "extra_env", "object", "Agent environment",

@@ -85,15 +85,6 @@ included.
 {{- end -}}
 
 {{/*
-crane-hook's image and Role name. Both are also passed to the hook as env.
-*/}}
-{{- define "bzm-opl.hookRoleName" -}}bzm-cranehook{{- end -}}
-
-{{- define "bzm-opl.hookImage" -}}
-{{- printf "%s/cranehook:latest" (include "bzm-opl.dockerRegistry" .) -}}
-{{- end -}}
-
-{{/*
 Engine limits, defaulting to 2 CPU / 8Gi, and engine requests, defaulting to the
 limits (memory as integer MiB, the unit crane reads).
 */}}

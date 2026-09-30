@@ -112,13 +112,6 @@ def _helm_values(facts, o):
             "imageOverrides: {}",
             "registryAuth: false",
         ]
-    if o["crane_hook"]:
-        lines += [
-            "",
-            "# crane-hook cluster check; run it with `helm test <release>`.",
-            "craneHook:",
-            "  enabled: true",
-        ]
     if o["auto_update"] is None:
         lines += [
             "",

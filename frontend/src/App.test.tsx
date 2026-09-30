@@ -673,7 +673,6 @@ test("the docker format is a third bundle, and it is what gets generated",
     expect(screen.queryByText(/Deployment placement/)).toBeNull();
     expect(screen.queryByText(/^Scheduling$/)).toBeNull();
     expect(screen.queryByText(/Engine sizing/)).toBeNull();
-    expect(screen.queryByText(/crane-hook/)).toBeNull();
     // The two that a container genuinely has are still on screen, in the
     // vocabulary that reaches it rather than the cluster's.
     expect(screen.getByText(/Security & RBAC/)).toBeTruthy();

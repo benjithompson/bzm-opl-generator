@@ -94,7 +94,7 @@ packages = ["bzm_opl_gen", "bzm_opl_gen.docs", "bzm_opl_gen.docs.repro"]
 # Enumerated per directory because these globs do not recurse, and .helmignore
 # is named because a leading-dot file is not matched by `*` either.
 bzm_opl_gen = ["templates/*.yaml", "templates/helm/*", "templates/helm/.helmignore",
-               "templates/helm/templates/*", "templates/helm/templates/tests/*",
+               "templates/helm/templates/*",
                "profiles/*.json", "ui_dist/**/*"]
 "bzm_opl_gen.docs" = ["*.md"]
 # The reproductions three shipped pages tell the reader to `kubectl apply -f`.

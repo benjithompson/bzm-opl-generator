@@ -1205,12 +1205,9 @@ def main():
                         "name the bundle already writes is refused, naming the "
                         "option that owns it")
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
-    g.add_argument("--crane-hook", action="store_true",
-                   help="add crane-hook: a one-shot Pod (plus its own read-only "
-                        "Role and RoleBinding) that checks capacity, egress, RBAC "
-                        "and ingress, then exits 0 or 1. Not part of the agent -- "
-                        "`kubectl logs cranehook` is the report, and deleting it "
-                        "changes nothing about the deployment")
+    # A removed option. Hidden, and passed on, so the flag is refused with the
+    # sentence that says what replaces it rather than argparse's usage error.
+    g.add_argument("--crane-hook", action="store_true", help=argparse.SUPPRESS)
     g.add_argument("-o", "--output", default="out")
     g.set_defaults(fn=cmd_generate)
 
@@ -1364,8 +1361,8 @@ def main():
                         "REGISTRY's certificate")
     i.add_argument("--profile", metavar="PROFILE_JSON",
                    help="with --verify, --mirror, --save or --load: the "
-                        "bundle's profile.json, whose format and crane_hook "
-                        "decide the names (default: a Kubernetes bundle; for "
+                        "bundle's profile.json, whose format decides the "
+                        "names (default: a Kubernetes bundle; for "
                         "--load, the profile the save recorded)")
     i.set_defaults(fn=cmd_images)
 

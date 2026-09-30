@@ -654,6 +654,13 @@ def test_generate_invalid_options_400():
     assert r.status_code == 400
 
 
+def test_generate_refuses_the_removed_crane_hook_400():
+    r = client.post("/api/generate", json={
+        "facts": FACTS, "options": {"crane_hook": True}})
+    assert r.status_code == 400
+    assert "crane_hook was removed" in r.text and "doctor" in r.text
+
+
 def test_sv_constants_are_served_from_the_generator():
     """The SV vocabulary is served from the generator."""
     body = client.get("/api/sv-constants").json()

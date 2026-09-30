@@ -21,7 +21,8 @@ from .bundle_names import (APPLY_ORDER, CHART_DIR, CONFIGMAP_FILE,
                            SECRET_FILE)
 from .bundle_options import (DEFAULT_OPTIONS, OUTPUT_FORMATS,
                              auth_token, auto_update, engine_size,
-                             resolve_engine_limits, service_account)
+                             resolve_engine_limits, service_account,
+                             without_retired)
 from .ca_trust import ca_cfg
 from .markers import is_placeholder, or_marker
 from .required_fields import fill_placeholders
@@ -34,7 +35,7 @@ def generate(facts, options):
     Names may contain `/` (the helm format emits a chart directory); write()
     creates the parent directories.
     """
-    o = {**DEFAULT_OPTIONS, **options}
+    o = {**DEFAULT_OPTIONS, **without_retired(options)}
     # Resolved into `o`, so the manifests, the READMEs and profile.json all
     # carry the same value.
     o.update(resolve_engine_limits(facts, o))

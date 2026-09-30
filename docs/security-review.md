@@ -26,11 +26,11 @@ options?}` ([mcp.md](mcp.md)).
 
 | Section | Content | Where the content comes from |
 |---|---|---|
-| What runs | The crane Deployment, the ServiceAccount, the pods crane starts for each functionality, the crane-hook check. For manifests, a table of every object the bundle applies. | The rendered objects and the location's functionalities |
+| What runs | The crane Deployment, the ServiceAccount, the pods crane starts for each functionality. For manifests, a table of every object the bundle applies. | The rendered objects and the location's functionalities |
 | Images | Each image, what it does, which functionality needs it, when it is pulled, and whether its tag floats | The image catalogue that `IMAGES.md` also uses ([images.md](images.md)) |
 | Network | The hosts and ports the agent and the engines connect to, the registry, the proxy in force (credentials removed), `NO_PROXY`, and what is published: Service type and virtual-service ingress | The bundle's options and BlazeMeter's fixed hosts |
 | TLS trust | The CA mode in force, where the CA is mounted, and the `ca-check` command for this bundle | The CA options ([ca-trust.md](ca-trust.md)) |
-| Kubernetes permissions | Every rule of every Role and ClusterRole, with its scope, including the crane-hook Role | **Parsed from the rendered Role and ClusterRole objects** |
+| Kubernetes permissions | Every rule of every Role and ClusterRole, with its scope | **Parsed from the rendered Role and ClusterRole objects** |
 | Pod security | Crane's security contexts, whether they meet the `restricted` Pod Security Standard, and the engine posture | **Parsed from the rendered Deployment and ConfigMap** ([hardened-engines.md](hardened-engines.md)) |
 | Resources | Requests and limits for crane and each engine, the total at full concurrency, and the node size | The engine size and the location's `slots` |
 | Secrets | What each Secret or env file holds (key names only), that crane writes the AUTH_TOKEN to its own log at startup and how to restrict that log, and what `profile.json` leaves out | **Parsed from the rendered Secret**; the log line was seen with crane 3.8.0 |

@@ -117,14 +117,6 @@ All unset by default: crane has its own defaults and this generator only overrid
 | `engine_ephemeral_limit_mb` | -- | `KUBERNETES_LIMITS_EPHEMERAL_STORAGE`, in MB. The ceiling, not the reservation -- a pod that exceeds an ephemeral-storage limit is evicted mid-run, which surfaces as a test that stops rather than as a resource error, so leave headroom over `engine_ephemeral_request_mb`. |
 | `crane_ephemeral_storage` | -- (1Gi) | Crane's own pod, e.g. `2Gi`. One value sets **both** the request and the limit: crane's disk use is its image plus logs, and a request below the limit on a cluster that sizes nodes from requests just moves the eviction somewhere harder to see. Unset uses `1Gi`. |
 
-### Cluster checks
-
-Objects that check the cluster rather than serve tests on it. Applying the bundle without them deploys exactly the same agent.
-
-| Option | Default | Meaning |
-|---|---|---|
-| `crane_hook` | `false` | Adds [crane-hook](https://github.com/Blazemeter/crane-hook) to the bundle -- a one-shot Pod with its own read-only Role and RoleBinding that checks node capacity, egress to BlazeMeter and the registries, the RBAC the agent needs, and (for service virtualization) the ingress and its TLS secret. It exits 0 or 1; `kubectl logs cranehook` is the report, and you delete it when done. Under `--format helm` it becomes the chart's `helm test` hook, run by `helm test <release>`. With `private_registry` its image is added to the mirror script, since it is not in the location's image list. |
-
 ### Agent environment
 
 For BlazeMeter agent variables that have no option above, without hand-editing a generated file that the next `generate` overwrites.

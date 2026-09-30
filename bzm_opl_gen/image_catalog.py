@@ -15,17 +15,13 @@ from .facts import (BROWSER_DIR, CATALOGUE_SOURCE, CATEGORY_BY_FUNC,
                     VERSIONS_SOURCE, image_category, pinned_tag,
                     select_images)
 from .bundle_names import MIRROR_SCRIPT_FILE, PROFILE_FILE
-from .bundle_options import ignored_options
 from .footprint import PUBLIC_REGISTRY
-from .image_registry import HOOK_IMAGE_REPO, HOOK_IMAGE_TAG, mirror_targets
+from .image_registry import mirror_targets
 from .markers import is_placeholder
 
-# Categories beside facts.IMAGE_CATEGORY's, for the two images no funcId
-# selects: the agent itself and the optional preflight check.
+# The category beside facts.IMAGE_CATEGORY's, for the one image no funcId
+# selects: the agent itself.
 AGENT_CATEGORY = "agent"
-HOOK_CATEGORY = "hook"
-
-HOOK_REPO = f"{PUBLIC_REGISTRY}/{HOOK_IMAGE_REPO}"
 
 # Each row's `source`, as facts.gather records it per image.
 FROM_VERSIONS = ENTRY_SOURCE[VERSIONS_SOURCE]
@@ -36,7 +32,8 @@ FROM_CATALOGUE = ENTRY_SOURCE[CATALOGUE_SOURCE]
 # registry: version parts, the exact suffix (so `-MOB-...` branch builds never
 # match), and for the mock images a last part below a bound. `latest` is not
 # one: measured, it names releases far older than the newest. torero and
-# richrach are absent on purpose: crane asks for them by their `latest` key.
+# richrach are absent on purpose: no location list names them, so crane falls
+# back to `latest` (measured: torero `latest` is 4.6.182, its newest 4.6.192).
 RELEASE_SERIES = {
     "blazemeter/crane": {"parts": 3, "suffix": ""},
     "blazemeter/apm": {"parts": 3, "suffix": ""},
@@ -99,17 +96,26 @@ CATALOG = {
         "verified": False,
     },
     "blazemeter/torero": {
-        "purpose": "Not documented by BlazeMeter. Started alone, it exits "
-                   "asking for a test id, so it serves a per-test task.",
-        "pulled_when": "A Kubernetes agent pulls it ahead of use (it is in "
-                       "the agent's image inventory). No observed run starts it.",
+        "purpose": "Checks a test's script files. It downloads them from "
+                   "BlazeMeter, parses them with Taurus and sends back the "
+                   "load settings, locations and problems it finds. It can "
+                   "also turn a Swagger file into Taurus scenarios. It runs "
+                   "no load. Read from the image's code.",
+        "pulled_when": "Only when BlazeMeter asks the agent to run it; no "
+                       "observed run did. The agent has no code of its own "
+                       "for it. BlazeMeter names it for this location, so "
+                       "mirror it.",
         "verified": False,
     },
     "blazemeter/richrach": {
-        "purpose": "Not documented by BlazeMeter. Started alone, it exits "
-                   "asking for a command, so it runs a task the agent gives it.",
-        "pulled_when": "A Kubernetes agent pulls it ahead of use (it is in "
-                       "the agent's image inventory). No observed run starts it.",
+        "purpose": "Collects logs into one zip file: a report's logs, or the "
+                   "agent's own log files. It uploads the zip to object "
+                   "storage and gives BlazeMeter a download link. Read from "
+                   "the image's code.",
+        "pulled_when": "Only when BlazeMeter asks the agent to run it; no "
+                       "observed run did. The agent has no code of its own "
+                       "for it. BlazeMeter names it for this location, so "
+                       "mirror it.",
         "verified": False,
     },
     "blazemeter/service-mock": {
@@ -145,15 +151,28 @@ CATALOG = {
                        "doduo-r-gp-* pod).",
         "verified": True,
     },
-    "cranehook": {
-        "purpose": "A one-shot preflight check: node capacity, egress to "
-                   "BlazeMeter and the registries, and the agent's "
-                   "permissions. It exits when done.",
-        "pulled_when": "Only when the bundle includes the crane-hook check "
-                       "(crane_hook). Never on a docker host.",
-        "verified": False,
-    },
 }
+
+# What a security reviewer needs to know about an image, read from its code
+# (torero 4.6.182 and 4.6.192, richrach 1.0.85). Customer-facing text.
+SECURITY_NOTES = {
+    "blazemeter/torero": (
+        "torero sends the BlazeMeter API key it is given as HTTP Basic "
+        "authentication to each dependency-validation address in its "
+        "environment. Those addresses come from BlazeMeter with the command "
+        "that starts it."),
+    "blazemeter/richrach": (
+        "richrach does not verify the TLS certificate of the object storage "
+        "it uploads to, and hides the warning that would say so. Its calls to "
+        "the BlazeMeter API do verify TLS."),
+}
+
+
+def security_note(repo):
+    """SECURITY_NOTES's note for a repository (full or below the public
+    registry), or None."""
+    return SECURITY_NOTES.get(repo_path(repo))
+
 
 # The browser images are one per pinned build (`charmander/chrome_136...`).
 BROWSER = {
@@ -185,17 +204,15 @@ def describe(repo):
 
 
 def category(repo):
-    """facts.image_category, plus the agent's own and the check's."""
+    """facts.image_category, plus the agent's own."""
     if repo == CRANE_REPO:
         return AGENT_CATEGORY
-    if repo == HOOK_REPO:
-        return HOOK_CATEGORY
     return image_category(repo)
 
 
 def functionalities(cat):
     """The funcIds whose agent runs images of this category. The agent itself
-    serves every one; the check serves none."""
+    serves every one."""
     if cat == AGENT_CATEGORY:
         return list(CATEGORY_BY_FUNC)
     return [f for f, cats in CATEGORY_BY_FUNC.items() if cat in cats]
@@ -255,11 +272,6 @@ def _crane_row(facts, required):
                required)
 
 
-def _hook_row(required):
-    return row(f"cranehook:{HOOK_IMAGE_TAG}", HOOK_REPO, HOOK_IMAGE_TAG,
-               FROM_CATALOGUE, required)
-
-
 def location_rows(facts, all_images=False):
     """Crane, then the images the location's funcIds select (`required`
     True), then with `all_images` every other image (`required` False)."""
@@ -272,16 +284,6 @@ def location_rows(facts, all_images=False):
     if all_images:
         rows += [row(i["key"], i["repo"], i["tag"], _entry_source(i, src), False)
                  for i in facts["images"] if i.get("key") and id(i) not in chosen]
-        rows.append(_hook_row(False))
-    return rows
-
-
-def bundle_rows(facts, o):
-    """The rows one bundle's agent pulls: the location's, plus crane-hook's
-    where the bundle carries the check."""
-    rows = location_rows(facts)
-    if o.get("crane_hook") and "crane_hook" not in ignored_options(o):
-        rows.append(_hook_row(True))
     return rows
 
 
@@ -295,7 +297,6 @@ def catalogue_rows(release_pins=None):
                 else row(key, repo, tag, FROM_CATALOGUE, None))
     rows = [pinned("blazemeter/crane:latest", CRANE_REPO, "latest")]
     rows += [pinned(i["key"], i["repo"], i["tag"]) for i in FALLBACK_IMAGES]
-    rows.append(_hook_row(None))
     return rows
 
 
@@ -303,8 +304,6 @@ def functionality_cell(r):
     """A row's functionalities as a table cell."""
     if r["category"] == AGENT_CATEGORY:
         return "every"
-    if r["category"] == HOOK_CATEGORY:
-        return "preflight check"
     return ", ".join(f"`{f}`" for f in r["functionalities"]) or "none"
 
 
@@ -363,7 +362,7 @@ def images_md(facts, o):
     """IMAGES.md: the images this bundle's agent pulls, what each is for, how
     to mirror them and how to keep a mirror current. Written from the facts
     alone -- no registry is asked, so no digest or size appears."""
-    rows = bundle_rows(facts, o)
+    rows = location_rows(facts)
     reg = (o.get("private_registry") or "").rstrip("/")
     harbor = facts.get("harbor_id")
     harbor_arg = "<harbor-id>" if is_placeholder(harbor) else harbor

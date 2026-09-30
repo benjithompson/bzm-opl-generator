@@ -60,12 +60,12 @@ def test_the_preview_lists_the_review_before_images_md():
 
 
 def test_a_manifests_review_lists_every_object_it_applies():
-    files = gen.generate(FACTS, {**BASE, "cluster_rbac": True, "crane_hook": True})
+    files = gen.generate(FACTS, {**BASE, "cluster_rbac": True})
     md = files[REVIEW]
     listed = re.findall(r"^\| (\w+) \| `([^`]+)` \| [^|]+ \| `([^`]+)` \|$",
                         section(md, "What runs"), re.M)
     rendered = [(d["kind"], d["metadata"]["name"], name)
-                for name in [*bundle_names.APPLY_ORDER, bundle_names.HOOK_FILE]
+                for name in bundle_names.APPLY_ORDER
                 if name in files
                 for d in yaml.safe_load_all(files[name]) if d]
     assert listed == rendered
@@ -81,10 +81,10 @@ def test_a_chart_review_names_no_object_the_release_names():
 
 def test_a_docker_review_describes_the_host_not_a_cluster():
     o = {**BASE, "output_format": "docker", "namespace": "ns-docker",
-         "cluster_rbac": True, "crane_hook": True, "run_as_user": 4242}
+         "cluster_rbac": True, "run_as_user": 4242}
     md = review(o)
     assert "Kubernetes permissions" not in md and "Pod security" not in md
-    assert "ClusterRole" not in md and "crane-hook" not in md
+    assert "ClusterRole" not in md
     # Set, but ignored by this format: never claimed.
     assert "ns-docker" not in md and "4242" not in md
     assert "/var/run/docker.sock" in section(md, "Host access")
@@ -98,7 +98,6 @@ def test_a_docker_review_describes_the_host_not_a_cluster():
 RBAC_CASES = [
     {},
     {"cluster_rbac": True},
-    {"crane_hook": True},
     *({"sv_ingress": b, "sv_subdomain": "apps.example.com",
        "sv_tls_secret": "wild", "platform": "openshift",
        "openshift_cluster": True}
@@ -196,9 +195,7 @@ def test_unrestricted_engines_are_named_as_privileged():
     assert "Engines run privileged" in flat(off) and "INHERIT_RUNNING" not in flat(off)
 
 
-def test_the_hook_pod_is_judged_by_its_own_context():
-    md = review({**BASE, "crane_hook": True})
-    assert "crane-hook check pod meets the `restricted`" in flat(md)
+def test_restricted_gaps_names_each_missing_field():
     assert security_review.restricted_gaps(["runAsNonRoot: true"]) == [
         "allowPrivilegeEscalation: false", "capabilities dropped (drop: ALL)",
         "seccompProfile: RuntimeDefault"]
@@ -343,7 +340,7 @@ def test_a_blank_field_is_a_lower_case_sample(fmt):
 def test_the_review_is_customer_facing(fmt):
     """Invariant 8: no issue numbers, file names of this tool's source or
     internal names."""
-    md = review({**BASE, "output_format": fmt, "crane_hook": True,
+    md = review({**BASE, "output_format": fmt,
                  "private_registry": "reg.corp/bzm"})
     assert not re.search(
         r"#\d|\.py\b|security_review|footprint|image_catalog|render_|"
@@ -383,3 +380,25 @@ def test_the_mcp_action_answers_the_document_and_refuses_a_secret():
     with pytest.raises(core.BadRequest, match="credential"):
         mcp_server._bundle("review", {"facts": FACTS,
                                       "options": {"auth_token": TOKEN}})
+
+
+# -- what the images' own code does ------------------------------------------------
+# Read from torero 4.6.182/4.6.192 and richrach 1.0.85: the review names the
+# behaviour a reviewer would otherwise have to find in the image.
+
+TORERO_RICHRACH = dict(FACTS, images=FACTS["images"] + [
+    {"key": "torero:latest", "tag": "latest", "category": "performance",
+     "repo": "gcr.io/verdant-bulwark-278/blazemeter/torero"},
+    {"key": "richrach:latest", "tag": "latest", "category": "performance",
+     "repo": "gcr.io/verdant-bulwark-278/blazemeter/richrach"}])
+
+
+def test_the_review_names_what_torero_and_richrach_do_with_credentials():
+    images = flat(section(review(BASE, TORERO_RICHRACH), "Images"))
+    assert "sends the BlazeMeter API key it is given as HTTP Basic" in images
+    assert "does not verify the TLS certificate of the object storage" in images
+
+
+def test_no_image_note_for_images_the_location_does_not_use():
+    images = section(review(BASE), "Images")
+    assert "torero" not in images and "richrach" not in images

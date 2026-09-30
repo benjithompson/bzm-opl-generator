@@ -72,8 +72,8 @@ def run(monkeypatch):
 def _public(registry, sizes=(10, 20)):
     """BlazeMeter's registry, holding every image FACTS names."""
     refs = image_registry.mirror_targets(
-        FACTS, {**bundle_options.DEFAULT_OPTIONS, "private_registry": "r",
-                "crane_hook": True}, all_images=True)
+        FACTS, {**bundle_options.DEFAULT_OPTIONS, "private_registry": "r"},
+        all_images=True)
     manifests = {}
     for ref, _ in refs:
         _, _, path, tag = registry_client.split_ref(ref)
@@ -273,14 +273,11 @@ def _saved(tmp_path, tools, run, registry, tool="skopeo", **kw):
     return str(tmp_path / "save")
 
 
-@pytest.mark.parametrize("fmt,extra", [
-    ("manifests", {}), ("manifests", {"crane_hook": True}),
-    ("helm", {}), ("docker", {}),
-])
+@pytest.mark.parametrize("fmt", ["manifests", "helm", "docker"])
 def test_load_pushes_to_exactly_what_the_mirror_script_pushes(
-        tmp_path, tools, run, registry, fmt, extra):
+        tmp_path, tools, run, registry, fmt):
     """One list of destinations for every mirror path: mirror_targets'."""
-    o = {**FORMAT_BASE[fmt], **extra, "private_registry": "reg.corp/bzm"}
+    o = {**FORMAT_BASE[fmt], "private_registry": "reg.corp/bzm"}
     files = gen.generate(FACTS, o)
     profile = json.loads(files[bundle_names.PROFILE_FILE])
     directory = _saved(tmp_path, tools, run, registry, options=profile)
@@ -382,10 +379,23 @@ def test_a_docker_archive_loads_with_docker_when_skopeo_is_absent(
     assert plan["commands"][0].split()[-2].startswith("docker-archive:")
 
 
-def test_load_refuses_a_profile_that_needs_an_image_the_save_lacks(
+def test_load_refuses_a_save_that_lacks_an_image_the_profile_needs(
         tmp_path, tools, run, registry):
     directory = _saved(tmp_path, tools, run, registry)
-    with pytest.raises(core.BadRequest, match="cranehook"):
+    path = os.path.join(directory, image_transfer.MANIFEST_FILE)
+    with open(path) as fh:
+        manifest = json.load(fh)
+    dropped = manifest["images"].pop()
+    with open(path, "w") as fh:
+        json.dump(manifest, fh)
+    with pytest.raises(core.BadRequest, match=re.escape(dropped["ref"])):
+        core.load_images(directory, "reg.corp/bzm", dry_run=True)
+
+
+def test_load_refuses_a_profile_that_sets_a_removed_option(
+        tmp_path, tools, run, registry):
+    directory = _saved(tmp_path, tools, run, registry)
+    with pytest.raises(core.BadRequest, match="crane_hook was removed"):
         core.load_images(directory, "reg.corp/bzm", dry_run=True,
                          options={"crane_hook": True})
 

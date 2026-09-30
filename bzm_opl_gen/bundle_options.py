@@ -80,9 +80,6 @@ DEFAULT_OPTIONS = {
     "engine_ephemeral_request_mb": None,  # int MB -> KUBERNETES_REQUESTS_EPHEMERAL_STORAGE
     "engine_ephemeral_limit_mb": None,    # int MB -> KUBERNETES_LIMITS_EPHEMERAL_STORAGE
     "crane_ephemeral_storage": None,      # e.g. "2Gi"
-    # github.com/Blazemeter/crane-hook: a one-shot check Pod with its own
-    # read-only RBAC. Off because it is not part of the agent.
-    "crane_hook": False,
     # {NAME: value} for agent variables with no option here; see
     # bundle_env.extra_env.
     "extra_env": None,
@@ -139,11 +136,31 @@ IGNORED_BY_FORMAT = {
         "sv_tls_secret": "there is no Secret to name; this bundle mounts "
                          "sv_tls_cert and sv_tls_key as files",
         "sv_istio_gateway": "istio is a Kubernetes service mesh",
-        "crane_hook": "crane-hook is a Pod, and there is no cluster to run it in",
         "registry_auth": "the stubs are ConfigMap lines; a docker host authenticates "
                          "with its own docker login",
     },
 }
+
+
+# Options this generator no longer has, as {option: sentence for whoever set
+# it}. Set to anything but off, one is refused, never ignored. Off is what
+# every bundle does now, so an older profile.json that records it replays.
+RETIRED_OPTIONS = {
+    "crane_hook": "crane_hook was removed: bundles no longer carry the "
+                  "crane-hook check pod. Remove crane_hook from the options "
+                  "or profile, and run bzm-opl-gen doctor against the target "
+                  "namespace to check the cluster before you deploy.",
+}
+
+
+def without_retired(options):
+    """`options` minus RETIRED_OPTIONS. ValueError, with the option's own
+    sentence, for one set to anything but off (False, None or absent)."""
+    for key, why in RETIRED_OPTIONS.items():
+        if (options or {}).get(key) not in (None, False):
+            raise ValueError(why)
+    return {k: v for k, v in (options or {}).items()
+            if k not in RETIRED_OPTIONS}
 
 
 def ignored_options(o):

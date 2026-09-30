@@ -381,14 +381,10 @@ def _mirror_destinations(script):
             if line.startswith("mirror ")]
 
 
-@pytest.mark.parametrize("fmt,extra", [
-    ("manifests", {}), ("manifests", {"crane_hook": True}),
-    ("helm", {}), ("docker", {}),
-])
-def test_verify_asks_for_exactly_what_the_mirror_script_pushes(registry, fmt,
-                                                              extra):
+@pytest.mark.parametrize("fmt", ["manifests", "helm", "docker"])
+def test_verify_asks_for_exactly_what_the_mirror_script_pushes(registry, fmt):
     """One list of destinations: the script's, from its own profile."""
-    o = {**FORMAT_BASE[fmt], **extra, "private_registry": "reg.corp/bzm"}
+    o = {**FORMAT_BASE[fmt], "private_registry": "reg.corp/bzm"}
     script = gen.generate(FACTS, o)[bundle_names.MIRROR_SCRIPT_FILE]
     fake = registry()
     profile = json.loads(gen.generate(FACTS, o)[bundle_names.PROFILE_FILE])
@@ -405,14 +401,11 @@ def _pushed(out):
     return [c.split()[-1] for c in out["commands"] if c.startswith("docker push ")]
 
 
-@pytest.mark.parametrize("fmt,extra", [
-    ("manifests", {}), ("manifests", {"crane_hook": True}),
-    ("helm", {}), ("docker", {}),
-])
-def test_pull_mirror_pushes_exactly_what_the_mirror_script_pushes(fmt, extra):
+@pytest.mark.parametrize("fmt", ["manifests", "helm", "docker"])
+def test_pull_mirror_pushes_exactly_what_the_mirror_script_pushes(fmt):
     """`images --pull --mirror` reads the script's destinations, per format,
     never a rule of its own."""
-    o = {**FORMAT_BASE[fmt], **extra, "private_registry": "reg.corp/bzm"}
+    o = {**FORMAT_BASE[fmt], "private_registry": "reg.corp/bzm"}
     files = gen.generate(FACTS, o)
     profile = json.loads(files[bundle_names.PROFILE_FILE])
     out = core.mirror_images(FACTS, mirror="reg.corp/bzm", dry_run=True,
@@ -490,7 +483,6 @@ def test_functionalities_are_the_account_s_funcids():
     assert set(rows["blazemeter/crane"]["functionalities"]) == vocabulary
     assert rows["blazemeter/doduo"]["functionalities"] == ["functionalGui"]
     assert rows["blazemeter/service-mock"]["functionalities"] == ["mockServices"]
-    assert rows["cranehook"]["functionalities"] == []
 
 
 def test_browser_images_are_described_by_their_pattern():
@@ -574,7 +566,7 @@ def test_the_location_answer_has_exactly_the_contract_s_fields():
 def test_all_images_adds_the_rest_as_not_required():
     out = core.image_catalog(OLD_FACTS, lookup=False, all_images=True)
     extra = [i for i in out["images"] if i["required"] is False]
-    assert {i["category"] for i in extra} == {"mock", "recorder", "gui", "hook"}
+    assert {i["category"] for i in extra} == {"mock", "recorder", "gui"}
 
 
 def test_the_catalogue_answer_names_no_location():
@@ -667,10 +659,9 @@ def test_images_md_carries_no_marker_for_a_blank_location():
 
 
 def test_images_md_is_customer_facing():
-    md = gen.generate(FACTS, {"namespace": "n", "crane_hook": True,
+    md = gen.generate(FACTS, {"namespace": "n",
                               "private_registry": "reg.corp/bzm"})[bundle_names.IMAGES_FILE]
     assert not re.search(r"#\d|\.py\b|fallback-catalogue|image_catalog", md)
-    assert "cranehook" in md
 
 
 def test_the_preview_lists_images_md_before_the_readme():
@@ -999,3 +990,20 @@ def test_the_pin_and_the_newest_tag_are_one_rule():
     assert image_catalog.release_tag("blazemeter/service-mock", tags) == \
         registry_client.newest_release(tags, rule) == "6.0.34.3"
     assert image_catalog.release_rule(f"{PUBLIC}/blazemeter/torero") is None
+
+
+@pytest.mark.parametrize("repo, words", [
+    ("blazemeter/torero", "Checks a test's script files"),
+    ("blazemeter/richrach", "Collects logs into one zip file"),
+])
+def test_torero_and_richrach_say_what_their_code_does(repo, words):
+    """Read from the images' code: neither is pulled ahead of use by a
+    Kubernetes agent, whose inventory is only BlazeMeter's list."""
+    row = image_catalog.CATALOG[repo]
+    assert row["purpose"].startswith(words)
+    assert "ahead of use" not in row["pulled_when"]
+    assert image_catalog.security_note(f"{PUBLIC}/{repo}")
+
+
+def test_only_images_with_a_finding_carry_a_security_note():
+    assert image_catalog.security_note(f"{PUBLIC}/blazemeter/crane") is None

@@ -53,11 +53,6 @@ image:
 # public registry.
 privateRegistry: ""
 
-# crane-hook, a cluster-readiness check run by `helm test <release>`. It adds a
-# Pod plus its own read-only Role and RoleBinding. Nothing runs it at install.
-craneHook:
-  enabled: false
-
 # Required with privateRegistry: crane's image keys mapped to references in your
 # registry. Generate it with bzm-opl-gen, which also writes the mirror script
 # that pushes the images to exactly these references.

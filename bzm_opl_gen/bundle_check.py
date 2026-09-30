@@ -71,8 +71,7 @@ def emitted_yaml_files():
     """Every *.yaml a manifests bundle from this generator can hold, from the
     generator's own constants. The chart's values file is deliberately absent:
     this rig deploys manifests."""
-    return frozenset(bundle_names.APPLY_ORDER) | {bundle_names.HOOK_FILE,
-                                              bundle_names.SV_EXPOSE_FILE}
+    return frozenset(bundle_names.APPLY_ORDER) | {bundle_names.SV_EXPOSE_FILE}
 
 
 def bundle_yaml(manifest_dir):

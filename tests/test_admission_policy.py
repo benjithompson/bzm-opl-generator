@@ -113,15 +113,6 @@ def test_disallow_latest_passes_a_bundle_pinned_to_releases():
     assert "satisfy it" in c.detail
 
 
-def test_crane_hook_is_named_for_its_latest_only_image():
-    c = _policy(_checks(PINNED, {**K8S, "crane_hook": True},
-                        kyverno=[P.disallow_latest_tag()]),
-                "Kyverno ClusterPolicy disallow-latest-tag")
-    assert c.status == doctor.WARN          # the hook, not the agent
-    assert "cranehook:latest" in c.detail
-    assert "crane_hook off" in c.detail
-
-
 def test_a_policy_in_audit_mode_is_counted_and_not_judged():
     checks = _checks(FLOATING, kyverno=[P.disallow_latest_tag("Audit")])
     assert _named(checks, "Kyverno ClusterPolicy") == []

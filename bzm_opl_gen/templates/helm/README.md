@@ -154,7 +154,6 @@ immutable: pointing an install at a different agent needs `helm uninstall` +
 | Deployment `crane` | always |
 | ConfigMap `blazemeter-cacerts` | `caBundle.mode` inline or openshiftInject |
 | ClusterRole/Binding | `clusterRbac` |
-| crane-hook Role, RoleBinding and Pod (`helm test`) | `craneHook.enabled` |
 
 Crane creates the service virtualization ingress objects itself at run time.
 

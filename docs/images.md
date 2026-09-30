@@ -35,14 +35,63 @@ What is known about each image:
 | `blazemeter/crane` | every | the agent itself | yes |
 | `blazemeter/v4` (key `taurus-cloud`) | performance, API and GUI functional | the test engine | yes |
 | `blazemeter/apm` | performance, API and GUI functional | APM support for engines (inferred from the name) | no |
-| `blazemeter/torero`, `blazemeter/richrach` | performance, API and GUI functional | undocumented; a Kubernetes agent pulls them ahead of use, and no observed run starts them ([hardened-engines.md](hardened-engines.md#torero-and-richrach-started-but-not-exercised)) | no |
+| `blazemeter/torero` | performance, API and GUI functional | checks a test's script files and sends the result to BlazeMeter; runs no load ([details](#torero-and-richrach)) | no |
+| `blazemeter/richrach` | performance, API and GUI functional | zips a report's logs or the agent's logs into object storage ([details](#torero-and-richrach)) | no |
 | `blazemeter/doduo` | GUI functional | the Selenium grid proxy | yes |
 | `blazemeter/charmander/<browser>` | GUI functional | one pinned browser build; the location's image list names which | Chrome: yes |
 | `blazemeter/service-mock` | service virtualization | serves one virtual service | yes |
 | `blazemeter/group-gateway` | service virtualization | the gateway in front of the virtual services (inferred) | no |
 | `blazemeter/mock-pc-service` | service virtualization | inferred from the name only | no |
 | `blazemeter/proxy-recorder` | proxy recorder | records traffic into a test script | no |
-| `cranehook` | none | the optional `crane_hook` preflight check | no |
+
+## torero and richrach
+
+BlazeMeter does not document these two images. What follows was read from the
+code inside them (torero 4.6.182 and 4.6.192, which run the same code;
+richrach 1.0.85) and from the agent's code (crane 3.8.0). No run observed here
+started either one.
+
+**When they run.** The agent has no code of its own for either image. It runs
+one only when BlazeMeter sends it a command that names the image. On
+Kubernetes that command becomes a Job that is not restarted; on a docker host,
+a container that is not restarted. The agent passes its usual environment to
+such a container, which includes its AUTH_TOKEN, the proxy and the CA bundle.
+Which BlazeMeter action sends torero or richrach to a private location is not
+known. A Kubernetes agent does not pull them ahead of use: the image list it
+reports is BlazeMeter's list for the location, not the images on the node. It
+pulls every listed image early only with `KUBERNETES_USE_PRE_PULLING` set.
+Mirror both for a cluster that cannot reach BlazeMeter's registry.
+
+**torero** checks a test's script files. It runs no load.
+
+| | |
+|---|---|
+| what it does | Lists the test's files and the shared-folder files through the BlazeMeter API and downloads them. Parses JMeter and Taurus scripts with Taurus, and reads the concurrency, duration, ramp-up, locations, thresholds, scenarios and the names of secret properties. Posts the result to the test's validations in BlazeMeter. The `swagger_import` command turns a Swagger file into Taurus scenarios instead. |
+| selected by | `COMMAND`: `files_validation` (the default) or `swagger_import` |
+| environment it reads | `COMMAND`, `TEST_ID`, `BASE_URL`, `API_KEY_ID`, `API_KEY_SECRET`, `COMMAND_INDEX`, `TEST_TYPE`, `FILE_NAME`, `ENDED_STATUS`, `USED_SHARED_FOLDERS`, `SKIP_SECRETS_VALIDATION`, `DEPENDENCIES_VALIDATORS_DETAILS`, `DURATION`, `VERIFY_SSL`, `EARLIEST_JMETER_VERSION`, `BASELINE_ON_TEST`, `AUTO_DETECT_ENABLED` |
+| connects to | the BlazeMeter API (`BASE_URL`); the file links the API returns; each dependency-validation address in `DEPENDENCIES_VALIDATORS_DETAILS` |
+| image | Python 3.12 on Alpine; user `blazemeter` (UID 1337); about 154 MB compressed |
+
+**richrach** collects logs into one zip file.
+
+| | |
+|---|---|
+| what it does | Reads a job from BlazeMeter, gathers the files, zips them and uploads the zip to an S3-compatible bucket. It then reports progress and a download link that is valid for 24 hours. It stops when the job is stopped or its time runs out. |
+| selected by | `COMMAND`: `download` (a report's logs), `carousel_download` (the agent's own log files, which the agent writes to object storage in chunks), `clean` (deletes the zips), `error_search` (finds the files with errors in a run's artifacts) |
+| environment it reads | `COMMAND`, `BASE_URL`, `JOB_ID`, `ENTITY_ID`, `ENTITY_NAME`, `MAX_FILE_SIZE`, `DURATION`, `STOP_POLL_INTERVAL`, `BUCKET`, `REGION`, `SIGNATURE`, `ENDPOINT_URL`, `SEARCH_ALL`, `API_KEY_ID`, `API_KEY_SECRET`, `REFRESH_S3_URL`, `S3_CRED_INTERVAL`, `SESSION_TOKEN`, `SESSION_ID`, `AUTH_TOKEN`, `LOG_LEVEL`, and the standard AWS credential variables |
+| connects to | the BlazeMeter API (`BASE_URL`); the object storage (`ENDPOINT_URL`); the report file links in its job; the credential-refresh address (`REFRESH_S3_URL`) |
+| image | Python 3.13 on Alpine; user `blazemeter` (UID 1337); about 51 MB compressed |
+
+**For a security review.** Neither image asks for privileges, a volume, the
+docker socket or an open port, and both remove file capabilities from their
+executables. Two things are worth knowing, and every bundle's
+`SECURITY-REVIEW.md` states them for a location that uses these images:
+
+- torero sends the BlazeMeter API key it is given as HTTP Basic authentication
+  to each dependency-validation address in its environment.
+- richrach does not verify the TLS certificate of the object storage it
+  uploads to, and hides the warning that would say so. Its calls to the
+  BlazeMeter API do verify TLS.
 
 ## Versions, digests and sizes
 
@@ -65,7 +114,9 @@ included, so a bundle deploys a current agent.
   doduo and the proxy recorder, `X.Y.Z-reduced` for the engine, and `X.Y.Z.N`
   with a small `N` for the virtual-service images. Branch builds such as
   `-MOB-...` never match.
-- torero and richrach keep `latest`: the agent asks for them by that tag.
+- torero and richrach keep `latest`: no location's image list names them, so
+  the agent asks for `latest`. For torero that tag is behind: `latest` was
+  4.6.182 when 4.6.192 was the newest release.
 - If the registry does not answer within a few seconds, the images keep the
   catalogue's tags (`source: catalogue`) and the facts carry a warning.
 - A location can ask for an older release than the newest (one was seen
@@ -131,8 +182,8 @@ across, and load them into your registry on the far side.
 
    The command writes one archive file per image, `images-manifest.json` and
    `SHA256SUMS` into the directory. It saves the images the mirror script
-   copies: the agent, the images the location's funcIds select (every image
-   with `--all`), and the `crane_hook` image when the profile enables it.
+   copies: the agent and the images the location's funcIds select (every
+   image with `--all`).
    `--facts facts.json` works in place of the API key.
 2. Carry the whole directory to the air-gapped side. Check it there with
    `sha256sum -c SHA256SUMS` if you want to; the load checks it again.
@@ -242,8 +293,8 @@ pushes it to, and reports it as `present`, `missing` or `unread`:
 | missing | the registry answered that it has no such tag | 1 |
 | unread | the registry refused (401, 403) or did not answer; it may or may not hold the tag | 0, with a warning |
 
-- `--profile` is the bundle's `profile.json`. Its format and `crane_hook`
-  decide the names. Without it the names are a Kubernetes bundle's.
+- `--profile` is the bundle's `profile.json`. Its format decides the
+  names. Without it the names are a Kubernetes bundle's.
 - Credentials come from `BZM_REGISTRY_USER` and `BZM_REGISTRY_PASSWORD`, else
   from an inline `auth` entry in `~/.docker/config.json`. A docker credential
   helper is not called; set the two variables instead. No credential is ever a

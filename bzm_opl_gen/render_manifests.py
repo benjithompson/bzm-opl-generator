@@ -10,7 +10,7 @@ from .bundle_env import extra_env, proxy_env, proxy_has_creds
 from .bundle_names import (APPLY_ORDER, CA_CONFIGMAP, CA_CONFIGMAP_FILE,
                            CLUSTERROLE_FILE, CLUSTERROLEBINDING_FILE,
                            CONFIGMAP_FILE, CONFIGMAP_NAME,
-                           DEPLOYMENT_FILE, HOOK_FILE, HOOK_ROLE_NAME,
+                           DEPLOYMENT_FILE,
                            MIRROR_SCRIPT_FILE, NODEPOOLS_FILE, ROLE_FILE,
                            ROLEBINDING_FILE, SECRET_FILE, SECRET_NAME,
                            SERVICEACCOUNT_FILE, TEMPLATE_DIR)
@@ -21,8 +21,7 @@ from .footprint import (CRANE_CPU_LIMIT, CRANE_CPU_REQUEST,
                         CRANE_EPHEMERAL_STORAGE, CRANE_MEM_LIMIT,
                         CRANE_MEM_REQUEST, ENGINE_DEFAULT_CPU,
                         ENGINE_DEFAULT_MEM, PUBLIC_REGISTRY)
-from .image_registry import (HOOK_IMAGE_REPO, HOOK_IMAGE_TAG,
-                             crane_image, image_overrides, mirror_script)
+from .image_registry import crane_image, image_overrides, mirror_script
 from .markers import is_placeholder
 from .nodepools import nodepools_md
 from .quoting import yq
@@ -275,32 +274,6 @@ def _security_context(o):
     )
 
 
-def _hook_sub(o, sv):
-    """The crane-hook template's substitutions, kept apart from those of the
-    always-emitted templates. The SV variables are set only when there is an
-    ingress to check.
-    """
-    registry = o["private_registry"] or PUBLIC_REGISTRY
-    sv_env = ""
-    if sv:
-        sv_env = (
-            f"        - name: KUBERNETES_WEB_EXPOSE_TYPE\n"
-            f"          value: {sv['type'].upper()}\n"
-            f"        - name: KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME\n"
-            f"          value: {sv['tls_secret']}\n")
-    return {
-        "HOOK_ROLE": HOOK_ROLE_NAME,
-        "REGISTRY": registry,
-        "HOOK_IMAGE": f"{registry.rstrip('/')}/{HOOK_IMAGE_REPO}:{HOOK_IMAGE_TAG}",
-        # Pinned only off OpenShift, whose SCC refuses a pinned UID.
-        "HOOK_UID_BLOCK": (
-            "" if o["platform"] == "openshift" else
-            f"        runAsUser: {o['run_as_user']}\n"
-            f"        runAsGroup: {o['run_as_user']}\n"),
-        "HOOK_SV_ENV": sv_env,
-    }
-
-
 def _sv_rbac_block(sv):
     """Role rules for publishing virtual services: only the configured
     backend's API group, the only one crane touches. Namespaced, since
@@ -427,9 +400,6 @@ def render(facts, o, ca, sv, sa):
     # the certificate file (the README prints the command); neither is emitted.
     if ca and ca["mode"] in ("inline", "inject"):
         out[CA_CONFIGMAP_FILE] = _ca_configmap(facts, o)
-    if o["crane_hook"]:
-        out[HOOK_FILE] = _tpl("cranehook.yaml").substitute(
-            sub, **_hook_sub(o, sv))
     if o["private_registry"]:
         out[MIRROR_SCRIPT_FILE] = mirror_script(facts, o)
     if separate_pools(o):

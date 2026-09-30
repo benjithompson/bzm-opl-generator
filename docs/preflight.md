@@ -41,7 +41,7 @@ Every check below is named exactly as `doctor` prints it.
 | admission (PodSecurity) | `pod-security…/enforce=restricted`: crane passes, but the engine pods carry no `runAsNonRoot`, and no agent variable sets it, so every engine is refused when a run starts (measured, [hardened engines](hardened-engines.md#restricted-podsecurity-refuses-the-engines-baseline-accepts-them)). The fix: `enforce=baseline` (the engines meet it), a mutating policy that adds `runAsNonRoot: true`, or a namespace exemption. Also `enforce=baseline` **with `restrict_engines` off**: the engines keep crane's privileged default | no PSA label at all (nothing is enforced, so nothing was proved) |
 | admission (SCC) | – | OpenShift namespace with no `sa.scc.uid-range` |
 | policy: Kyverno | – | the ClusterPolicies could not be read, or the Policies in the namespace could not be read. Not installed is a PASS. |
-| policy: Kyverno *(kind) (name)* *(one per enforcing policy)* | a policy in `Enforce` mode that reaches the namespace refuses crane's pod or the engine pods — see [admission policy engines](#admission-policy-engines) | it refuses only crane's `test-job` pods or the crane-hook pod, its reach or one of the pod fields is unknown, or it enforces a rule this preflight does not recognise |
+| policy: Kyverno *(kind) (name)* *(one per enforcing policy)* | a policy in `Enforce` mode that reaches the namespace refuses crane's pod or the engine pods — see [admission policy engines](#admission-policy-engines) | it refuses only crane's `test-job` pods, its reach or one of the pod fields is unknown, or it enforces a rule this preflight does not recognise |
 | policy: Gatekeeper, policy: Gatekeeper *(kind) (name)* | as Kyverno, for a constraint with `enforcementAction: deny` | as Kyverno |
 | policy: ValidatingAdmissionPolicy, policy: ValidatingAdmissionPolicy *(name)* | as Kyverno, for a policy with a binding whose `validationActions` include `Deny` | as Kyverno |
 | policy: other webhooks | – | a validating webhook outside Kyverno and Gatekeeper inspects pod creation in the namespace; it may enforce a policy nobody can read |
@@ -112,7 +112,6 @@ It is then judged, and its worst verdict is a WARN.
 | crane's own pod | the bundle's Deployment: `runAsNonRoot`, `allowPrivilegeEscalation: false`, all capabilities dropped, `RuntimeDefault` seccomp, requests and limits, labels `role`, `harbor_id`, `ship_id`, no `readOnlyRootFilesystem` | FAIL |
 | engine pods | the `restrict_engines` posture as read off live runs ([hardened engines](hardened-engines.md)): crane's UID, no privilege escalation, all capabilities dropped, requests equal to the limits. They carry no `runAsNonRoot`, and no agent variable sets it (measured: restricted PodSecurity refuses them, baseline accepts them). `readOnlyRootFilesystem` is `false`. Their labels are crane's choice. | FAIL |
 | crane's `test-job` pods | the crane image, without the `restrict_engines` posture and without requests or limits | WARN: what a refused housekeeping pod costs a run is not verified |
-| the crane-hook pod | only when `crane_hook` is on; its image is published only as `latest` | WARN: the check fails, the agent does not |
 
 Images are the ones the facts name: `crane_image` and the location's image
 list, moved to `private_registry` where one is set. Hand-entered facts carry

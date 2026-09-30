@@ -819,102 +819,23 @@ def test_crane_resources_come_from_the_constants():
 
 
 
-# -- the cluster check --------------------------------------------------------
+# -- a removed option ---------------------------------------------------------
 
-def _hook_docs(out):
-    return {d["metadata"]["name"]: d
-            for d in yaml.safe_load_all(out[bundle_names.HOOK_FILE])}
-
-
-def test_no_cluster_check_unless_asked_for():
-    """crane-hook is not emitted by default."""
-    assert bundle_names.HOOK_FILE not in gen.generate(FACTS, {"ship_id": "s1"})
-
-
-def test_the_cluster_check_is_told_what_the_bundle_decided():
-    """crane-hook's objects carry the bundle's namespace, account and
-    registry."""
-    out = gen.generate(FACTS, {"ship_id": "s1", "namespace": "ns1",
-                               "service_account_name": "bzm-agent",
-                               "crane_hook": True})
-    docs = _hook_docs(out)
-    assert sorted(docs) == ["bzm-cranehook", "bzm-cranehook-binding", "cranehook"]
-    assert [d["kind"] for d in docs.values()] == ["Role", "RoleBinding", "Pod"]
-    pod = docs["cranehook"]
-    assert pod["metadata"]["namespace"] == "ns1"
-    assert pod["spec"]["serviceAccountName"] == "bzm-agent"
-    # A failed check is the answer. Restarting would turn a red exit code into a
-    # CrashLoopBackOff, which reads like the check itself is broken.
-    assert pod["spec"]["restartPolicy"] == "Never"
-    env = {e["name"]: e["value"] for e in pod["spec"]["containers"][0]["env"]}
-    assert env["WORKING_NAMESPACE"] == "ns1"
-    assert env["SERVICE_ACCOUNT_NAME"] == "bzm-agent"
-    # It is told what its own Role is called, so the names it checks are the
-    # names that were emitted.
-    assert env["ROLE_NAME"] == docs["bzm-cranehook"]["metadata"]["name"]
-    assert env["ROLE_BINDING_NAME"] == docs["bzm-cranehook-binding"]["metadata"]["name"]
+@pytest.mark.parametrize("fmt", bundle_options.OUTPUT_FORMATS)
+def test_a_removed_option_set_on_is_refused_by_name(fmt):
+    """crane_hook is refused, not ignored, in every format, and the refusal
+    says what checks the cluster now."""
+    with pytest.raises(ValueError, match=r"crane_hook was removed.*doctor"):
+        gen.generate(FACTS, {"ship_id": "s1", "output_format": fmt,
+                             "crane_hook": True})
 
 
-def test_the_cluster_check_grants_itself_nothing_the_agent_needs():
-    """crane-hook's own Role is read-only."""
-    docs = _hook_docs(gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True}))
-    verbs = {v for rule in docs["bzm-cranehook"]["rules"] for v in rule["verbs"]}
-    assert verbs == {"get", "list"}
-    assert docs["bzm-cranehook-binding"]["roleRef"]["name"] == "bzm-cranehook"
-
-
-def test_the_cluster_check_follows_the_platform_uid_rule():
-    """crane-hook pins its UID only off OpenShift."""
-    k8s = _hook_docs(gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True,
-                                          "platform": "k8s", "run_as_user": 1500}))
-    sc = k8s["cranehook"]["spec"]["containers"][0]["securityContext"]
-    assert sc["runAsUser"] == 1500 and sc["runAsGroup"] == 1500
-    ocp = _hook_docs(gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True,
-                                          "platform": "openshift"}))
-    assert "runAsUser" not in ocp["cranehook"]["spec"]["containers"][0]["securityContext"]
-
-
-@pytest.mark.parametrize("platform", ["k8s", "openshift"])
-def test_the_cluster_check_pod_has_cranes_restricted_posture(platform):
-    """crane-hook's pod carries what restricted Pod Security admission
-    requires, as crane's own pod does, on both platforms."""
-    files = gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True,
-                                 "platform": platform})
-    hook = _hook_docs(files)["cranehook"]["spec"]
-    crane = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
-    assert hook["securityContext"] == crane["securityContext"] == \
-        {"seccompProfile": {"type": "RuntimeDefault"}}
-    sc = hook["containers"][0]["securityContext"]
-    assert sc == crane["containers"][0]["securityContext"]
-    assert sc["runAsNonRoot"] is True and sc["allowPrivilegeEscalation"] is False
-    assert sc["capabilities"] == {"drop": ["ALL"]}
-
-
-def test_the_cluster_check_is_told_about_the_ingress_it_should_check():
-    """crane-hook gets the SV ingress env only when an ingress is
-    configured."""
-    sv = gen.generate(dict(FACTS, func_ids=["mockServices"]),
-                      {"ship_id": "s1", "crane_hook": True, "sv_ingress": "nginx",
-                       "sv_subdomain": "apps.example.com", "sv_tls_secret": "wild"})
-    env = {e["name"]: e["value"] for e
-           in _hook_docs(sv)["cranehook"]["spec"]["containers"][0]["env"]}
-    assert env["KUBERNETES_WEB_EXPOSE_TYPE"] == "NGINX"
-    assert env["KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME"] == "wild"
-
-    perf = _hook_docs(gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True}))
-    env = {e["name"]: e["value"] for e
-           in perf["cranehook"]["spec"]["containers"][0]["env"]}
-    assert "KUBERNETES_WEB_EXPOSE_TYPE" not in env
-
-
-def test_the_cluster_check_image_is_mirrored_with_the_rest():
-    """The crane-hook image is mirrored and pulled from the private
-    registry."""
-    out = gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True,
-                               "private_registry": "reg.local/bzm"})
-    assert "reg.local/bzm/cranehook:latest" in out["bzm-opl-image-mirror.sh"]
-    pod = _hook_docs(out)["cranehook"]
-    assert pod["spec"]["containers"][0]["image"] == "reg.local/bzm/cranehook:latest"
+def test_an_older_profile_that_records_a_removed_option_off_replays():
+    """An older profile.json records crane_hook false: it generates, and the
+    new profile.json no longer carries the key."""
+    out = gen.generate(FACTS, {"ship_id": "s1", "crane_hook": False})
+    assert "crane_hook" not in json.loads(out[bundle_names.PROFILE_FILE])
+    assert not [f for f in out if "hook" in f]
 
 
 def test_mirror_script_is_self_contained():
@@ -2375,16 +2296,12 @@ def test_docker_readme_names_what_it_could_not_carry():
     assert "Set here, but not carried" not in gen.generate(FACTS, DOCKER)["README.md"]
 
 
-def test_docker_names_the_two_options_that_used_to_go_quiet():
-    """crane_hook and registry_auth are listed as not carried, and nothing
-    is emitted for them."""
-    readme = gen.generate(FACTS, {**DOCKER, "crane_hook": True,
+def test_docker_names_registry_auth_as_not_carried():
+    """registry_auth is listed as not carried."""
+    readme = gen.generate(FACTS, {**DOCKER,
                                   "private_registry": "reg.corp/bzm",
                                   "registry_auth": True})["README.md"]
-    assert "`crane_hook`" in readme
     assert "`registry_auth`" in readme
-    bundle = gen.generate(FACTS, {**DOCKER, "crane_hook": True})
-    assert not [f for f in bundle if "cranehook" in f]
 
 
 # The smallest options each format generates from, keyed by OUTPUT_FORMATS.
