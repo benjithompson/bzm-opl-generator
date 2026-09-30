@@ -10,6 +10,8 @@ import os
 import subprocess
 import time
 
+from . import evidence
+
 # Over this, apply server-side: client-side apply copies the object into the
 # last-applied-configuration annotation, which the API server caps at 256KB.
 LARGE_MANIFEST_BYTES = 200_000
@@ -79,6 +81,24 @@ def kget_named(cli, namespace, kind, name=None, timeout=None):
     if out.returncode == 0 and out.stdout.strip():
         return json.loads(out.stdout)
     return {} if "(NotFound)" in (out.stderr or "") else None
+
+
+def kget_served(cli, namespace, kind, timeout=None):
+    """A list `get -o json` of a resource an add-on serves (a policy engine's
+    CRD): the document; evidence.NOT_SERVED when the API server has no such
+    resource type, which is "not installed"; None for every other failure."""
+    cmd = [cli, "get", kind, "-o", "json"]
+    if namespace:
+        cmd[1:1] = ["-n", namespace]
+    try:
+        out = quiet(cmd, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode == 0 and out.stdout.strip():
+        return json.loads(out.stdout)
+    if evidence.NOT_SERVED_ERROR in (out.stderr or ""):
+        return evidence.NOT_SERVED
+    return None
 
 
 def crane_exec(cli, namespace, sh):

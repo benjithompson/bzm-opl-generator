@@ -81,6 +81,23 @@ get_json() {
     rm -f /tmp/bzm-ev-err.$$
 }
 
+# `get_json` for a resource an add-on serves, such as a policy engine's CRD.
+# Where the API server has no such resource type (the add-on is not
+# installed) it writes the string "not-served": neither a refusal nor a list.
+get_served() {
+    key="$1"; shift
+    out=$("$CLI" get "$@" -o json 2>/tmp/bzm-ev-err.$$)
+    if [ $? -eq 0 ] && [ -n "$out" ]; then
+        printf '    "%s": %s' "$key" "$out"
+    elif grep -q "doesn't have a resource type" /tmp/bzm-ev-err.$$; then
+        printf '    "%s": "not-served"' "$key"
+    else
+        note "$key: $(head -c 300 /tmp/bzm-ev-err.$$ | tr '\n' ' ')"
+        printf '    "%s": null' "$key"
+    fi
+    rm -f /tmp/bzm-ev-err.$$
+}
+
 # A JSON array of names. Safe to build in shell precisely because Kubernetes
 # object names are DNS labels -- lowercase alphanumerics, '-' and '.' only, so
 # there is nothing here that needs quoting.
@@ -138,7 +155,21 @@ printf '  "raw": {\n'
 get_json nodes          nodes                                   ; printf ',\n'
 get_json ingressclasses ingressclass                            ; printf ',\n'
 get_json namespace      ns "$NS"                                ; printf ',\n'
-get_json scoped         limitrange,resourcequota,serviceaccount -n "$NS"
+get_json scoped         limitrange,resourcequota,serviceaccount -n "$NS" ; printf ',\n'
+# Admission policy engines: the policies that can refuse the pods crane
+# starts. Kyverno's namespaced Policy applies only in its own namespace.
+get_served kyverno_clusterpolicies clusterpolicies.kyverno.io   ; printf ',\n'
+get_served kyverno_policies        policies.kyverno.io -n "$NS" ; printf ',\n'
+get_served gatekeeper_templates    constrainttemplates.templates.gatekeeper.sh
+printf ',\n'
+# A category: every constraint kind the templates define.
+get_served gatekeeper_constraints  constraints                  ; printf ',\n'
+get_served validating_admission_policies \
+    validatingadmissionpolicies.admissionregistration.k8s.io    ; printf ',\n'
+get_served validating_admission_policy_bindings \
+    validatingadmissionpolicybindings.admissionregistration.k8s.io
+printf ',\n'
+get_json validating_webhooks validatingwebhookconfigurations
 printf '\n  },\n'
 
 # -- names only: never the contents -----------------------------------------
