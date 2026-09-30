@@ -60,7 +60,7 @@ servers use.
 | `opl_bundle` | `generate` · `read` · `options` · `images` · `review` |
 | `opl_plan` | `capacity` |
 | `opl_preflight` | `doctor` · `suggest` · `toolcheck` |
-| `opl_agent` | `status` · `triage` · `livetest`\* |
+| `opl_agent` | `status` · `triage` · `smoke` · `livetest`\* |
 
 \* off unless an environment variable is set — see [The gates](#the-gates).
 
@@ -127,6 +127,14 @@ crane log with the kubectl or oc context of the machine that runs the server.
 It writes nothing. Each finding names its fix; `unread` lists the reads the
 cluster refused, which are not findings; `unrecognised` lists the warnings no
 rule knows. [triage.md](triage.md) has the rule table.
+
+`opl_agent smoke` with `{namespace, harbor_id?, ship_id?}` is the whole
+post-install check: crane's Deployment, pod, ConfigMap and Secret; the agent's
+heartbeat and the location in BlazeMeter; and the engine sizing, CA trust, proxy
+and registry crane runs with. It reads only, and takes the ids from the deployed
+ConfigMap when they are not given. Any FAIL adds a triage of the namespace.
+`run_test` starts that test, a real run in the account, and is gated like
+`livetest`. [smoke.md](smoke.md) describes each check.
 
 ### Bundles and docs
 
@@ -197,7 +205,7 @@ restart.
 | variable | what it allows |
 |---|---|
 | `BZM_OPL_ALLOW_DESTRUCTIVE=1` | `opl_location delete` — a location and every agent in it |
-| `BZM_OPL_ENABLE_LIVETEST=1` | `opl_agent livetest` — deploys to a cluster and blocks for minutes |
+| `BZM_OPL_ENABLE_LIVETEST=1` | `opl_agent livetest` — deploys to a cluster and blocks for minutes; `opl_agent smoke` with `run_test` — starts a real test |
 
 Every tool also carries MCP annotations (`readOnlyHint`, `destructiveHint`), so
 a client can tell which is which without parsing the description.

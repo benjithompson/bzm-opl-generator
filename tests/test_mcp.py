@@ -917,6 +917,37 @@ def test_livetest_is_refused_by_default():
     assert mcp_server.ENABLE_LIVETEST_ENV in text
 
 
+def test_smoke_reads_the_deployed_agent_and_says_what_is_left(fake_account,
+                                                             monkeypatch):
+    """Stages 1 to 3 need no gate: they only read."""
+    fake_account._harbor["ships"][0]["lastHeartBeat"] = time.time()
+    fake_account._harbor.update(slots=1, threadsPerEngine=500,
+                                funcIds=["performance"])
+    monkeypatch.setattr(kube, "cli_tool", lambda: "kubectl")
+    monkeypatch.setattr(kube, "quiet", lambda cmd, **k: subprocess.CompletedProcess(
+        cmd, 1, "", "Error from server (Forbidden): forbidden"))
+    body = ok("opl_agent", "smoke", {"namespace": "bzm", "harbor_id": "h1",
+                                     "ship_id": "s1"})
+    assert body["ok"] is True
+    assert [s["stage"] for s in body["stages"]] == ["cluster", "blazemeter",
+                                                    "configuration"]
+    assert "some reads were refused" in " ".join(body["next"])
+    assert "--run-test" in " ".join(body["next"])
+
+
+def test_smoke_starts_no_test_unless_the_live_rig_is_allowed(fake_account,
+                                                             monkeypatch):
+    called = []
+    monkeypatch.setattr(core, "smoke", lambda *a, **k: called.append(k) or {})
+    text = err("opl_agent", "smoke", {"namespace": "bzm", "run_test": 42})
+    assert mcp_server.ENABLE_LIVETEST_ENV in text and called == []
+    monkeypatch.setenv(mcp_server.ENABLE_LIVETEST_ENV, "1")
+    monkeypatch.setattr(core, "smoke", lambda *a, **k: called.append(k) or {
+        "ok": True, "counts": {}, "stages": []})
+    ok("opl_agent", "smoke", {"namespace": "bzm", "run_test": 42})
+    assert called[0]["run_test"] == 42
+
+
 def test_the_gates_are_read_when_called_not_when_built(fake_account, monkeypatch):
     """Otherwise a client that sets the variable still has to restart the
     server, and the refusal message would be a lie about what is needed."""

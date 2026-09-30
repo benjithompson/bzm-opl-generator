@@ -622,18 +622,30 @@ def sut_hosts_via_proxy():
     return sorted(hosts)
 
 
-def assert_engine_did_work(client, master_id):
-    """Did the engine generate load? A dummy-sampler script reaches ENDED
-    without a request leaving the pod."""
-    try:
-        s = client.master_summary(master_id) or {}
-    except Exception as e:
-        return [f"could not read the run summary for master {master_id}: {e}"]
+def run_summary(client, master_id):
+    """(samples, average ms, failed samples) from the run's summary. Raises
+    where the summary cannot be read."""
+    s = client.master_summary(master_id) or {}
     summary = (s.get("summary") or [{}])[0] if isinstance(s.get("summary"), list) else s
     hits = summary.get("hits") or summary.get("samples") or 0
     avg = summary.get("avg") or summary.get("avgResponseTime")
     errors = summary.get("failed") or summary.get("errorsCount") or 0
+    return hits, avg, errors
+
+
+def assert_engine_did_work(client, master_id):
+    """Did the engine generate load? A dummy-sampler script reaches ENDED
+    without a request leaving the pod."""
+    try:
+        hits, avg, errors = run_summary(client, master_id)
+    except Exception as e:
+        return [f"could not read the run summary for master {master_id}: {e}"]
     print(f"  run summary: {hits} samples, avg {avg}ms, {errors} failed")
+    return summary_failures(hits, errors)
+
+
+def summary_failures(hits, errors):
+    """What a run summary shows that ENDED does not: no samples, or all failed."""
     if not hits:
         return ["the run produced no samples -- the engine never issued a "
                 "request, so nothing about its egress was exercised"]
@@ -660,11 +672,22 @@ def assert_engine_exited_cleanly(client, master_id):
         3072MB    61,348   322ms   0
     """
     try:
-        events = (client.master_status(master_id) or {}).get("events") or []
+        codes = taurus_exit_codes(client, master_id)
     except Exception as e:
         return [f"could not read the run's events for master {master_id}: {e}"]
-    codes = [m.group(1) for m in
-             (_TAURUS_EXIT.search(e.get("message") or "") for e in events) if m]
+    return exit_code_failures(codes, master_id)
+
+
+def taurus_exit_codes(client, master_id):
+    """The Taurus exit codes the run's events carry, as strings; [] where none
+    is logged. Raises where the events cannot be read."""
+    events = (client.master_status(master_id) or {}).get("events") or []
+    return [m.group(1) for m in
+            (_TAURUS_EXIT.search(e.get("message") or "") for e in events) if m]
+
+
+def exit_code_failures(codes, master_id):
+    """assert_engine_exited_cleanly's verdict over codes already read."""
     if not codes:
         # Absent is not zero: aged-out events or an unknown shape are unverified.
         return [f"no Taurus exit status in the events for master {master_id}, so "
@@ -899,8 +922,7 @@ def assert_live_config(cli, namespace, facts, opts):
     if opts.get("use_secret", True):
         if "AUTH_TOKEN" in cm:
             fails.append("AUTH_TOKEN is in the ConfigMap despite use_secret")
-        leaked = [k for k in ("HTTP_PROXY", "HTTPS_PROXY")
-                  if "@" in cm.get(k, "")]
+        leaked = proxy_credentials_in(cm)
         if leaked:
             fails.append(f"proxy credentials readable in the ConfigMap: {leaked}")
 
@@ -913,10 +935,9 @@ def assert_live_config(cli, namespace, facts, opts):
 
     reg = opts.get("private_registry")
     if reg:
-        want = {i["key"] for i in select_images(facts)}
-        have = set(json.loads(cm.get("IMAGE_OVERRIDES") or "{}"))
-        if want - have:
-            fails.append(f"IMAGE_OVERRIDES missing keys: {sorted(want - have)}")
+        missing = missing_image_overrides(cm, facts)
+        if missing:
+            fails.append(f"IMAGE_OVERRIDES missing keys: {missing}")
         for img in kube.pod_images(cli, namespace):
             if not img.startswith(reg.split("/")[0]):
                 fails.append(f"running image is not from the private registry: {img}")
@@ -931,6 +952,19 @@ def assert_live_config(cli, namespace, facts, opts):
         else:
             print(f"  CA bundle in pod: {n.strip()} certificates at {ca_path}")
     return fails
+
+
+def proxy_credentials_in(cm):
+    """The proxy variables in ConfigMap data that carry credentials."""
+    return [k for k in ("HTTP_PROXY", "HTTPS_PROXY") if "@" in cm.get(k, "")]
+
+
+def missing_image_overrides(cm, facts):
+    """The location's image keys IMAGE_OVERRIDES does not cover, sorted.
+    Raises ValueError where IMAGE_OVERRIDES is not JSON."""
+    want = {i["key"] for i in select_images(facts)}
+    have = set(json.loads(cm.get("IMAGE_OVERRIDES") or "{}"))
+    return sorted(want - have)
 
 
 def deploy(manifest_dir, namespace, cluster="current", insecure_registry=None):

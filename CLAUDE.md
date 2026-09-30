@@ -71,6 +71,7 @@ cli.py  server.py  mcp_server.py      three front doors, thin
    bundle_check.py  sv_read.py  verdict.py  evidence.py  cert.py  options.py
    image_catalog.py (what each image is; release rules)   registry_client.py
    ca_check.py (TLS chain against the network)   triage.py (post-deploy rules)
+   smoke.py (post-install check of a deployed agent; reuses livetest readers)
 frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
 ```
 
@@ -103,8 +104,9 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
   descriptions, `INSTRUCTIONS` and `docs/*.md` are all the documentation there
   is. It never returns an AUTH_TOKEN (`reveal_token` is its own action), never
   takes a secret as an argument, and never writes to a cluster except gated
-  `opl_agent livetest` (`BZM_OPL_ENABLE_LIVETEST`); `opl_agent triage` only
-  reads one. Anticipated failures raise
+  `opl_agent livetest` (`BZM_OPL_ENABLE_LIVETEST`, which also gates
+  `opl_agent smoke` with `run_test`); `opl_agent triage` and `smoke` only
+  read one. Anticipated failures raise
   the SDK's `ToolError`; anything else reaches the client as a bare
   "Error executing tool".
 - **Options:** a new option needs a row in `options.py` (`summary` ≤20 words,
