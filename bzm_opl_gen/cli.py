@@ -10,6 +10,8 @@ Subcommands:
   generate     render manifests from facts + customer parameters
   doctor       preflight a cluster: can it schedule the location's concurrency?
   triage       after deploying: name the known failures in the namespace, with fixes
+  smoke        after deploying: check the agent in the cluster, in BlazeMeter and
+               in its configuration; --run-test starts one real engine run
   suggest      what a cluster's evidence implies about the generate options
   ca-check     does a CA bundle verify the chain this network presents?
   sv-expose    emit a working Service+Ingress per deployed virtual service
@@ -21,13 +23,15 @@ Subcommands:
 
 import argparse
 import collections
+import contextlib
 import json
 import os
 import sys
 
 from . import (api, bundle_check, ca_check, core, doctor, facts as facts_mod,
-               generate as gen_mod, kube, livetest, plan, suggest as suggest_mod,
-               sv_read, triage as triage_mod, verdict, workstation)
+               generate as gen_mod, kube, livetest, plan, smoke as smoke_mod,
+               suggest as suggest_mod, sv_read, triage as triage_mod, verdict,
+               workstation)
 from . import bundle_names, bundle_options, ca_trust, footprint, service_virt
 
 
@@ -457,6 +461,29 @@ def cmd_triage(a):
         print(json.dumps(doc, indent=2))
     else:
         triage_mod.report(doc)
+    sys.exit(0 if doc["ok"] else 1)
+
+
+def cmd_smoke(a):
+    """Check an agent that is already deployed; --run-test also starts a test.
+
+    Exit 1 for a FAIL only: an unread, skipped or warned check exits 0, as in
+    doctor and triage. With --json, progress goes to stderr."""
+    out = sys.stderr if a.json else sys.stdout
+
+    def notify(line):
+        print(line, file=out, flush=True)
+
+    # The engine-run helpers print progress; stdout stays the JSON document.
+    with contextlib.redirect_stdout(out):
+        doc = core.smoke(_client(a), a.namespace, harbor_id=a.harbor_id,
+                         ship_id=a.ship_id, run_test=a.run_test,
+                         engine_timeout=a.engine_timeout,
+                         run_timeout=a.timeout, notify=notify)
+    if a.json:
+        print(json.dumps(doc, indent=2))
+    else:
+        smoke_mod.report(doc)
     sys.exit(0 if doc["ok"] else 1)
 
 
@@ -1174,6 +1201,35 @@ def main():
                     help="the report as data: findings, unrecognised "
                          "warnings, and what could not be read")
     tr.set_defaults(fn=cmd_triage)
+
+    sm = sub.add_parser("smoke",
+                        help="after deploying: check the agent in the cluster, "
+                             "in BlazeMeter and in its configuration")
+    sm.add_argument("--api-key", help="api-key.json (default: the environment "
+                                      "or the saved key)")
+    sm.add_argument("-n", "--namespace", required=True,
+                    help="the namespace the agent was deployed to")
+    sm.add_argument("--harbor-id", help="the location id (default: read from "
+                                        "the deployed ConfigMap)")
+    sm.add_argument("--ship-id", help="the agent id (default: read from the "
+                                      "deployed ConfigMap)")
+    sm.add_argument("--run-test", metavar="TEST_ID",
+                    help="also START this test, a real run in your account, and "
+                         "check the engine crane creates for it. The test must "
+                         "already run on this location; it is never changed")
+    sm.add_argument("--engine-timeout", type=int,
+                    default=smoke_mod.DEFAULT_ENGINE_TIMEOUT, metavar="SECONDS",
+                    help="with --run-test: how long to wait for the engine pod "
+                         f"(default {smoke_mod.DEFAULT_ENGINE_TIMEOUT})")
+    sm.add_argument("--timeout", type=int, default=smoke_mod.DEFAULT_RUN_TIMEOUT,
+                    metavar="SECONDS",
+                    help="with --run-test: how long to wait for the run to end "
+                         "before stopping it "
+                         f"(default {smoke_mod.DEFAULT_RUN_TIMEOUT})")
+    sm.add_argument("--json", action="store_true",
+                    help="the report as data: every check by stage, and the "
+                         "triage when a check failed")
+    sm.set_defaults(fn=cmd_smoke)
 
     w = sub.add_parser("toolcheck",
                        help="does this workstation have what livetest shells "

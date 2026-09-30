@@ -59,13 +59,16 @@ The path through it:
   7. opl_agent triage           -- if not, or a run hangs at BOOT_STARTING:
                                    the known failures in the namespace, each
                                    with its fix (see triage.md)
+  8. opl_agent smoke            -- the whole post-install check: cluster,
+                                   BlazeMeter and configuration (see smoke.md)
 
 Step 5 is deliberately not a tool. This server does not apply anything to a
 cluster: the person you are working with needs to see what is being applied to
 theirs, and `kubectl apply` in their shell is where they see it. The same goes
 for `helm install` when the bundle is a chart. (The one tool that does deploy is
-opl_agent livetest, which is off unless its own variable is set.) Step 7 reads
-the namespace with this machine's own kubectl or oc context and writes nothing.
+opl_agent livetest, which is off unless its own variable is set.) Steps 7 and
+8 read the namespace with this machine's own kubectl or oc context and write
+nothing; smoke starts a test only with run_test, behind the same variable.
 
 Sizing before there is a cluster: `opl_plan capacity` turns what a customer has
 to run ("5,000 virtual users", "40 browsers at once") into pods, nodes and a
@@ -218,6 +221,8 @@ DOC_SUMMARIES = {
     "mcp.md": "This server: its tools, its gates, and what it will not do.",
     "triage.md": "After deploying: the known failures triage recognises in "
                  "a namespace, and the fix for each.",
+    "smoke.md": "After deploying: the smoke check of an agent, stage by stage, "
+                "and what starting one real engine run adds.",
 }
 
 
@@ -815,7 +820,7 @@ def _preflight(action, args):
 
 # -- opl_agent -----------------------------------------------------------------
 
-AGENT_ACTIONS = ("status", "triage", "livetest")
+AGENT_ACTIONS = ("status", "triage", "smoke", "livetest")
 
 DESCRIPTIONS["opl_agent"] = (
     "The deployed agent.\n"
@@ -827,6 +832,15 @@ DESCRIPTIONS["opl_agent"] = (
     "finding names the option or action that fixes it; `unread` lists "
     "reads the cluster refused, which are not findings, and "
     "`unrecognised` lists warnings no rule knows. Report both.\n"
+    "  smoke    -- the post-install check of an agent already deployed "
+    "{namespace, harbor_id?, ship_id?}: crane's Deployment, pod, ConfigMap "
+    "and Secret in the cluster; the agent's heartbeat and the location in "
+    "BlazeMeter; and the engine sizing, CA trust, proxy and registry crane "
+    "runs with. Reads only; the ids come from the deployed ConfigMap when "
+    "not given. Each check is PASS, WARN, UNREAD, SKIP or FAIL with a fix, "
+    "and any FAIL adds a triage of the namespace. `run_test` (a test id) "
+    "also STARTS that test, a real run in the account, and is off unless "
+    + ENABLE_LIVETEST_ENV + "=1.\n"
     "  livetest -- deploy a bundle to a cluster and wait for the agent "
     "{manifests, namespace, harbor_id, ship_id, cluster?, timeout?}. "
     "Off unless " + ENABLE_LIVETEST_ENV + "=1, blocks for minutes, and "
@@ -850,6 +864,19 @@ def _agent(action, args):
         report = core.triage(namespace, since=args.get("since"),
                              log_lines=args.get("crane_log_lines"))
         return dict(report, next=_after_triage(report))
+
+    if action == "smoke":
+        namespace, = _need(args, "namespace")
+        if args.get("run_test"):
+            _gate(ENABLE_LIVETEST_ENV,
+                  "starting a test from smoke (it is a real run in the account)")
+        report = core.smoke(_client(args), namespace,
+                            harbor_id=args.get("harbor_id"),
+                            ship_id=args.get("ship_id"),
+                            run_test=args.get("run_test"),
+                            engine_timeout=args.get("engine_timeout"),
+                            run_timeout=args.get("timeout"))
+        return dict(report, next=_after_smoke(report))
 
     if action == "livetest":
         _gate(ENABLE_LIVETEST_ENV,
@@ -907,6 +934,24 @@ def _after_triage(report):
                      "as found rather than guessing a cause")
     return steps or ["nothing known is wrong in the namespace. opl_agent "
                      "status says whether the agent is reporting"]
+
+
+def _after_smoke(report):
+    """Where a smoke check leads."""
+    if not report["ok"]:
+        return ["apply the fix each FAIL names, regenerating with opl_bundle "
+                "generate where it names an option, then run smoke again",
+                "the triage in this answer names what the namespace shows"]
+    steps = []
+    if report["counts"].get("UNREAD"):
+        steps.append("some reads were refused, so those checks say nothing: "
+                     "ask someone with read access to the namespace to run "
+                     "bzm-opl-gen smoke")
+    if not any(s["stage"] == "engine run" for s in report["stages"]):
+        steps.append("nothing here started an engine. bzm-opl-gen smoke "
+                     "--run-test <test-id> starts one real run and checks the "
+                     "engine crane creates for it")
+    return steps or ["the agent is ready to run tests"]
 
 
 # -- the server ----------------------------------------------------------------

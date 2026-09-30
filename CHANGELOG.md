@@ -13,6 +13,23 @@ anything that breaks.
 
 ### Added
 
+- **`smoke` checks an agent you have already deployed.** Run
+  `bzm-opl-gen smoke --api-key api-key.json -n <namespace>` after `kubectl
+  apply`. It reads the crane Deployment, pod, ConfigMap and Secret (key names
+  only) in the cluster; the agent's heartbeat and the location's slots and
+  threads per engine in BlazeMeter; and the engine sizing, location engine
+  overrides, CA trust, proxy and registry settings crane runs with. The
+  location and agent ids come from the deployed ConfigMap. Each check is PASS,
+  WARN, UNREAD, SKIP or FAIL with a fix, and any FAIL adds the `triage`
+  findings for the namespace. It exits 1 only for a FAIL. It creates, changes
+  and deletes nothing. `--run-test <test-id>` also starts that test (a real
+  run in your account, announced before it starts), and checks that crane's
+  engine is limited as the ConfigMap says, is QoS `Guaranteed`, ends, produces
+  samples and exits 0. The test must already run on this location: `smoke`
+  never repoints it. The MCP server offers the read-only checks as
+  `opl_agent smoke`; `run_test` there needs `BZM_OPL_ENABLE_LIVETEST=1`. See
+  [docs/smoke.md](docs/smoke.md).
+
 - **Every bundle carries `IMAGES.md`.** It lists the images the agent pulls,
   what each one does, which functionality needs it, when it is pulled, and
   whether that was seen in a live run. With `--private-registry` it also lists

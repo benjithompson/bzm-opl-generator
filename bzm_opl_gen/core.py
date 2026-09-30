@@ -26,8 +26,8 @@ from . import (agent_env as agent_env_mod, api, bundle_env, bundle_names,
                generate as gen_mod, image_catalog as image_catalog_mod,
                image_registry, kube, markers, options as options_mod, plan,
                quantity, registry_client, required_fields, service_virt,
-               suggest as suggest_mod, sv_read, triage as triage_mod, verdict,
-               workstation)
+               smoke as smoke_mod, suggest as suggest_mod, sv_read,
+               triage as triage_mod, verdict, workstation)
 
 
 # -- failures ------------------------------------------------------------------
@@ -1239,6 +1239,93 @@ def triage(namespace, since=None, log_lines=None, cli=None, now=None):
                 triage_mod.evaluate(gathered, namespace, since, now))
     gathered = triage_mod.gather(cli, namespace, since_s, log_lines)
     return triage_mod.as_dict(triage_mod.evaluate(gathered, namespace, since, now))
+
+
+def smoke(client, namespace, harbor_id=None, ship_id=None, run_test=None,
+          engine_timeout=None, run_timeout=None, cli=None, notify=None):
+    """Check an agent already deployed to `namespace`, in four stages: the
+    cluster, BlazeMeter, the configuration crane runs with, and (with
+    `run_test`) one real engine run. Any FAIL adds a triage of the namespace.
+
+    Reads only, except `run_test`, which starts that test: an account write.
+    The test is never repointed; one that does not run on this location is a
+    FAIL and is not started. `ok` is false only for a FAIL."""
+    if not namespace:
+        raise BadRequest("smoke needs the namespace the agent was deployed to")
+    engine_timeout = (smoke_mod.DEFAULT_ENGINE_TIMEOUT if engine_timeout is None
+                      else engine_timeout)
+    run_timeout = smoke_mod.DEFAULT_RUN_TIMEOUT if run_timeout is None else run_timeout
+    for label, value in (("engine timeout", engine_timeout),
+                         ("run timeout", run_timeout)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise BadRequest(f"the {label} must be a positive whole number of "
+                             f"seconds, not {value!r}")
+    notify = notify or (lambda line: None)
+    if cli is None:
+        try:
+            cli = kube.cli_tool()
+        except RuntimeError as e:
+            cli, no_cli = None, str(e)
+    if cli:
+        cluster = smoke_mod.read_cluster(cli, namespace, ship_id)
+    else:
+        unread = {k: no_cli for k in ("deployments", "pods", "configmap")}
+        cluster = smoke_mod.Cluster(None, None, None, bundle_names.CONFIGMAP_NAME,
+                                    None, None, None, None, None, None, unread)
+    harbor_id, ship_id, id_check = smoke_mod.resolve_ids(cluster, harbor_id, ship_id)
+    stage1 = smoke_mod.cluster_checks(cluster, namespace, id_check)
+
+    status = agent_error = facts = facts_error = None
+    missing = False
+    if harbor_id and ship_id:
+        try:
+            status = agent_status(client, harbor_id, ship_id)
+        except NotFound as e:
+            agent_error, missing = str(e), True
+        except CoreError as e:
+            agent_error = str(e)
+    if harbor_id:
+        try:
+            facts = gather_facts(client, harbor_id)
+        except CoreError as e:
+            facts_error = str(e)
+    stage2 = [smoke_mod.agent_check(status, agent_error, missing),
+              smoke_mod.location_check(facts, facts_error)]
+    stage3 = smoke_mod.config_checks(cluster, facts, facts_error)
+    stages = [smoke_mod.stage(smoke_mod.STAGE_CLUSTER, stage1),
+              smoke_mod.stage(smoke_mod.STAGE_BLAZEMETER, stage2),
+              smoke_mod.stage(smoke_mod.STAGE_CONFIG, stage3)]
+
+    if run_test:
+        failed = [c.name for c in stage1 + stage2 + stage3
+                  if c.status == verdict.FAIL]
+        blocked = None
+        if failed:
+            blocked = f"an earlier check failed ({', '.join(failed)})"
+        elif not (status or {}).get("online"):
+            blocked = "the agent is not known to be reporting"
+        elif cluster.pods is None:
+            blocked = "the namespace's pods cannot be read, so the engine cannot be seen"
+        if not harbor_id:
+            run = [smoke_mod.check("engine-run", smoke_mod.SKIP,
+                                   "not started: the location id is not known")]
+        else:
+            run = smoke_mod.engine_run(client, cli, namespace, run_test, harbor_id,
+                                       cluster, blocked, notify, engine_timeout,
+                                       run_timeout)
+        stages.append(smoke_mod.stage(smoke_mod.STAGE_ENGINE, run))
+
+    failed = smoke_mod.counts(stages)[verdict.FAIL]
+    triaged = None
+    if failed:
+        try:
+            triaged = triage(namespace, cli=cli)
+        except CoreError as e:
+            triaged = {"error": f"triage could not run: {e}"}
+    return {"namespace": namespace, "harbor_id": harbor_id, "ship_id": ship_id,
+            "stages": stages, "triage": triaged,
+            "counts": smoke_mod.counts(stages),
+            "summary": smoke_mod.summary_line(stages), "ok": not failed}
 
 
 def sv_read_message(read):

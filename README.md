@@ -130,7 +130,11 @@ bzm-opl-gen doctor --facts facts.json --manifests out/ -n my-project
 kubectl get namespace my-project >/dev/null 2>&1 || kubectl create namespace my-project
 kubectl apply -n my-project -f out/
 
-# 7. agent offline, or a run stuck at BOOT_STARTING? name the cause and the fix
+# 7. check the deployed agent: cluster, BlazeMeter and configuration.
+#    --run-test <test-id> also starts that test, a real run, and checks its engine
+bzm-opl-gen smoke --api-key api-key.json -n my-project
+
+# 8. agent offline, or a run stuck at BOOT_STARTING? name the cause and the fix
 bzm-opl-gen triage -n my-project
 ```
 
@@ -228,6 +232,7 @@ option or only narrows it
 | [docs/images.md](docs/images.md) | `images` — what each image does, mirroring, and checking a mirror |
 | [docs/preflight.md](docs/preflight.md) | `doctor`, `suggest`, `toolcheck`, engine sizing |
 | [docs/ca-trust.md](docs/ca-trust.md) | `ca-check` — a corporate CA, checked against the network before deploying |
+| [docs/smoke.md](docs/smoke.md) | `smoke` — after deploying, check the agent in the cluster, in BlazeMeter and in its configuration, and optionally with one real engine run |
 | [docs/triage.md](docs/triage.md) | `triage` — after deploying, the known failures in a namespace and the fix for each |
 | [docs/live-test.md](docs/live-test.md) | the live rig: registry, proxy + CA, egress containment |
 | [docs/hardened-engines.md](docs/hardened-engines.md) | the security context crane stamps on the pods it spawns |
