@@ -126,7 +126,9 @@ are separate refusals, each naming its remedy.
 crane log with the kubectl or oc context of the machine that runs the server.
 It writes nothing. Each finding names its fix; `unread` lists the reads the
 cluster refused, which are not findings; `unrecognised` lists the warnings no
-rule knows. [triage.md](triage.md) has the rule table.
+rule knows. A finding seen only on pods that no longer exist has `history`
+true and status `NOTE`, and comes after the current findings.
+[triage.md](triage.md) has the rule table.
 
 `opl_agent smoke` with `{namespace, harbor_id?, ship_id?}` is the whole
 post-install check: crane's Deployment, pod, ConfigMap and Secret; the agent's

@@ -69,3 +69,50 @@ def test_a_wildcard_in_the_middle_is_a_literal():
     bundle every client rejects."""
     assert not cert.matches("web.example.com", ["w*.example.com"])
     assert cert.matches("w*.example.com", ["w*.example.com"])
+
+
+def _zero_serial_root():
+    """A root whose serial is zero, as some public roots' are. The builder
+    refuses a non-positive serial, so serial 1 is written and its DER byte
+    changed; nothing here checks the signature."""
+    import base64
+    import warnings
+
+    import ca_fixtures as F
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    key = F._key()
+    der = (x509.CertificateBuilder().subject_name(F._name("Zero Serial Root"))
+           .issuer_name(F._name("Zero Serial Root"))
+           .public_key(key.public_key()).serial_number(1)
+           .not_valid_before(F.NOW - F.DAY).not_valid_after(F.NOW + F.DAY)
+           .add_extension(x509.BasicConstraints(ca=True, path_length=None),
+                          critical=True)
+           .sign(key, hashes.SHA256())
+           .public_bytes(serialization.Encoding.DER))
+    # TBSCertificate: version [0] v3, then serial INTEGER 1.
+    before = b"\xa0\x03\x02\x01\x02\x02\x01\x01"
+    assert der.count(before) == 1
+    der = der.replace(before, before[:-1] + b"\x00")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        x509.load_der_x509_certificate(der)
+    # The fixture is only worth having if cryptography warns about it.
+    assert caught, "cryptography no longer warns about a zero serial"
+    body = base64.encodebytes(der).decode()
+    return der, ("-----BEGIN CERTIFICATE-----\n" + body
+                 + "-----END CERTIFICATE-----\n")
+
+
+def test_a_zero_serial_root_loads_without_a_warning_escaping(recwarn):
+    """Every load in cert.py silences cryptography's deprecation warning, and
+    the certificate still reads."""
+    der, pem = _zero_serial_root()
+    recwarn.clear()
+    assert cert.read_bundle(pem).certs and cert.read_bundle(der).certs
+    assert cert.dns_names(pem) == ["Zero Serial Root"]
+    assert cert.describe_der(der)["role"] == "root"
+    assert cert.normalise(der).startswith("-----BEGIN CERTIFICATE-----")
+    assert cert.missing_issuer([der], pem) is None
+    assert cert.lint(pem) is not None
+    assert [str(w.message) for w in recwarn] == []

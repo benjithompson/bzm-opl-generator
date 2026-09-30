@@ -289,7 +289,12 @@ worth of CPU and memory for jobs that need neither, and taking capacity a real
 engine then cannot get. So this generator emits no LimitRange.
 
 `livetest --run-test` prints the live gap under `ENGINE SIZING:` and the JVM
-heap against the limit under `ENGINE HEAP:`.
+heap against the limit under `ENGINE HEAP:`. When the engine's pod spec carries
+no `-Xmx` (the location sets no `engineXmx`), Taurus starts JMeter with a heap
+of its own choosing. The rig then reads the running java processes' command
+lines in the engine while the run lasts, and reports JMeter's `-Xmx` against the
+limit. Measured on an 8Gi engine: JMeter ran with `-Xmx6656m` (about 81%),
+beside a second JVM (jetpack) with no `-Xmx`.
 
 ## Two node pools, and the ceiling that makes them work
 

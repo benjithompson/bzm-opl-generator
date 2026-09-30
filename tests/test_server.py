@@ -179,6 +179,19 @@ def test_the_preview_can_say_a_save_would_reuse_the_folder_s_token(
     assert connected.calls == []
 
 
+def test_a_token_with_a_line_break_is_refused_without_echoing_it():
+    """The page's generate refuses a two-line token with a 400 naming the
+    option; the detail never carries the value."""
+    fake = "0123456789abcdef" * 4
+    r = client.post("/api/generate", json={
+        "facts": FACTS, "options": {"namespace": "ns1",
+                                    "auth_token": fake + "\nthat"}})
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "auth_token" in detail and "has 2 lines" in detail
+    assert fake not in detail
+
+
 def test_a_folder_it_will_refuse_is_refused_before_anything_is_issued(
         connected):
     """A relative save folder is refused before any token is issued."""

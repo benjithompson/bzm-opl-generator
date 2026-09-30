@@ -46,6 +46,7 @@ image:
   tag: latest
   pullPolicy: Always
   # A docker-registry Secret in this namespace, for pulling the crane image.
+  # Engines run as the namespace's default ServiceAccount: add it there too.
   pullSecret: ""
 
 # Registry the agent pulls every BlazeMeter image from. Empty: BlazeMeter's
@@ -64,8 +65,9 @@ imageOverrides: {}
   # taurus-cloud:latest: registry.example.com/blazemeter/v4:2.4.454-reduced
   # apm-image:latest: registry.example.com/blazemeter/apm:1.7.112
 
-# Adds commented DOCKER_REGISTRY_USERNAME/PASSWORD lines to the ConfigMap for
-# engine image pulls. Prefer image.pullSecret and a cluster pull secret.
+# Adds commented DOCKER_REGISTRY_USERNAME/PASSWORD lines to the ConfigMap.
+# BlazeMeter documents them for docker agents; engines pull with the default
+# ServiceAccount's pull secrets.
 registryAuth: false
 
 # Whether crane updates itself when BlazeMeter releases a new agent. Unset is

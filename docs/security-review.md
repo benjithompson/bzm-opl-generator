@@ -33,7 +33,7 @@ options?}` ([mcp.md](mcp.md)).
 | Kubernetes permissions | Every rule of every Role and ClusterRole, with its scope, including the crane-hook Role | **Parsed from the rendered Role and ClusterRole objects** |
 | Pod security | Crane's security contexts, whether they meet the `restricted` Pod Security Standard, and the engine posture | **Parsed from the rendered Deployment and ConfigMap** ([hardened-engines.md](hardened-engines.md)) |
 | Resources | Requests and limits for crane and each engine, the total at full concurrency, and the node size | The engine size and the location's `slots` |
-| Secrets | What each Secret or env file holds (key names only), and what `profile.json` leaves out | **Parsed from the rendered Secret** |
+| Secrets | What each Secret or env file holds (key names only), that crane writes the AUTH_TOKEN to its own log at startup and how to restrict that log, and what `profile.json` leaves out | **Parsed from the rendered Secret**; the log line was seen with crane 3.8.0 |
 
 A docker bundle has **Host access** in place of the Kubernetes permissions and
 pod security sections: the docker socket, and why the container runs as root.

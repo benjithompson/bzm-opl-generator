@@ -346,6 +346,37 @@ def test_build_bundle_without_write_writes_nothing(tmp_path):
     assert built.token.branch == core.TOKEN_PLACEHOLDER
 
 
+# A fake token: 64 hex characters, the shape of a real one.
+FAKE_TOKEN = "0123456789abcdef" * 4
+
+
+@pytest.mark.parametrize("token, problem", [
+    (FAKE_TOKEN + "\nthat", "has 2 lines"),
+    (FAKE_TOKEN + " ", "contains whitespace"),
+    ("\t" + FAKE_TOKEN, "contains whitespace"),
+    (FAKE_TOKEN + "\x00", "contains a control character"),
+])
+def test_build_bundle_refuses_a_token_with_whitespace_and_never_echoes_it(
+        token, problem, tmp_path):
+    """A token with whitespace or a control character is refused, not
+    stripped; the message names the option and never carries the value."""
+    with pytest.raises(core.BadRequest) as e:
+        core.build_bundle(FACTS, {"namespace": "ns1", "auth_token": token},
+                          out_dir=str(tmp_path), write=True)
+    msg = str(e.value)
+    assert "auth_token" in msg and "--auth-token" in msg and problem in msg
+    assert FAKE_TOKEN not in msg
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("token", [None, "", "<AUTH_TOKEN>", " <AUTH_TOKEN> ",
+                                   FAKE_TOKEN])
+def test_build_bundle_takes_a_marker_a_blank_or_a_clean_token(token):
+    built = core.build_bundle(FACTS, {"namespace": "ns1", "auth_token": token})
+    if token == FAKE_TOKEN:
+        assert FAKE_TOKEN in built.files[bundle_names.SECRET_FILE]
+
+
 def test_build_bundle_does_not_mutate_the_caller_s_options():
     opts = {"namespace": "ns1"}
     core.build_bundle(FACTS, opts, client=FakeClient(), rotate=True)

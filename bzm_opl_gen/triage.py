@@ -17,10 +17,16 @@ import json
 import re
 import subprocess
 import textwrap
+import urllib.parse
 
 from . import kube, service_virt
 from .admission_policy import ENGINE_NO_RUN_AS_NON_ROOT, run_as_non_root_fix
 from .verdict import FAIL, WARN
+
+# Below WARN: something the report explains that needs no action now, such as
+# a finding from a pod that no longer exists.
+NOTE = "NOTE"
+STATUS_RANK = {FAIL: 0, WARN: 1, NOTE: 2}
 
 # kubectl retries an unreachable API server rather than failing; both bounds
 # keep a dead context from hanging the command.
@@ -46,13 +52,51 @@ BENIGN_WAITING = {"ContainerCreating", "PodInitializing"}
 # A crane log line with no rule is listed only if it looks like an error;
 # the rest of the log is ordinary progress.
 ERRORISH = re.compile(r"\b(ERROR|CRITICAL|FATAL|Traceback)\b|\w(Error|Exception):")
+TRACEBACK_HEADER = re.compile(r"^Traceback \(most recent call last\):?$")
+
+# Crane logs its first call to BlazeMeter before making it. A crane whose log
+# ends there after HANG_AFTER_S of running is hung: its readiness probe does
+# not call BlazeMeter, so the pod still shows Ready.
+STARTUP_CHECK = re.compile(r"Checking startup connectivity to URL")
+HANG_AFTER_S = 60
+HANG_TAIL = 200
+PROXY_IN_LOG = re.compile(r"HTTPS Proxy: ([^\s\"',]+)")
+
+# Crane 3.8 logs its AUTH_TOKEN at startup. The value is replaced as the log
+# is read, as are credentials in a URL, so no report carries either.
+SECRET_VALUE = re.compile(
+    r"(AUTH_TOKEN[\"']?\s*[:=]\s*[\"']?)[^\s\"',}]+", re.I)
+URL_CREDENTIALS = re.compile(r"(\b[a-z][a-z0-9+.\-]*://)[^/\s:@]+:[^/\s@]+@", re.I)
+
+# A pod the ReplicaSet could not create because the ServiceAccount was not
+# there yet: the files are applied in alphabetical order, Deployment first.
+SA_LOOKUP = re.compile(r"error looking up service account [\w.\-]+/([\w.\-]+): "
+                       r"serviceaccount \"[^\"]+\" not found")
+
+# A probe that raced its container's exit, on a pod that has since finished.
+PROBE_RACED_EXIT = re.compile(r"probe errored.*(CONTAINER_EXITED|container not "
+                              r"found|container is not running)", re.I | re.S)
+
+# kubectl's answer for the log of a container that has not started: there is
+# no log yet, which is not a refused read.
+NOT_STARTED = re.compile(r"is waiting to start")
+NO_LOG_YET = "no log yet: the container has not started"
+
+
+def redact(text):
+    """`text` with every AUTH_TOKEN value and URL credential replaced."""
+    if not text:
+        return text
+    return URL_CREDENTIALS.sub(r"\1<redacted>@",
+                               SECRET_VALUE.sub(r"\1<redacted>", text))
 
 
 # -- the rule table -------------------------------------------------------------
 
 # One known failure. `sources` are where it can appear: event, pod (status and
 # scheduling condition), container (waiting or terminated state), log (crane),
-# namespace (what the reads themselves imply). Every regex in `patterns` must
+# namespace (what the reads themselves imply), startup (crane's log ending at
+# its first call to BlazeMeter). Every regex in `patterns` must
 # match "<reason>: <text>". Within one `family` a signal takes the first rule
 # that matches; a `generic` rule folds into the finding of its family for the
 # same subject. `options` are the bundle options the fix names.
@@ -132,6 +176,11 @@ def _role(text, signal):
     return signal.role
 
 
+def _given(text, signal):
+    """The subject the signal already carries (a proxy, a service account)."""
+    return signal.subject
+
+
 PULL = (r"ErrImagePull|ImagePullBackOff|Failed to pull image|"
         r"Back-off pulling image|pull access denied")
 CONNECT = (r"Connection refused|timed out|Name or service not known|"
@@ -183,11 +232,12 @@ RULES = (
           "same answer for a repository that does not exist.",
           "For the crane image, pull_secret names a docker-registry Secret in "
           "the namespace; create it with kubectl create secret "
-          "docker-registry. For the images crane pulls for engines, "
-          "registry_auth adds the DOCKER_REGISTRY_USERNAME and "
-          "DOCKER_REGISTRY_PASSWORD entries to fill in.",
+          "docker-registry. Engine pods run as the namespace's default "
+          "ServiceAccount and get no pull secret from crane, so add the same "
+          "Secret to that ServiceAccount's imagePullSecrets; the bundle's "
+          "README has the command.",
           subject=_image, family="image-pull",
-          options=("pull_secret", "registry_auth")),
+          options=("pull_secret",)),
     _rule("image-not-found", FAIL, "the registry has no such image",
           "event container",
           (PULL, r"manifest unknown|not found|NotFound|name unknown"),
@@ -290,6 +340,33 @@ RULES = (
           "NetworkPolicy or firewall filters egress, allow those hosts. "
           "bzm-opl-gen doctor probes the same hosts from the crane pod.",
           family="crane-connection", options=("proxy",)),
+    _rule("crane-hung-proxy", FAIL, "crane cannot reach BlazeMeter: it hangs "
+          "at its first call", "startup", (r"^CraneStartupHang:", r"HTTPS Proxy"),
+          "Crane's first call to BlazeMeter has not returned, and its log names "
+          "a proxy, the first suspect: nothing answers at that address, or the "
+          "proxy refuses CONNECT to a.blazemeter.com. The pod still shows "
+          "Ready, because its readiness probe does not call BlazeMeter, so "
+          "kubectl get pods looks healthy while BlazeMeter shows the agent "
+          "offline.",
+          "Test from inside the namespace: run a throwaway pod with curl there "
+          "and fetch https://a.blazemeter.com through the proxy. Check the http "
+          "and https keys of the proxy option against the proxy's real address "
+          "and port, and that its no_proxy key does not name a.blazemeter.com. "
+          "Regenerate and apply the bundle, then restart crane.",
+          subject=_given, family="crane-hung", options=("proxy",)),
+    _rule("crane-hung", FAIL, "crane cannot reach BlazeMeter: it hangs at its "
+          "first call", "startup", r"^CraneStartupHang:",
+          "Crane's first call to BlazeMeter has not returned. Something between "
+          "the pod and a.blazemeter.com drops the connection without refusing "
+          "it: a firewall, a NetworkPolicy, or DNS. The pod still shows Ready, "
+          "because its readiness probe does not call BlazeMeter, so kubectl get "
+          "pods looks healthy while BlazeMeter shows the agent offline.",
+          "Test from inside the namespace: run a throwaway pod with curl there "
+          "and fetch https://a.blazemeter.com. Pods in this namespace need "
+          "HTTPS egress to a.blazemeter.com; where the cluster must use a "
+          "proxy, set the proxy option. bzm-opl-gen doctor probes the same "
+          "hosts from the crane pod.",
+          family="crane-hung", options=("proxy",)),
     _rule("auth-token", FAIL, "BlazeMeter refused the agent's token",
           "log",
           (r"\b(401|404) (Client Error|Unauthorized|Not Found)|"
@@ -408,6 +485,43 @@ RULES = (
           subject=_webhook,
           options=("restrict_engines", "run_as_user", "private_registry",
                    "engine_cpu_limit", "engine_mem_limit")),
+    _rule("service-account-missing", FAIL, "the service account does not exist",
+          "event", r"^ServiceAccountMissing:",
+          "The ReplicaSet cannot create crane's pod: the ServiceAccount the "
+          "pod names is not in the namespace.",
+          "Apply the bundle's ServiceAccount, or, where your platform team "
+          "owns the account (service_account_create off), ask them to create "
+          "the one service_account_name names.",
+          subject=_given,
+          options=("service_account_create", "service_account_name")),
+    _rule("service-account-unread", WARN, "a pod waited for a service account "
+          "that could not be checked", "event", r"^ServiceAccountUnread:",
+          "The ReplicaSet could not create a pod because the ServiceAccount "
+          "was missing at the time. Whether it exists now could not be read; "
+          "the unread section of this report says why.",
+          "Check with kubectl get serviceaccount in the namespace. If it is "
+          "missing, apply the bundle's ServiceAccount, or ask your platform "
+          "team for the one service_account_name names.",
+          subject=_given, options=("service_account_name",)),
+    _rule("service-account-late", NOTE, "a pod waited for its service account",
+          "event", r"^ServiceAccountCreatedLater:",
+          "The ReplicaSet tried to create a pod before the ServiceAccount "
+          "existed, which happens when the files are applied in alphabetical "
+          "order. The ServiceAccount exists now, so the ReplicaSet's next "
+          "attempt creates the pod.",
+          "Nothing, if crane is running. Otherwise the other findings in this "
+          "report say why it is not.",
+          subject=_given),
+    # Measured on crane 3.8.0: on every engine of runs that returned all their
+    # results, so alone it explains nothing.
+    _rule("engine-prestop", NOTE, "an engine's preStop hook failed as it ended",
+          "event", r"^FailedPreStopHook:",
+          "The preStop hook crane gives each engine pod failed as the pod "
+          "ended. It fails on engines whose runs return all their results, so "
+          "on its own it does not explain a failed run.",
+          "Nothing on its own. If a run's results are incomplete, the other "
+          "findings in this report say why.",
+          subject=_role, roles="engine"),
     _rule("rbac", FAIL, "the API refused crane's service account",
           "event log", r'forbidden: User "[^"]+" cannot',
           "The Kubernetes API refused crane's service account an action it "
@@ -550,6 +664,15 @@ def _images_by_container(pods):
 IMAGE_IN_TEXT = re.compile(r'image "([^"]+)"')
 
 
+def _finished(pods, name):
+    """True where the pod has Succeeded or is gone; None where pods are unread."""
+    if pods is None:
+        return None
+    phase = next(((p.get("status") or {}).get("phase") for p in pods
+                  if (p.get("metadata") or {}).get("name") == name), "gone")
+    return phase in ("Succeeded", "gone")
+
+
 def event_signals(events, pods, since_s, now):
     images = _images_by_container(pods)
     cutoff = now - datetime.timedelta(seconds=since_s)
@@ -561,6 +684,9 @@ def event_signals(events, pods, since_s, now):
         obj = e.get("involvedObject") or {}
         kind, name = obj.get("kind") or "?", obj.get("name") or "?"
         text = e.get("message") or ""
+        if (kind == "Pod" and e.get("reason") == "Unhealthy"
+                and PROBE_RACED_EXIT.search(text) and _finished(pods, name)):
+            continue
         image = None
         m = IMAGE_IN_TEXT.search(text)
         if m:
@@ -628,12 +754,77 @@ def log_signals(logs):
         if not log.text:
             continue
         obj = f"Pod/{log.pod}" + (" (previous run)" if log.previous else "")
-        for line in log.text.splitlines():
+        for line in redact(log.text).splitlines():
             # An API error body arrives JSON-escaped inside the log line.
             line = line.strip().replace('\\"', '"')
             if line:
                 out.append(Signal("log", "", line, obj, None, "crane", 1,
                                   bool(ERRORISH.search(line))))
+    return out
+
+
+def _proxy_host(url):
+    """The proxy's address without its credentials."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or url
+        return f"{host}:{parts.port}" if parts.port else host
+    except ValueError:
+        return "an unparseable URL"
+
+
+def _started(pod):
+    """When the pod's newest running container started, or None."""
+    times = [_when(((cs.get("state") or {}).get("running") or {}).get("startedAt"))
+             for cs in (pod.get("status") or {}).get("containerStatuses") or []]
+    times = [t for t in times if t]
+    return max(times) if times else None
+
+
+def startup_hang_signals(logs, pods, now):
+    """A crane whose current log ends at its first call to BlazeMeter, running
+    for HANG_AFTER_S or more. The failure is a line that never came, so no
+    RULES pattern over single lines can see it."""
+    by_name = {(p.get("metadata") or {}).get("name"): p for p in pods or []}
+    out = []
+    for log in logs:
+        pod = by_name.get(log.pod)
+        text = redact(log.text or log.last)
+        if log.previous or not text or pod is None:
+            continue
+        started = _started(pod)
+        if started is None:
+            continue
+        running_s = int((now - started).total_seconds())
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if running_s < HANG_AFTER_S or not lines or not STARTUP_CHECK.search(lines[-1]):
+            continue
+        proxies = [p for p in PROXY_IN_LOG.findall(text)
+                   if p.lower() not in ("none", "null")]
+        proxy = _proxy_host(proxies[-1]) if proxies else None
+        text = (f"crane has run for {running_s}s and its log ends at its first "
+                f"call to BlazeMeter: {lines[-1]}"
+                + (f"; its log names HTTPS Proxy {proxy}" if proxy else ""))
+        out.append(Signal("startup", "CraneStartupHang", text, f"Pod/{log.pod}",
+                          proxy, "crane", 1, True))
+    return out
+
+
+def service_account_signals(signals, service_accounts):
+    """Each event naming a ServiceAccount that was missing, renamed by whether
+    it exists now: {name: True} exists, False is absent, None or no entry
+    could not be read (gather puts the reason in `unread`)."""
+    out = []
+    for s in signals:
+        m = SA_LOOKUP.search(s.text) if s.source == "event" else None
+        if not m:
+            out.append(s)
+            continue
+        exists = (service_accounts or {}).get(m.group(1))
+        reason = {True: "ServiceAccountCreatedLater",
+                  False: "ServiceAccountMissing"}.get(exists, "ServiceAccountUnread")
+        out.append(s._replace(reason=reason, subject=m.group(1),
+                              warning=exists is not True))
     return out
 
 
@@ -651,8 +842,11 @@ def namespace_signals(namespace_obj, pods):
 
 # -- matching ---------------------------------------------------------------------
 
+# `history`: every pod it was seen on is gone. `also`: container states on
+# the same pod that the finding explains.
 Finding = collections.namedtuple(
-    "Finding", "rule subject objects count evidence")
+    "Finding", "rule subject objects count evidence history also",
+    defaults=(False, ()))
 Unrecognised = collections.namedtuple(
     "Unrecognised", "source reason count objects example")
 
@@ -697,23 +891,39 @@ def classify(signals):
     """(findings, unrecognised) from signals; findings in RULES order."""
     groups = collections.OrderedDict()
     unknown = collections.OrderedDict()
-    for s in signals:
-        hits = rules_for(s)
+    matched = [(s, rules_for(s)) for s in signals]
+    for s, hits in matched:
         for rule in hits:
             subject = rule.subject(s.text, s) if rule.subject else None
             key = (rule.id, subject)
-            g = groups.setdefault(key, {"objects": [], "count": 0,
+            g = groups.setdefault(key, {"objects": [], "count": 0, "also": [],
                                         "evidence": s.text or s.reason})
             g["count"] += s.count
             if s.object not in g["objects"]:
                 g["objects"].append(s.object)
-        if not hits and s.warning:
-            key = (s.source, s.reason, _shape(s.text))
-            u = unknown.setdefault(key, {"objects": [], "count": 0,
-                                         "example": s.text})
-            u["count"] += s.count
-            if s.object not in u["objects"]:
-                u["objects"].append(s.object)
+
+    # A bare traceback header in a log a rule already explained is the same
+    # failure; a container state on a crash-looping pod is that crash loop.
+    explained_logs = {s.object for s, hits in matched if hits and s.source == "log"}
+    crash_loops = {o: g for (rid, _), g in groups.items() if rid == "crash-loop"
+                   for o in g["objects"]}
+    for s, hits in matched:
+        if hits or not s.warning:
+            continue
+        if (s.source == "log" and s.object in explained_logs
+                and TRACEBACK_HEADER.match(s.text)):
+            continue
+        if s.source == "container" and s.object in crash_loops:
+            also = crash_loops[s.object]["also"]
+            if _clean(s.text) not in also:
+                also.append(_clean(s.text))
+            continue
+        key = (s.source, s.reason, _shape(s.text))
+        u = unknown.setdefault(key, {"objects": [], "count": 0,
+                                     "example": s.text})
+        u["count"] += s.count
+        if s.object not in u["objects"]:
+            u["objects"].append(s.object)
 
     # A generic group folds into the specific one for its subject (or, with no
     # subject, the family's first): the same failure, seen without its cause.
@@ -732,9 +942,9 @@ def classify(signals):
             del groups[(rid, subject)]
     order = {r.id: i for i, r in enumerate(RULES)}
     findings = [Finding(RULES_BY_ID[rid], subject, g["objects"], g["count"],
-                        _clean(g["evidence"]))
+                        _clean(g["evidence"]), False, tuple(g["also"]))
                 for (rid, subject), g in groups.items()]
-    findings.sort(key=lambda f: (f.rule.status != FAIL, order[f.rule.id]))
+    findings.sort(key=lambda f: (STATUS_RANK[f.rule.status], order[f.rule.id]))
     unrecognised = [Unrecognised(src, reason, u["count"], u["objects"],
                                  _clean(u["example"]))
                     for (src, reason, _), u in unknown.items()]
@@ -744,13 +954,19 @@ def classify(signals):
 
 # -- the impure layer -------------------------------------------------------------
 
-# One crane log stream: `text` None when it could not be read, with `detail`.
-LogRead = collections.namedtuple("LogRead", "pod previous text detail")
+# One crane log stream: `text` None when it could not be read, with `detail`;
+# "" with NO_LOG_YET as `detail` for a container that has not started. `last`
+# is the log's last lines regardless of --since, read only when `text` is "".
+LogRead = collections.namedtuple("LogRead", "pod previous text detail last",
+                                 defaults=(None,))
 
 # What gather() read. Each section is None where it could not be read; `unread`
-# holds (section, reason) for each of those.
+# holds (section, reason) for each of those. `service_accounts` holds
+# {name: exists} for each ServiceAccount an event said was missing: True,
+# False for NotFound, None where it could not be read.
 Gathered = collections.namedtuple(
-    "Gathered", "namespace_obj events pods logs unread")
+    "Gathered", "namespace_obj events pods logs unread service_accounts",
+    defaults=(None,))
 
 
 def _read(cmd):
@@ -810,10 +1026,31 @@ def gather(cli, namespace, since_s, log_lines):
         cmd += ["--previous"] if previous else [f"--since={since_s}s"]
         text, why = _read(cmd)
         name = target.split("/")[-1]
-        logs.append(LogRead(name, previous, text, why))
+        if text is None and NOT_STARTED.search(why or ""):
+            text, why = "", NO_LOG_YET
+        last = None
+        if text == "" and not previous and why is None:
+            # Nothing within --since: a crane hung for longer than that
+            # shows only in its last lines, however old.
+            last, _ = _read(base + ["logs", target, "--all-containers",
+                                    f"--tail={HANG_TAIL}", timeout])
+        logs.append(LogRead(name, previous, redact(text), redact(why),
+                            redact(last)))
         if text is None:
             unread.append((f"crane log ({name}"
-                           + (", previous run)" if previous else ")"), why))
+                           + (", previous run)" if previous else ")"), redact(why)))
+
+    accounts = {}
+    for e in events or []:
+        m = SA_LOOKUP.search(e.get("message") or "")
+        if m and m.group(1) not in accounts:
+            text, why = _read(base + ["get", "serviceaccount", m.group(1),
+                                      "-o", "name", timeout])
+            accounts[m.group(1)] = (True if text is not None
+                                    else False if "(NotFound)" in (why or "")
+                                    else None)
+            if accounts[m.group(1)] is None:
+                unread.append((f"service account {m.group(1)}", why))
 
     # {} NotFound, None unread. Namespaced roles often cannot read the object,
     # so that only matters where the namespace looked empty.
@@ -821,7 +1058,7 @@ def gather(cli, namespace, since_s, log_lines):
     if ns_obj is None and pods == []:
         unread.append(("namespace", "could not read the Namespace object, so "
                        "an empty namespace and a missing one look the same"))
-    return Gathered(ns_obj, events, pods, logs, unread)
+    return Gathered(ns_obj, events, pods, logs, unread, accounts)
 
 
 # -- the verdict --------------------------------------------------------------------
@@ -837,12 +1074,15 @@ def evaluate(gathered, namespace, since="1h", now=None):
     g = gathered
     signals = []
     if g.events is not None:
-        signals += event_signals(g.events, g.pods, since_s, now)
+        signals += service_account_signals(
+            event_signals(g.events, g.pods, since_s, now), g.service_accounts)
     if g.pods is not None:
         signals += pod_signals(g.pods, since_s, now)
     signals += log_signals(g.logs)
+    signals += startup_hang_signals(g.logs, g.pods, now)
     signals += namespace_signals(g.namespace_obj, g.pods)
     findings, unrecognised = classify(signals)
+    findings = mark_history(findings, g.pods)
 
     read = []
     if g.events is not None:
@@ -851,22 +1091,46 @@ def evaluate(gathered, namespace, since="1h", now=None):
         read.append(f"pods ({len(g.pods)})")
     for log in g.logs:
         if log.text is not None:
+            about = (log.detail if log.detail == NO_LOG_YET
+                     else f"{len(log.text.splitlines())} lines")
             read.append(f"crane log {log.pod}"
                         + (" previous run" if log.previous else "")
-                        + f" ({len(log.text.splitlines())} lines)")
+                        + f" ({about})")
     return Triage(namespace, since, read, list(g.unread), findings, unrecognised)
 
 
+def mark_history(findings, pods):
+    """Findings seen only on pods that are gone, marked as history and moved
+    after the current ones. Events outlive their pod by about an hour, and a
+    finding from a replaced pod does not describe the namespace now. Events
+    about a ReplicaSet or Deployment are not about one pod, so stay current."""
+    if pods is None:
+        return findings
+    current = {f"Pod/{(p.get('metadata') or {}).get('name')}" for p in pods}
+    out = [f._replace(history=all(o.startswith("Pod/")
+                                  and o.split(" ")[0] not in current
+                                  for o in f.objects))
+           for f in findings]
+    return sorted(out, key=lambda f: f.history)
+
+
+def status(finding):
+    return NOTE if finding.history else finding.rule.status
+
+
 def has_failures(result):
-    return any(f.rule.status == FAIL for f in result.findings)
+    return any(status(f) == FAIL for f in result.findings)
 
 
 def summary_line(result):
-    fails = sum(f.rule.status == FAIL for f in result.findings)
-    warns = len(result.findings) - fails
+    fails = sum(status(f) == FAIL for f in result.findings)
+    warns = sum(status(f) == WARN for f in result.findings)
+    notes = sum(status(f) == NOTE for f in result.findings)
     parts = [f"{fails} known failure{'s' if fails != 1 else ''}"]
     if warns:
         parts.append(f"{warns} warning{'s' if warns != 1 else ''}")
+    if notes:
+        parts.append(f"{notes} note{'s' if notes != 1 else ''}")
     parts.append(f"{len(result.unrecognised)} unrecognised warning"
                  f"{'s' if len(result.unrecognised) != 1 else ''}")
     if result.unread:
@@ -884,10 +1148,11 @@ def as_dict(result):
         "since": result.since,
         "read": result.read,
         "unread": [{"section": s, "detail": d} for s, d in result.unread],
-        "findings": [{"rule": f.rule.id, "status": f.rule.status,
+        "findings": [{"rule": f.rule.id, "status": status(f),
                       "title": f.rule.title, "subject": f.subject,
                       "objects": f.objects, "count": f.count,
-                      "evidence": f.evidence, "finding": f.rule.finding,
+                      "evidence": f.evidence, "also": list(f.also),
+                      "history": f.history, "finding": f.rule.finding,
                       "fix": f.rule.fix, "options": list(f.rule.options)}
                      for f in result.findings],
         "unrecognised": [u._asdict() for u in result.unrecognised],
@@ -907,7 +1172,8 @@ def report(doc):
     print(f"read: {', '.join(doc['read']) if doc['read'] else 'nothing'}")
     for f in doc["findings"]:
         times = "once" if f["count"] == 1 else f"{f['count']} times"
-        print(f"\n{f['status']:<4}  {f['rule']}: {f['title']} ({times})")
+        gone = " (pod gone; history)" if f.get("history") else ""
+        print(f"\n{f['status']:<4}  {f['rule']}: {f['title']} ({times}){gone}")
         if f["subject"]:
             print(_wrap(f"about: {f['subject']}"))
         objects = f["objects"]
@@ -915,6 +1181,8 @@ def report(doc):
             f" and {len(objects) - 5} more" if len(objects) > 5 else "")
         print(_wrap(f"seen on: {shown}"))
         print(_wrap(f"evidence: {f['evidence']}"))
+        for line in f.get("also") or []:
+            print(_wrap(f"also: {line}"))
         print(_wrap(f["finding"]))
         print(_wrap(f"fix: {f['fix']}"))
     for u in doc["unread"]:

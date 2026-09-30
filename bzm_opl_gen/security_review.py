@@ -717,18 +717,44 @@ def _secrets(facts, o, files):
                 f"it.")
         if o["pull_secret"]:
             items.append(f"The image pull secret {_code(o['pull_secret'])} is "
-                         f"named, and this bundle does not create it.")
+                         f"named, and this bundle does not create it. The "
+                         f"README adds it to the namespace's `default` "
+                         f"ServiceAccount, because the engine pods run as "
+                         f"that account and crane gives them no pull secret. "
+                         f"Every pod that runs as `default` in "
+                         f"{_code(o['namespace'])} can then pull with it.")
         sv = sv_cfg(facts, o)
         if sv and SV_INGRESS_BACKENDS[sv["type"]].tls_secret_read:
             items.append(f"The TLS Secret {_code(sv['tls_secret'])} for "
                          f"virtual services is named, and this bundle does "
                          f"not create it.")
+    items.append(_token_in_log(o))
     omitted = ", ".join(f"`{k}`" for k in sorted(SECRET_OPTIONS))
     items.append(f"`{PROFILE_FILE}` records the options without the "
                  f"credentials ({omitted}).")
     lead = _para("The AUTH_TOKEN is the agent's credential for BlazeMeter. "
                  "This document never shows its value.")
     return f"\n## Secrets\n\n{lead}\n\n{_bullets(items)}\n"
+
+
+def _token_in_log(o):
+    """Crane logs its own AUTH_TOKEN at startup (seen with crane 3.8.0), so its
+    log is a copy of the credential wherever the Secret is kept."""
+    lead = ("**Crane writes the AUTH_TOKEN in plain text to its own log** when "
+            "it starts: an INFO line `AUTH_TOKEN: <value>` (seen with crane "
+            "3.8.0). ")
+    if o["output_format"] == "docker":
+        return (lead + "Anyone who can run `docker logs "
+                f"{show(docker_container_name(o['ship_id']))}` on the host, or "
+                "read the container logs a log shipper collects, can read the "
+                "token. Treat crane's log as holding a secret: limit who can "
+                "use docker on the host, and exclude or mask that line in log "
+                "shipping.")
+    return (lead + "Anyone who can read the crane pod's logs, with "
+            f"`{cli(o)} logs` or through a log aggregator that ships them, can "
+            "read the token. Treat crane's logs as holding a secret: limit "
+            f"`pods/log` access in {_code(o['namespace'])} with RBAC, and "
+            "exclude or mask that line in log shipping.")
 
 
 def _deploy_note(o):

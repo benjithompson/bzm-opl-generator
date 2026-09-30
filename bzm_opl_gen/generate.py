@@ -20,7 +20,7 @@ from .bundle_names import (APPLY_ORDER, CHART_DIR, CONFIGMAP_FILE,
                            PREVIEW_TAIL, PROFILE_FILE, REVIEW_FILE,
                            SECRET_FILE)
 from .bundle_options import (DEFAULT_OPTIONS, OUTPUT_FORMATS,
-                             auto_update, engine_size,
+                             auth_token, auto_update, engine_size,
                              resolve_engine_limits, service_account)
 from .ca_trust import ca_cfg
 from .markers import is_placeholder, or_marker
@@ -63,6 +63,7 @@ def generate(facts, options):
 
     # Refuse bad values now rather than at apply time. Each validator asks
     # ignored_options() first, so none refuses a field its format lacks.
+    auth_token(o)
     engine_size(o)
     sa = service_account(o)
     auto_update(o)

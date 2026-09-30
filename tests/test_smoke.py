@@ -398,6 +398,41 @@ def test_an_agent_that_is_not_reporting_fails(cluster, account, words):
     assert doc["triage"] is not None
 
 
+def _cm_cluster(data, secret_keys=()):
+    return smoke.Cluster(None, None, None, "blazemeter-configmap", {"data": data},
+                         "blazemeter-secret", list(secret_keys), None, None,
+                         None, {})
+
+
+def test_a_silent_agent_s_fix_names_the_network_the_token_and_the_triage():
+    """Measured: an unreachable proxy left crane Ready while its heartbeat
+    went stale, so the fix cannot blame the token alone."""
+    quiet = {"state": "idle", "heartbeat_age_s": 900, "online": False}
+    fix = smoke.agent_check(quiet).fix
+    assert "proxy" in fix and "Ready" in fix and "revoked token" in fix
+    assert "triage below" in fix
+    named = smoke.agent_check(quiet, proxy="10.255.255.1:3128").fix
+    assert "10.255.255.1:3128" in named and "first suspect" in named
+    never = smoke.agent_check({"state": "created", "heartbeat_age_s": None},
+                              proxy="10.255.255.1:3128").fix
+    assert "10.255.255.1:3128" in never
+
+
+@pytest.mark.parametrize("data,keys,want", [
+    ({"HTTPS_PROXY": "http://u:%3Cpassword%3E@10.255.255.1:3128"}, (),
+     "10.255.255.1:3128"),
+    ({}, ("AUTH_TOKEN", "HTTPS_PROXY"), "set in the Secret blazemeter-secret"),
+    ({}, ("AUTH_TOKEN",), None),
+])
+def test_the_configured_proxy_is_named_without_credentials(data, keys, want):
+    assert smoke.configured_proxy(_cm_cluster(data, keys)) == want
+
+
+def test_an_unread_configmap_names_no_proxy():
+    c = _cm_cluster({})._replace(configmap=None, secret_keys=None)
+    assert smoke.configured_proxy(c) is None
+
+
 def test_an_unreadable_account_is_unread_not_offline(cluster):
     cluster(healthy_cluster())
     doc = run(FakeAccount(location_error=api.BzmApiError("HTTP 500", status=500)))

@@ -27,6 +27,7 @@ import json
 import os
 import platform
 import re
+import subprocess
 import tempfile
 import time
 
@@ -575,8 +576,10 @@ def wait_for_engine_pod(cli, namespace, timeout=420, poll=10):
     return seen[0] if seen else None
 
 
-def wait_master_done(client, master_id, timeout=900, poll=20):
-    """Poll the run to a terminal status; the last status seen on timeout."""
+def wait_master_done(client, master_id, timeout=900, poll=20,
+                     while_running=None):
+    """Poll the run to a terminal status; the last status seen on timeout.
+    `while_running` is called at each poll that finds the run not yet over."""
     last = [None]
 
     def ended():
@@ -585,7 +588,11 @@ def wait_master_done(client, master_id, timeout=900, poll=20):
         if status != last[0]:
             print(f"  master {master_id}: {status}")
             last[0] = status
-        return status if status in ("ENDED", "ABORTED", "FAILED") else None
+        if status in ("ENDED", "ABORTED", "FAILED"):
+            return status
+        if while_running:
+            while_running()
+        return None
 
     return kube.poll_until(ended, timeout, poll) or last[0]
 
@@ -730,8 +737,17 @@ def run_engine_test(client, cli, namespace, test_id, harbor_id, opts,
         gap = engine_request_gap(pod)
         if gap:
             print("  ENGINE SIZING: " + gap)
-        print("  ENGINE HEAP: " + engine_heap_note(pod))
-        status = wait_master_done(client, master_id, run_timeout)
+        # With no -Xmx in the pod spec, Taurus starts JMeter itself, so the
+        # heap is on a process command line that exists only while the run does.
+        watch = None
+        if engine_heap_bytes(pod) is None:
+            watch = EngineHeapWatch(cli, namespace, pod)
+        else:
+            print("  ENGINE HEAP: " + engine_heap_note(pod))
+        status = wait_master_done(client, master_id, run_timeout,
+                                  while_running=watch and watch.poll)
+        if watch:
+            print("  ENGINE HEAP: " + watch.note())
         if status != "ENDED":
             fails.append(f"the run finished as {status}, not ENDED -- the engine "
                          f"did not complete and report back to BlazeMeter")
@@ -829,17 +845,25 @@ def engine_heap_bytes(pod):
     return None
 
 
+def _pod_memory_limit(pod):
+    limits = [(c.get("resources") or {}).get("limits", {}).get("memory")
+              for c in pod["spec"].get("containers", [])]
+    return next((parse_memory(m) for m in limits if m), None)
+
+
 def engine_heap_note(pod):
     """The heap against the container limit, as a line to print. Reported, not
     asserted: the pairing is the location's to fix. A heap over the limit is an
     OOMKill; one far under it is node capacity reserved and unused."""
     heap = engine_heap_bytes(pod)
-    limits = [(c.get("resources") or {}).get("limits", {}).get("memory")
-              for c in pod["spec"].get("containers", [])]
-    limit = next((parse_memory(m) for m in limits if m), None)
     if heap is None:
         return ("no -Xmx found in the engine container's env, command or args "
                 "-- heap unread, so its fit against the limit is unverified")
+    return heap_against_limit(heap, _pod_memory_limit(pod))
+
+
+def heap_against_limit(heap, limit, what="engine JVM heap"):
+    """`heap` bytes against the container `limit` (None = no limit), as prose."""
     if limit is None:
         return f"engine JVM heap is {format_memory(heap)}; the pod sets no memory limit"
     pct = round(100 * heap / limit)
@@ -850,8 +874,117 @@ def engine_heap_note(pod):
         # Inclusive, matching doctor.check_engine_heap: the default pairing
         # (4096MB in 8Gi) is exactly half.
         verdict = " -- at or under half the limit, so the rest is reserved and unused"
-    return (f"engine JVM heap is {format_memory(heap)} against a "
+    return (f"{what} is {format_memory(heap)} against a "
             f"{format_memory(limit)} limit ({pct}%){verdict}")
+
+
+# Prints `PID <n>: <argv joined by spaces>` for each process whose argv0 is a
+# java binary, and nothing else: the engine's environment holds its
+# SESSION_TOKEN, so no environment is read.
+JVM_CMDLINES_SH = (
+    "for p in /proc/[0-9]*; do "
+    "c=$(tr '\\0' ' ' < \"$p/cmdline\" 2>/dev/null) || continue; "
+    "case \"${c%% *}\" in */java|java) echo \"PID ${p#/proc/}: $c\";; esac; "
+    "done")
+
+_JVM_LINE = re.compile(r"^PID (\d+): (\S+)(.*)$")
+
+
+def parse_jvm_cmdlines(text):
+    """JVM_CMDLINES_SH's output as [{pid, name, xmx, jmeter}]. `xmx` is bytes,
+    or None where the command line sets none; the JVM honours the last -Xmx."""
+    jvms = []
+    for line in text.splitlines():
+        m = _JVM_LINE.match(line.strip())
+        if not m:
+            continue
+        args = m.group(3).split()
+        xmx = _XMX.findall(" ".join(args))
+        jar = next((args[i + 1] for i, a in enumerate(args[:-1]) if a == "-jar"),
+                   None)
+        jmeter = any("ApacheJMeter" in a for a in args)
+        name = ("JMeter" if jmeter else
+                os.path.basename(jar) if jar else os.path.basename(m.group(2)))
+        jvms.append({
+            "pid": int(m.group(1)), "name": name, "jmeter": jmeter,
+            "xmx": (int(xmx[-1][0]) * _XMX_UNIT[xmx[-1][1].lower()]
+                    if xmx else None)})
+    return jvms
+
+
+def read_engine_jvms(cli, namespace, pod):
+    """The java processes running in the engine pod's containers.
+
+    Returns (jvms, why, final): `jvms` is a list (empty = no java process
+    running) or None when unread; `why` then says whether the exec was denied,
+    the pod or its container was gone, or the exec failed, and `final` whether
+    a later read can do better."""
+    jvms = []
+    name = pod["metadata"]["name"]
+    for c in pod["spec"].get("containers", []):
+        try:
+            out = kube.quiet([cli, "-n", namespace, "exec", name, "-c", c["name"],
+                              "--", "sh", "-c", JVM_CMDLINES_SH], timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return None, f"the exec into {name} did not complete ({e})", False
+        if out.returncode != 0:
+            return (None, *_exec_refusal(name, out))
+        jvms += parse_jvm_cmdlines(out.stdout)
+    return jvms, None, False
+
+
+def _exec_refusal(name, out):
+    err = (out.stderr or "").strip()
+    first = err.splitlines()[0] if err else f"exit {out.returncode}"
+    if "forbidden" in err.lower():
+        return f"exec into {name} was denied ({first})", True
+    if "NotFound" in err or "not found" in err or "completed pod" in err:
+        return f"engine pod {name} or its container was gone ({first})", True
+    return f"exec into {name} failed ({first})", False
+
+
+class EngineHeapWatch:
+    """Reads the engine's JVMs at each poll of the run, until JMeter is seen or
+    a read shows a later one cannot succeed. JMeter starts some 20 to 60s after
+    the pod runs, and the pod goes soon after the run ends."""
+
+    def __init__(self, cli, namespace, pod):
+        self.cli, self.namespace, self.pod = cli, namespace, pod
+        self.jvms = None
+        self.why = "the run ended before the engine's processes were read"
+        self.done = False
+
+    def poll(self):
+        if self.done:
+            return
+        jvms, why, final = read_engine_jvms(self.cli, self.namespace, self.pod)
+        if jvms is None:
+            self.why, self.done = why, final
+            return
+        self.jvms = jvms
+        self.done = any(j["jmeter"] for j in jvms)
+
+    def note(self):
+        """The line to print. Only -Xmx values that were read are reported."""
+        if self.jvms is None:
+            return ("no -Xmx in the pod spec, and the running JVMs are unread: "
+                    + self.why)
+        if not self.jvms:
+            return ("no -Xmx in the pod spec, and no java process was running "
+                    "in the engine when it was read")
+        limit = _pod_memory_limit(self.pod)
+        parts = []
+        for j in self.jvms:
+            label = f"{j['name']} (PID {j['pid']})"
+            if j["xmx"] is None:
+                parts.append(f"{label}: no -Xmx, so the JVM default ceiling "
+                             "applies")
+            else:
+                parts.append(heap_against_limit(j["xmx"], limit,
+                                                f"{label} heap"))
+        if not any(j["jmeter"] for j in self.jvms):
+            parts.insert(0, "no JMeter process seen before the run ended")
+        return "; ".join(parts)
 
 
 def assert_engine_pool(pod, node, opts):
@@ -991,10 +1124,19 @@ def wait_online(client, harbor_id, ship_id, timeout=600, poll=15):
         if not ship:
             return False
         hb, state = ship.get("lastHeartBeat") or 0, ship.get("state")
-        print(f"  ship={ship_id} state={state} heartbeat_age={time.time()-hb:.0f}s")
+        print(f"  ship={ship_id} state={state} {heartbeat_label(hb)}")
         return hb >= start - 60 and state in ("idle", "running")
 
     return bool(kube.poll_until(online, timeout, poll))
+
+
+def heartbeat_label(last_heartbeat, now=None):
+    """`heartbeat_age=<N>s`, or `heartbeat=never` for an agent that has not
+    reported: BlazeMeter gives 0 or nothing, which is not an age."""
+    if not last_heartbeat:
+        return "heartbeat=never"
+    now = time.time() if now is None else now
+    return f"heartbeat_age={now - last_heartbeat:.0f}s"
 
 
 def teardown(manifest_dir, namespace, cluster="current", owned=None):

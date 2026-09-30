@@ -7,6 +7,7 @@ DEFAULT_OPTIONS, so readers use `o.get`.
 
 from .footprint import (ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM,
                         ENGINE_MIN_DERIVED_MEM_MB)
+from .markers import is_placeholder
 from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 
 
@@ -296,6 +297,34 @@ def service_account(o):
             "or not service_account_create emits the ServiceAccount itself. "
             "Pass --service-account <name> (the default is 'crane')")
     return name
+
+
+def auth_token(o):
+    """The supplied AUTH_TOKEN, or None where it is blank or a marker.
+
+    Whitespace or a control character is refused, never stripped: crane sends
+    the value as written, BlazeMeter answers 404, and the agent crash-loops as
+    if its token were revoked. The message never echoes the value.
+    """
+    token = o.get("auth_token")
+    if not token or is_placeholder(token):
+        return None
+    token = str(token)
+    lines = token.splitlines()
+    if len(lines) > 1:
+        problem = f"has {len(lines)} lines"
+    elif any(c.isspace() for c in token):
+        problem = "contains whitespace"
+    elif not token.isprintable():
+        problem = "contains a control character"
+    else:
+        return token
+    raise ValueError(
+        f"auth_token (--auth-token) {problem} -- an AUTH_TOKEN is one word "
+        "with no spaces, line breaks or control characters. Nothing was "
+        "stripped: pass the token alone. Written as given, BlazeMeter refuses "
+        "it and the agent restarts as if its token were revoked. The value is "
+        "not shown here.")
 
 
 def auto_update(o):

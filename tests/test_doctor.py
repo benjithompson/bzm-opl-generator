@@ -376,6 +376,10 @@ def test_unknown_heap_is_a_warn_not_a_pass():
     c = _find(doctor.check_engine_heap(_heap_facts(None), {"engine_mem_limit": "8Gi"},
                                        {}), "engine heap")
     assert c.status == doctor.WARN
+    # The measured fact: Taurus sizes the heap when the location does not.
+    assert "Taurus picks the heap itself" in c.detail
+    assert "-Xmx6656m in an 8Gi engine" in c.detail and "jetpack" in c.detail
+    assert not any(t in c.detail for t in ("`", "--", "->"))
 
 
 # -- two node pools ---------------------------------------------------------

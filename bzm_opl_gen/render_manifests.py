@@ -100,7 +100,8 @@ def _configmap(facts, o):
         ]
         if o["registry_auth"]:
             lines += [
-                "  # Registry credentials for engine image pulls (or use cluster pull secrets):",
+                "  # BlazeMeter documents these for docker agents. Engine pods pull with",
+                "  # the default ServiceAccount's pull secrets (see the README):",
                 "  # DOCKER_REGISTRY_USERNAME: <user>",
                 "  # DOCKER_REGISTRY_PASSWORD: <password>",
                 "  # DOCKER_REGISTRY_EMAIL: <email>",

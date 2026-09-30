@@ -524,9 +524,15 @@ def check_engine_heap(facts, opts, cluster):
                           f"hand), so nothing here can tell whether a JVM fits the "
                           f"{limit} limit. Read it from the location's Advanced "
                           f"settings in BlazeMeter")]
+        # Measured on a v4 engine (crane 3.8.0, 8Gi limit, no engineXmx).
         return [Check("engine heap", WARN,
                       f"the location has no engineXmx set, so the engine JVM's "
-                      f"heap against the {limit} limit is unverified")]
+                      f"heap against the {limit} limit is unverified. With no "
+                      f"engineXmx, Taurus picks the heap itself: measured, "
+                      f"JMeter ran with -Xmx6656m in an 8Gi engine (about 81% "
+                      f"of the limit), beside a second JVM (jetpack) with no "
+                      f"-Xmx. So the heap is not the operator's to size unless "
+                      f"the location sets engineXmx")]
 
     heap = xmx * MB
     if heap >= mem:

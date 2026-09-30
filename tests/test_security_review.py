@@ -304,6 +304,20 @@ def test_a_chart_token_passed_at_install_is_said_to_be_in_no_file():
     assert "The AUTH_TOKEN is in no file of this bundle" in flat(md)
 
 
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_the_review_says_crane_logs_its_token(fmt):
+    """Crane logs its AUTH_TOKEN at startup, so the review says who can read
+    that log and what to restrict, without showing the value."""
+    text = flat(section(review({**BASE, "output_format": fmt}), "Secrets"))
+    assert "Crane writes the AUTH_TOKEN in plain text to its own log" in text
+    assert "`AUTH_TOKEN: <value>`" in text and TOKEN not in text
+    assert "mask that line in log shipping" in text
+    if fmt == "docker":
+        assert "`docker logs bzm-crane-" in text
+    else:
+        assert "`kubectl logs`" in text and "`pods/log` access in `ns1`" in text
+
+
 def test_the_profile_omissions_are_the_secret_options():
     md = review(BASE)
     for key in gen.SECRET_OPTIONS:

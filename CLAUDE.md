@@ -209,6 +209,14 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
   `overrideCPU/overrideMemory`, when set, become the limits
   (`resolve_engine_limits`) and replace the requests (measured: 1/4096 gave
   requests {1, 4Gi}); unset everywhere, crane uses 250m/256Mi.
+- **With no `engineXmx`, Taurus sizes the JMeter heap itself**, on the java
+  command line inside the engine, never in the pod spec. Measured at 2/8Gi:
+  `-Xms3328m -Xmx6656m` (81% of the limit), beside a second JVM (`jetpack.jar`)
+  with no `-Xmx`. Read the heap from the running process, not the pod.
+- **Crane's readiness does not test BlazeMeter.** Measured on crane 3.8.0: with
+  an unreachable proxy crane hangs at its first call (the startup connectivity
+  check) and the pod stays `1/1 Ready`; only the heartbeat shows it. Crane also
+  logs its AUTH_TOKEN in plain text at startup, so its log holds a secret.
 - **Engines meet PodSecurity `baseline`, not `restricted`.** `restrict_engines`
   gives them crane's UID and drops every capability, but no agent variable
   sets `runAsNonRoot`. Measured (kind v1.36, server dry run): `restricted`

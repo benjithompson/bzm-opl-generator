@@ -426,9 +426,14 @@ def cluster_checks(cluster, namespace, id_check):
 
 # -- stage 2: the agent in BlazeMeter ---------------------------------------------
 
-def agent_check(status, error=None, missing=False):
+def agent_check(status, error=None, missing=False, proxy=None):
     """`status` is core.agent_status's answer; `error` a refused read, and
-    `missing` the answer that the agent is not in the location."""
+    `missing` the answer that the agent is not in the location. `proxy` is
+    configured_proxy()'s answer, named as the first suspect when crane is
+    silent."""
+    suspect = (f"The proxy crane is configured with ({proxy}) is the first "
+               f"suspect: crane can hang at its first call to BlazeMeter "
+               f"while its pod still shows Ready. " if proxy else "")
     if missing:
         return check("agent", FAIL, f"BlazeMeter does not know this agent: {error}",
                      "Check the ids against the agent in BlazeMeter. A deleted "
@@ -447,11 +452,16 @@ def agent_check(status, error=None, missing=False):
     if status.get("heartbeat_age_s") is None:
         return check("agent", FAIL,
                      f"the agent has never reported (state {status.get('state')})",
-                     "Crane has not reached BlazeMeter. The triage below reads "
-                     "crane's log for the cause: egress, proxy, CA trust or the token.")
+                     "Crane has not reached BlazeMeter. " + suspect
+                     + "The triage below reads crane's log for the cause: "
+                     "egress, proxy, CA trust or the token.")
     return check("agent", FAIL, f"not reporting: {about}",
-                 "Crane reported once and stopped. The triage below reads crane's "
-                 "log; a new token issued for this agent also stops the old one.")
+                 "Crane stopped reporting. " + (suspect or
+                 "The usual causes are the network or proxy between crane and "
+                 "BlazeMeter, where crane can hang at its first call while its "
+                 "pod still shows Ready. ") + "A revoked token stops it too: a "
+                 "new token issued for this agent revokes the old one. The "
+                 "triage below reads crane's log for which.")
 
 
 def location_check(facts, error=None):
@@ -642,6 +652,19 @@ def _proxy_host(url):
         return f"{parts.hostname}:{parts.port}" if parts.port else (parts.hostname or "?")
     except ValueError:
         return "an unparseable URL"
+
+
+def configured_proxy(cluster):
+    """The proxy crane runs with, without credentials: its address from the
+    ConfigMap, "set in the Secret <name>", or None for none or unread."""
+    data = (cluster.configmap or {}).get("data") or {}
+    hosts = sorted({_proxy_host(data[k]) for k in ("HTTPS_PROXY", "HTTP_PROXY")
+                    if data.get(k)})
+    if hosts:
+        return ", ".join(hosts)
+    if any(k in (cluster.secret_keys or []) for k in ("HTTPS_PROXY", "HTTP_PROXY")):
+        return f"set in the Secret {cluster.secret_name}"
+    return None
 
 
 def proxy_check(cluster):

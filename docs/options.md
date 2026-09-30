@@ -42,8 +42,8 @@ of these options that cluster decides and which it only narrows —
 | Option | Default | Meaning |
 |---|---|---|
 | `private_registry` | -- | Sets `DOCKER_REGISTRY`, builds `IMAGE_OVERRIDES` from the facts, and rewrites the crane image. Every image the location needs must be mirrored under this prefix: a missing one silently falls back to the public registry. Fill it with the bundle's own `bzm-opl-image-mirror.sh` -- on Kubernetes crane composes an engine's reference as `<registry>/<repo path>:<tag>`, so an image mirrored to any other path fails with ImagePullBackOff on the first test, after the agent already reports online. |
-| `pull_secret` | -- | `imagePullSecrets` name for the crane image. The Secret itself is not generated -- it holds credentials, so create it in the namespace with `kubectl create secret docker-registry`. Crane passes the same name to the engine pods it spawns. |
-| `registry_auth` | `false` | Emit commented `DOCKER_REGISTRY_USERNAME` / `DOCKER_REGISTRY_PASSWORD` entries, so the variable names are in place for you to fill in. Commented rather than set, so no credential is ever written to a generated file. `pull_secret` covers the crane image itself; this pair is what crane uses for the images *it* pulls. |
+| `pull_secret` | -- | `imagePullSecrets` name for the crane image. The Secret itself is not generated -- it holds credentials, so create it in the namespace with `kubectl create secret docker-registry`. Crane does not pass it to the engine pods it creates: they run as the namespace's `default` ServiceAccount, so the bundle's README adds the Secret there too. |
+| `registry_auth` | `false` | Emit commented `DOCKER_REGISTRY_USERNAME` / `DOCKER_REGISTRY_PASSWORD` entries, so the variable names are in place for you to fill in. Commented rather than set, so no credential is ever written to a generated file. BlazeMeter documents this pair for docker agents only; on Kubernetes the engines pull with the `default` ServiceAccount's pull secrets (see `pull_secret`). |
 
 ### Agent lifecycle
 

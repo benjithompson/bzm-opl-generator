@@ -1683,7 +1683,8 @@ def smoke(client, namespace, harbor_id=None, ship_id=None, run_test=None,
             facts = gather_facts(client, harbor_id)
         except CoreError as e:
             facts_error = str(e)
-    stage2 = [smoke_mod.agent_check(status, agent_error, missing),
+    stage2 = [smoke_mod.agent_check(status, agent_error, missing,
+                                    proxy=smoke_mod.configured_proxy(cluster)),
               smoke_mod.location_check(facts, facts_error)]
     stage3 = smoke_mod.config_checks(cluster, facts, facts_error)
     stages = [smoke_mod.stage(smoke_mod.STAGE_CLUSTER, stage1),
