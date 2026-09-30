@@ -10,7 +10,9 @@ import subprocess
 
 import pytest
 
-_BLOCKED = {"kubectl", "oc", "docker", "minikube", "kind", "helm", "colima"}
+_BLOCKED = {"kubectl", "oc", "docker", "minikube", "kind", "helm", "colima",
+            # Image copiers: a real one pulls gigabytes or pushes to a registry.
+            "skopeo", "crane", "oras", "regctl"}
 
 
 @pytest.fixture(autouse=True, scope="session")

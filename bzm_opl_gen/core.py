@@ -5,6 +5,7 @@ module. It imports no web framework and holds no client. Failures are
 `CoreError` subclasses carrying the HTTP status a web layer answers with.
 """
 
+import base64
 import collections
 import concurrent.futures
 import http.client
@@ -12,8 +13,11 @@ import io
 import json
 import os
 import re
+import shutil
 import socket
 import ssl
+import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -24,10 +28,10 @@ from . import (agent_env as agent_env_mod, api, bundle_env, bundle_names,
                bundle_options, ca_check as ca_check_mod, ca_trust, doctor,
                evidence as evidence_mod, facts as facts_mod, footprint,
                generate as gen_mod, image_catalog as image_catalog_mod,
-               image_registry, kube, markers, options as options_mod, plan,
-               quantity, registry_client, required_fields, service_virt,
-               suggest as suggest_mod, sv_read, triage as triage_mod, verdict,
-               workstation)
+               image_registry, image_transfer, kube, markers,
+               options as options_mod, plan, quantity, registry_client,
+               required_fields, service_virt, suggest as suggest_mod, sv_read,
+               triage as triage_mod, verdict, workstation)
 
 
 # -- failures ------------------------------------------------------------------
@@ -75,6 +79,22 @@ class TokenRefused(UpstreamError):
     def __init__(self, message, upstream):
         super().__init__(message)
         self.upstream = upstream
+
+
+class ToolMissing(CoreError):
+    """No program on PATH can do what was asked; the message names which
+    would."""
+    status = 424
+
+
+class DiskShort(CoreError):
+    """Free space measured below what the sizes that were read need."""
+    status = 507
+
+
+class ChecksumMismatch(CoreError):
+    """An image archive that is not the file the save wrote."""
+    status = 422
 
 
 def _upstream(fn, *args, **kw):
@@ -965,7 +985,8 @@ def image_catalog(facts=None, lookup=True, all_images=False):
     return {**head, "registry_lookup": summary, "images": images}
 
 
-def verify_mirror(facts, registry, options=None, ca_file=None):
+def verify_mirror(facts, registry, options=None, ca_file=None,
+                  all_images=False):
     """Is each image this bundle pulls in the customer's `registry`, under the
     name the mirror script pushes it to? Each is present, missing or unread.
 
@@ -980,7 +1001,7 @@ def verify_mirror(facts, registry, options=None, ca_file=None):
                          "registry.example.com/blazemeter")
     o = {**bundle_options.DEFAULT_OPTIONS, **(options or {}),
          "private_registry": reg_prefix}
-    targets = image_registry.mirror_targets(facts, o)
+    targets = image_registry.mirror_targets(facts, o, all_images=all_images)
     scheme, host, _, _ = registry_client.split_ref(
         f"{registry.rstrip('/')}/probe:latest")
     user, password, where = registry_client.credentials_for(host)
@@ -1005,6 +1026,364 @@ def verify_mirror(facts, registry, options=None, ca_file=None):
             "present": counts[registry_client.PRESENT],
             "missing": counts[registry_client.MISSING],
             "unread": counts[registry_client.UNREAD]}
+
+
+# -- air-gapped transfer: save on one side, load on the other --------------------
+
+def _transfer_tool(wanted, allowed, doing, dry_run, warnings):
+    """The tool to run. A dry run plans with the preferred one even when
+    nothing is on PATH, and says so."""
+    if wanted and wanted not in allowed:
+        raise BadRequest(f"{wanted} cannot {doing}; use {' or '.join(allowed)}")
+    have = image_transfer.available()
+    tool = image_transfer.choose(wanted, have, allowed)
+    if tool:
+        return tool
+    need = wanted or " or ".join(allowed)
+    if not dry_run:
+        raise ToolMissing(f"to {doing}, install {need} (none is on PATH)")
+    warnings.append(f"{need} is not on PATH here; the commands are planned "
+                    f"for {wanted or allowed[0]}")
+    return wanted or allowed[0]
+
+
+def _free_mb(directory):
+    """Free MB on the file system that holds `directory` (its nearest
+    existing parent), or None when it could not be read."""
+    path = directory
+    while not os.path.exists(path) and os.path.dirname(path) != path:
+        path = os.path.dirname(path)
+    try:
+        return shutil.disk_usage(path).free // 1_000_000
+    except OSError:
+        return None
+
+
+def _save_space(directory, images, tool):
+    """{state, need_mb, free_mb, sizes_read, images, detail}: enough, short
+    or unread. `need_mb` sums only the sizes the registry answered with."""
+    read = [i["size_mb"] for i in images if i["size_mb"] is not None]
+    # skopeo writes an archive's contents to TMPDIR before packing them, so
+    # the largest image is on disk twice for a moment.
+    need = sum(read) + (max(read) if read and tool == image_transfer.SKOPEO
+                        else 0)
+    free = _free_mb(directory)
+    out = {"need_mb": need, "free_mb": free, "sizes_read": len(read),
+           "images": len(images)}
+    if free is None:
+        return {**out, "state": registry_client.UNREAD,
+                "detail": f"the free space at {directory} could not be read"}
+    if free < need:
+        return {**out, "state": "short",
+                "detail": f"{free} MB free at {directory}, and the images "
+                          f"need at least {need} MB"}
+    gaps = []
+    if not read:
+        return {**out, "state": registry_client.UNREAD,
+                "detail": f"{free} MB free at {directory}; no image size could "
+                          f"be read from the registry, so the need is unknown"}
+    if len(read) < len(images):
+        gaps.append(f"the size of {len(images) - len(read)} of {len(images)} "
+                    f"images could not be read, so only {need} MB of the "
+                    f"need is known")
+    if tool == image_transfer.DOCKER:
+        gaps.append(f"docker save writes the layers uncompressed, which is "
+                    f"more than the {need} MB compressed size, by an amount "
+                    f"the registry does not publish")
+    if gaps:
+        return {**out, "state": registry_client.UNREAD,
+                "detail": f"{free} MB free at {directory}; " + "; ".join(gaps)}
+    return {**out, "state": "enough", "detail": None}
+
+
+def _registry_manifests(refs):
+    """registry_client manifest reads for each public reference, in order."""
+    def read(ref):
+        reg, path, tag = registry_client.registry_for(ref)
+        return reg.manifest(path, tag)
+    with concurrent.futures.ThreadPoolExecutor(REGISTRY_WORKERS) as pool:
+        return list(pool.map(read, refs))
+
+
+def _run_step(cmd, announce):
+    """Run one transfer command; a failure is UpstreamError with the tail of
+    its output, where the tool writes the reason."""
+    if announce:
+        announce(cmd["text"])
+    try:
+        r = subprocess.run(cmd["argv"], capture_output=True, text=True,
+                           env={**os.environ, **cmd["env"]})
+    except FileNotFoundError:
+        raise ToolMissing(f"{cmd['argv'][0]} is not on PATH")
+    if r.returncode:
+        raise UpstreamError(f"{cmd['text']} failed: "
+                            f"{(r.stderr or r.stdout).strip()[-500:]}")
+
+
+def save_images(facts, directory, options=None, all_images=False, tool=None,
+                dry_run=False, announce=None):
+    """Copy every image the bundle pulls into one archive file each under
+    `directory`, with images-manifest.json and SHA256SUMS beside them.
+
+    The images are mirror_targets' for these `options` (the bundle's
+    profile.json). Each digest and size is read from BlazeMeter's registry
+    first; the free space is checked against the sizes that were read. The
+    manifest is written last, so an interrupted save has none and a load
+    refuses it. `announce` is called with each command before it runs.
+    """
+    directory = os.path.abspath(directory)
+    manifest_path = os.path.join(directory, image_transfer.MANIFEST_FILE)
+    if os.path.exists(directory) and not os.path.isdir(directory):
+        raise BadRequest(f"{directory} is a file, not a directory")
+    if os.path.exists(manifest_path):
+        raise BadRequest(f"{directory} already holds a finished save "
+                         f"({image_transfer.MANIFEST_FILE}); choose an empty "
+                         f"directory")
+    warnings = []
+    tool = _transfer_tool(tool, image_transfer.TOOLS, "save images",
+                          dry_run, warnings)
+    fmt = image_transfer.ARCHIVE_FORMAT[tool]
+    o = {**bundle_options.DEFAULT_OPTIONS, **(options or {})}
+    pairs = image_transfer.target_paths(facts, o, all_images)
+    sources = {r["ref"]: r["source"] for r in
+               image_catalog_mod.location_rows(facts, all_images=True)}
+    looked = _registry_manifests([ref for ref, _ in pairs])
+    images, taken = [], set()
+    for (ref, path), m in zip(pairs, looked):
+        name = image_transfer.archive_name(ref, fmt, taken)
+        taken.add(name)
+        images.append({
+            "ref": ref, "target_path": path,
+            "source": sources.get(ref, image_catalog_mod.FROM_CATALOGUE),
+            "registry_state": m["state"], "registry_detail": m["detail"],
+            "digest": m["digest"], "size_mb": m["size_mb"], "archive": name,
+            "bytes": None, "sha256": None})
+    lacking = [ref for (ref, _), m in zip(pairs, looked)
+               if m["state"] == registry_client.READ and m["found"] is False]
+    space = _save_space(directory, images, tool)
+    for i in images:
+        i["commands"] = image_transfer.save_commands(
+            tool, i["ref"], i["digest"], os.path.join(directory, i["archive"]),
+            directory)
+    if lacking:
+        warnings.append(f"BlazeMeter's registry has no {', '.join(lacking)}")
+    unread = [i for i in images if i["registry_state"] != registry_client.READ]
+    if unread:
+        warnings.append(f"{len(unread)} of {len(images)} images could not be "
+                        f"read from BlazeMeter's registry, so they are copied "
+                        f"by tag and their digest is not recorded (the first: "
+                        f"{unread[0]['registry_detail']})")
+    if space["state"] != "enough":
+        warnings.append(space["detail"])
+    out = {"directory": directory, "tool": tool, "archive_format": fmt,
+           "all_images": bool(all_images), "dry_run": bool(dry_run),
+           "space": space, "warnings": warnings,
+           "manifest": None, "sums": None, "images": images,
+           "commands": [c["text"] for i in images for c in i["commands"]]}
+    if dry_run:
+        return out
+    if lacking:
+        raise NotFound(f"BlazeMeter's registry has no {', '.join(lacking)}; "
+                       f"gather the facts again")
+    if space["state"] == "short":
+        raise DiskShort(space["detail"])
+    os.makedirs(directory, exist_ok=True)
+    for i in images:
+        target = os.path.join(directory, i["archive"])
+        try:
+            for cmd in i["commands"]:
+                _run_step(cmd, announce)
+        except (ToolMissing, UpstreamError) as e:
+            if os.path.exists(target):
+                os.remove(target)
+            raise type(e)(f"{e}\nThe save stopped at {i['ref']}. No "
+                          f"{image_transfer.MANIFEST_FILE} was written, so "
+                          f"a load refuses this directory; run the save "
+                          f"again.")
+        i["bytes"] = os.path.getsize(target)
+        i["sha256"] = image_transfer.sha256_file(target)
+    manifest = {
+        "format": image_transfer.MANIFEST_FORMAT,
+        "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "tool": tool, "archive_format": fmt,
+        "platform": image_transfer.PLATFORM, "all_images": bool(all_images),
+        "options": image_transfer.public_options(options),
+        "facts": facts,
+        "images": [{k: v for k, v in i.items() if k != "commands"}
+                   for i in images]}
+    sums_path = os.path.join(directory, image_transfer.SUMS_FILE)
+    with open(sums_path, "w") as fh:
+        fh.write(image_transfer.sums_text(manifest["images"]))
+    with open(manifest_path, "w") as fh:
+        fh.write(image_transfer.manifest_text(manifest))
+    return {**out, "manifest": manifest_path, "sums": sums_path}
+
+
+def read_saved_images(directory):
+    """The images-manifest.json a finished save wrote in `directory`."""
+    path = os.path.join(os.path.abspath(directory), image_transfer.MANIFEST_FILE)
+    try:
+        with open(path) as fh:
+            manifest = json.load(fh)
+    except FileNotFoundError:
+        raise NotFound(f"no {image_transfer.MANIFEST_FILE} in {directory}: it "
+                       f"is not a save directory, or the save did not finish")
+    except (OSError, ValueError) as e:
+        raise BadRequest(f"{path} could not be read: {e}")
+    found = manifest.get("format") if isinstance(manifest, dict) else None
+    if found != image_transfer.MANIFEST_FORMAT:
+        raise BadRequest(f"{path} is not a manifest this version reads "
+                         f"(format {found!r}, expected "
+                         f"{image_transfer.MANIFEST_FORMAT!r})")
+    return manifest
+
+
+def _check_archives(directory, images):
+    """Refuse, naming each file, unless every archive is the one the save
+    wrote: present, the same length and the same sha256, which SHA256SUMS
+    must agree with."""
+    sums_path = os.path.join(directory, image_transfer.SUMS_FILE)
+    try:
+        with open(sums_path) as fh:
+            sums = image_transfer.parse_sums(fh.read())
+    except OSError:
+        sums = None
+    bad = []
+    for i in images:
+        path = os.path.join(directory, i["archive"])
+        if sums is not None and sums.get(i["archive"]) != i["sha256"]:
+            bad.append(f"{i['archive']}: {image_transfer.SUMS_FILE} and "
+                       f"{image_transfer.MANIFEST_FILE} disagree")
+        elif not os.path.isfile(path):
+            bad.append(f"{i['archive']}: missing")
+        elif os.path.getsize(path) != i["bytes"]:
+            bad.append(f"{i['archive']}: {os.path.getsize(path)} bytes, the "
+                       f"save wrote {i['bytes']}")
+        elif image_transfer.sha256_file(path) != i["sha256"]:
+            bad.append(f"{i['archive']}: sha256 differs from the save's")
+    if bad:
+        raise ChecksumMismatch("FAIL: nothing was pushed; these archives are "
+                               "not the files the save wrote:\n  "
+                               + "\n  ".join(bad))
+    return "verified" if sums is not None else \
+        f"verified against {image_transfer.MANIFEST_FILE}; " \
+        f"{image_transfer.SUMS_FILE} is missing"
+
+
+def _skopeo_destination(host, scheme, ca_file, workdir, dry_run, notes):
+    """skopeo's --dest-* settings. Credentials go into a temporary auth file,
+    never onto the command line. A dry run creates neither file and names
+    each by what it would hold."""
+    user, password, where = registry_client.credentials_for(host)
+    dest = {"tls_verify": False if scheme == "http" else None}
+    from_env = f"{registry_client.USER_ENV}/{registry_client.PASSWORD_ENV}"
+    # From the environment only: skopeo reads the docker config itself.
+    if user and where == from_env:
+        dest["authfile"] = ("<temporary-auth-file>" if dry_run
+                            else os.path.join(workdir, "auth.json"))
+        if not dry_run:
+            token = base64.b64encode(f"{user}:{password}".encode()).decode()
+            fd = os.open(dest["authfile"], os.O_WRONLY | os.O_CREAT, 0o600)
+            with open(fd, "w") as fh:
+                json.dump({"auths": {host: {"auth": token}}}, fh)
+        notes.append(f"credentials: {where}, in a temporary auth file")
+    else:
+        notes.append(f"credentials: skopeo's own login or the docker config "
+                     f"({where})")
+    if ca_file:
+        dest["cert_dir"] = ("<temporary-dir-holding-ca-file>" if dry_run
+                            else os.path.join(workdir, "certs"))
+        if not dry_run:
+            os.makedirs(dest["cert_dir"])
+            try:
+                shutil.copyfile(ca_file, os.path.join(dest["cert_dir"], "ca.crt"))
+            except OSError as e:
+                raise BadRequest(f"the CA file {ca_file!r} could not be used: {e}")
+    return dest
+
+
+def load_images(directory, registry, options=None, tool=None, ca_file=None,
+                dry_run=False, announce=None):
+    """Push each archive a save wrote in `directory` to `registry`, under the
+    name mirror_targets gives for `options` (default: the options the save
+    recorded), then check the registry holds each.
+
+    Every checksum is checked before the first push. A leading `http://`
+    marks a plain-HTTP registry. Credentials come from the environment or
+    the tool's own login, never from an argument.
+    """
+    directory = os.path.abspath(directory)
+    reg_prefix = registry_client.strip_scheme(registry or "")
+    if not reg_prefix:
+        raise BadRequest("--load needs --mirror <registry>, such as "
+                         "registry.example.com/blazemeter")
+    manifest = read_saved_images(directory)
+    facts, all_images = manifest["facts"], bool(manifest.get("all_images"))
+    opts = (manifest.get("options") or {}) if options is None else options
+    o = {**bundle_options.DEFAULT_OPTIONS, **opts,
+         "private_registry": reg_prefix}
+    pairs = image_registry.mirror_targets(facts, o, all_images=all_images)
+    saved = {i["ref"]: i for i in manifest["images"]}
+    absent = [ref for ref, _ in pairs if ref not in saved]
+    if absent:
+        raise BadRequest(f"the save holds no archive for {', '.join(absent)}, "
+                         f"which this profile needs; save again with the same "
+                         f"--profile and --all")
+    warnings, notes = [], []
+    fmt = manifest["archive_format"]
+    tool = _transfer_tool(tool, image_transfer.LOADERS[fmt],
+                          f"push a {fmt} archive", dry_run, warnings)
+    scheme, host, _, _ = registry_client.split_ref(
+        f"{registry.rstrip('/')}/probe:latest")
+    images = [{**saved[ref], "target": target} for ref, target in pairs]
+    checksums = "not checked (dry run)" if dry_run else \
+        _check_archives(directory, images)
+    if tool == image_transfer.SKOPEO:
+        largest = max(i["bytes"] or 0 for i in images) // 1_000_000
+        free = _free_mb(directory)
+        if free is None:
+            warnings.append(f"the free space at {directory} could not be read; "
+                            f"skopeo unpacks each archive there ({largest} MB "
+                            f"for the largest)")
+        elif free < largest:
+            msg = (f"{free} MB free at {directory}, and skopeo unpacks each "
+                   f"archive there: the largest needs {largest} MB")
+            if not dry_run:
+                raise DiskShort(msg)
+            warnings.append(msg)
+    else:
+        notes.append(f"docker push uses the docker login already in place "
+                     f"(docker login {host})")
+        if ca_file:
+            notes.append(f"docker reads a registry CA from "
+                         f"/etc/docker/certs.d/{host}/ca.crt, not from "
+                         f"--ca-file; --ca-file is used by the check only")
+        if scheme == "http":
+            notes.append(f"a plain-HTTP registry must be in the docker "
+                         f"daemon's insecure-registries ({host})")
+    with tempfile.TemporaryDirectory(prefix="bzm-opl-load-") as workdir:
+        dest = (_skopeo_destination(host, scheme, ca_file, workdir, dry_run,
+                                    notes)
+                if tool == image_transfer.SKOPEO else None)
+        for i in images:
+            i["commands"] = image_transfer.load_commands(
+                tool, fmt, i["ref"], os.path.join(directory, i["archive"]),
+                i["target"], directory, dest)
+        out = {"directory": directory, "registry": reg_prefix, "tool": tool,
+               "dry_run": bool(dry_run), "checksums": checksums,
+               "warnings": warnings, "notes": notes,
+               "images": [{"ref": i["ref"], "target": i["target"],
+                           "archive": i["archive"]} for i in images],
+               "commands": [c["text"] for i in images for c in i["commands"]],
+               "verify": None}
+        if dry_run:
+            return out
+        for i in images:
+            for cmd in i["commands"]:
+                _run_step(cmd, announce)
+    out["verify"] = verify_mirror(facts, registry, options=opts,
+                                  ca_file=ca_file, all_images=all_images)
+    return out
 
 
 # -- planning, before any of the above exists ---------------------------------

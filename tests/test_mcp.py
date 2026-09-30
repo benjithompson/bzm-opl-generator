@@ -1145,3 +1145,39 @@ def test_mirroring_images_uses_the_bundle_s_own_names(fake_account):
                "options": {"output_format": "docker"}})
     assert any(c.endswith("reg.local/bzm/taurus-cloud:latest")
                for c in body["commands"] if " push " in c)
+
+
+def test_an_image_transfer_is_only_ever_a_plan(fake_account, monkeypatch,
+                                               tmp_path):
+    """Save and load pull and push gigabytes, so the MCP server answers with
+    the commands and runs none of them, whatever the arguments say."""
+    from bzm_opl_gen import image_transfer
+    monkeypatch.setattr(image_transfer, "available", lambda: {"skopeo"})
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail(
+        "an MCP transfer ran a command"))
+    save = str(tmp_path / "save")
+    body = ok("opl_bundle", "images", {"facts": FACTS, "transfer": "save",
+                                       "dir": save, "dry_run": False})
+    assert body["dry_run"] is True and body["manifest"] is None
+    assert all(" skopeo " in c for c in body["commands"])
+    assert not os.path.exists(save)
+    # A load plan reads a finished save's manifest and pushes nothing.
+    os.makedirs(save)
+    with open(os.path.join(save, image_transfer.MANIFEST_FILE), "w") as fh:
+        json.dump({"format": image_transfer.MANIFEST_FORMAT, "facts": FACTS,
+                   "all_images": False, "options": {}, "tool": "skopeo",
+                   "archive_format": image_transfer.OCI_ARCHIVE,
+                   "images": [dict(i, sha256="0" * 64, bytes=1)
+                              for i in body["images"]]}, fh)
+    plan = ok("opl_bundle", "images", {"transfer": "load", "dir": save,
+                                       "mirror": "reg.local/bzm"})
+    assert plan["dry_run"] is True and plan["verify"] is None
+    assert plan["commands"][0].endswith("docker://reg.local/bzm/crane:3.7.55")
+
+
+def test_an_image_transfer_needs_an_absolute_dir(fake_account):
+    assert "absolute" in err("opl_bundle", "images",
+                             {"facts": FACTS, "transfer": "save",
+                              "dir": "relative/save"})
+    assert "'save' or 'load'" in err("opl_bundle", "images",
+                                     {"transfer": "copy", "dir": "/abs"})
