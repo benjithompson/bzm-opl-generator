@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bzm_opl_gen import generate as gen  # noqa: E402
 from bzm_opl_gen import (bundle_env, bundle_names, bundle_options,  # noqa: E402
                          footprint as footprint_mod, image_registry,
-                         markers as markers_mod, security_review,
+                         markers as markers_mod,
                          service_virt)
 
 from test_generate import FACTS  # noqa: E402
@@ -407,35 +407,6 @@ def test_existing_service_account_reaches_the_overlay():
                    service_account_create=False)
     assert v["serviceAccount"]["create"] is False
     assert v["serviceAccount"]["name"] == "platform-sa"
-
-
-def test_the_cluster_check_reaches_the_overlay_only_when_asked_for():
-    """craneHook is in the overlay only when enabled."""
-    on, files = _values(crane_hook=True)
-    assert on["craneHook"]["enabled"] is True
-    # A `helm test` hook in the chart, not a flat manifest.
-    assert "helm/templates/tests/cranehook.yaml" in files
-    assert bundle_names.HOOK_FILE not in files
-    off, _ = _values()
-    assert "craneHook" not in off
-
-
-def test_the_charts_cluster_check_pod_has_the_manifests_restricted_posture():
-    """The chart's crane-hook pod sets what the manifests' does: the pod's
-    seccomp profile, and a container that drops every capability. The UID stays
-    behind the platform switch, as in crane's own Deployment."""
-    _, files = _values(crane_hook=True)
-    chart = files["helm/templates/tests/cranehook.yaml"]
-    pod = chart.split("kind: Pod", 1)[1]
-    assert not security_review.restricted_gaps([pod])
-    manifests = gen.generate(FACTS, {**BASE, "output_format": "manifests",
-                                     "crane_hook": True})
-    hook = [d for d in yaml.safe_load_all(manifests[bundle_names.HOOK_FILE])
-            if d["kind"] == "Pod"][0]["spec"]
-    assert "seccompProfile:\n      type: RuntimeDefault" in pod
-    assert hook["securityContext"] == {"seccompProfile": {"type": "RuntimeDefault"}}
-    uid = pod.index("runAsUser:")
-    assert pod.rfind('{{- if ne .Values.platform "openshift" }}', 0, uid) != -1
 
 
 def test_helm_readme_names_a_service_account_it_will_not_create():

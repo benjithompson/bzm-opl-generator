@@ -10,15 +10,8 @@ bundle, not composed.
 
 import shlex
 
-from .bundle_options import ignored_options
 from .facts import image_refs, key_base, select_images
 from .footprint import PUBLIC_REGISTRY
-
-
-# crane-hook's image, from BlazeMeter's registry, so a private-registry bundle
-# mirrors it too.
-HOOK_IMAGE_REPO = "cranehook"
-HOOK_IMAGE_TAG = "latest"
 
 
 def crane_image(facts, o):
@@ -92,15 +85,10 @@ def docker_composed_targets(facts, o, all_images=False):
 def mirror_targets(facts, o, all_images=False):
     """[(public ref, destination)] in the order the mirror script copies them:
     crane first, then the location's images (`all_images`: every image the
-    facts name), then crane-hook's where the bundle carries it. The
-    destination is what crane asks for on this platform; crane and crane-hook
-    keep only their last path segment. Every mirror path reads this.
+    facts name). The destination is what crane asks for on this platform;
+    crane keeps only its last path segment. Every mirror path reads this.
     """
     refs = image_refs(facts, all_images=all_images)
-    # The hook's image is not in the location's inventory. Docker ignores
-    # crane_hook, so it is not mirrored there.
-    if o.get("crane_hook") and "crane_hook" not in ignored_options(o):
-        refs = refs + [f"{PUBLIC_REGISTRY}/{HOOK_IMAGE_REPO}:{HOOK_IMAGE_TAG}"]
     reg = o["private_registry"].rstrip("/")
     composed = (docker_composed_targets(facts, o, all_images)
                 or cluster_composed_targets(facts, o, all_images))
@@ -164,7 +152,7 @@ def mirror_script(facts, o):
     else:
         lines += [
             "# Destinations:",
-            "#   crane, crane-hook   <registry>/<name>:<version>",
+            "#   crane               <registry>/<name>:<version>",
             "#   everything else     <registry>/blazemeter/<path>:<version>",
             "# Keep these names: crane builds them from DOCKER_REGISTRY, and they",
             "# match IMAGE_OVERRIDES in this bundle.",

@@ -784,7 +784,11 @@ def build_bundle(facts, options=None, *, client=None, rotate=False,
         if not out_dir:
             raise BadRequest("out_dir is required to write a bundle")
         require_absolute_out_dir(out_dir)
-    opts = dict(options or {})
+    # Before the token: a refused option must not cost a rotation.
+    try:
+        opts = bundle_options.without_retired(options)
+    except ValueError as e:
+        raise BadRequest(str(e))
     source = resolve_auth_token(facts, opts, client=client, rotate=rotate,
                                 out_dir=out_dir, announce=announce)
     try:
@@ -887,6 +891,16 @@ def read_bundle_file(out_dir, name):
         raise BadRequest(f"{name!r} is not text")
 
 
+def _bundle_opts(options, **over):
+    """DEFAULT_OPTIONS, then `options`, then `over`. A retired option set on
+    is BadRequest, with the sentence that names what replaces it."""
+    try:
+        live = bundle_options.without_retired(options)
+    except ValueError as e:
+        raise BadRequest(str(e))
+    return {**bundle_options.DEFAULT_OPTIONS, **live, **over}
+
+
 def mirror_images(facts, mirror=None, platform="linux/amd64", dry_run=False,
                   all_images=False, options=None):
     """Pull each image the location's bundle needs and, with `mirror`, tag and
@@ -894,12 +908,11 @@ def mirror_images(facts, mirror=None, platform="linux/amd64", dry_run=False,
 
     Returns the commands (a dry run is a readable plan). Targets are
     image_registry.mirror_targets, the names the bundle's own mirror script
-    pushes: `options` are the bundle's (its profile.json), whose format and
-    crane_hook decide them; without them, a Kubernetes bundle's.
+    pushes: `options` are the bundle's (its profile.json), whose format
+    decides them; without them, a Kubernetes bundle's.
     """
     if mirror:
-        o = {**bundle_options.DEFAULT_OPTIONS, **(options or {}),
-             "private_registry": mirror}
+        o = _bundle_opts(options, private_registry=mirror)
         pairs = image_registry.mirror_targets(facts, o, all_images=all_images)
     else:
         pairs = [(ref, None) for ref in bundle_images(facts, all_images)]
@@ -1001,8 +1014,8 @@ def verify_mirror(facts, registry, options=None, ca_file=None,
     """Is each image this bundle pulls in the customer's `registry`, under the
     name the mirror script pushes it to? Each is present, missing or unread.
 
-    `options` are the bundle's (its profile.json): the format and crane_hook
-    decide the names. Credentials come from the environment or the docker
+    `options` are the bundle's (its profile.json): the format decides the
+    names. Credentials come from the environment or the docker
     config, never from an argument. The scheme is registry_scheme's: the
     registry's own `http://` or `https://`, else plain HTTP for localhost
     and 127.0.0.0/8 only.
@@ -1011,8 +1024,7 @@ def verify_mirror(facts, registry, options=None, ca_file=None,
     if not reg_prefix:
         raise BadRequest("--verify needs a registry, such as "
                          "registry.example.com/blazemeter")
-    o = {**bundle_options.DEFAULT_OPTIONS, **(options or {}),
-         "private_registry": reg_prefix}
+    o = _bundle_opts(options, private_registry=reg_prefix)
     targets = image_registry.mirror_targets(facts, o, all_images=all_images)
     scheme = registry_client.registry_scheme(registry)
     _, host, _, _ = registry_client.split_ref(f"{reg_prefix}/probe:latest")
@@ -1155,7 +1167,7 @@ def save_images(facts, directory, options=None, all_images=False, tool=None,
     tool = _transfer_tool(tool, image_transfer.TOOLS, "save images",
                           dry_run, warnings)
     fmt = image_transfer.ARCHIVE_FORMAT[tool]
-    o = {**bundle_options.DEFAULT_OPTIONS, **(options or {})}
+    o = _bundle_opts(options)
     pairs = image_transfer.target_paths(facts, o, all_images)
     sources = {r["ref"]: r["source"] for r in
                image_catalog_mod.location_rows(facts, all_images=True)}
@@ -1333,8 +1345,7 @@ def load_images(directory, registry, options=None, tool=None, ca_file=None,
     manifest = read_saved_images(directory)
     facts, all_images = manifest["facts"], bool(manifest.get("all_images"))
     opts = (manifest.get("options") or {}) if options is None else options
-    o = {**bundle_options.DEFAULT_OPTIONS, **opts,
-         "private_registry": reg_prefix}
+    o = _bundle_opts(opts, private_registry=reg_prefix)
     pairs = image_registry.mirror_targets(facts, o, all_images=all_images)
     saved = {i["ref"]: i for i in manifest["images"]}
     absent = [ref for ref, _ in pairs if ref not in saved]

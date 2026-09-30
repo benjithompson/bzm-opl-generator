@@ -43,7 +43,6 @@ CRANE_LABEL = ("role", "role-crane")
 # (engines r-v4-<id>-0-0-c-<suffix>, housekeeping test-job-<suffix>).
 ENGINE_NAME = re.compile(r"^r-[a-z0-9]+-")
 TEST_JOB_NAME = re.compile(r"^test-job-")
-CRANE_HOOK_NAME = re.compile(r"^crane-hook")
 CRANE_NAME = re.compile(r"^crane-[a-z0-9]+-[a-z0-9]{5}$")
 
 # Waiting reasons every healthy start passes through.
@@ -582,7 +581,7 @@ RULES_BY_ID = {r.id: r for r in RULES}
 # -- signals: every observation in one shape -------------------------------------
 
 # One observation. `object` is "<Kind>/<name>"; `subject` the image, where one
-# is known; `role` crane, engine, test-job, crane-hook, mock or other.
+# is known; `role` crane, engine, test-job, mock or other.
 Signal = collections.namedtuple(
     "Signal", "source reason text object subject role count warning")
 
@@ -591,8 +590,6 @@ def pod_role(pod):
     meta = pod.get("metadata") or {}
     name = meta.get("name") or ""
     labels = meta.get("labels") or {}
-    if CRANE_HOOK_NAME.match(name):
-        return "crane-hook"
     if labels.get(CRANE_LABEL[0]) == CRANE_LABEL[1] or CRANE_NAME.match(name):
         return "crane"
     if TEST_JOB_NAME.match(name):

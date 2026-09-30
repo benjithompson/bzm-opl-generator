@@ -16,8 +16,7 @@ from .bundle_env import proxy_env, proxy_has_creds
 from .bundle_names import (APPLY_ORDER, CHART_DIR, CONFIGMAP_FILE, CONFIGMAP_NAME,
                            DEPLOYMENT_FILE, DOCKER_COMPOSE_FILE,
                            DOCKER_ENV_FILE, DOCKER_RUN_FILE, HELM_VALUES_FILE,
-                           HOOK_FILE, HOOK_ROLE_NAME, IMAGES_FILE,
-                           MIRROR_SCRIPT_FILE,
+                           IMAGES_FILE, MIRROR_SCRIPT_FILE,
                            PROFILE_FILE, SECRET_FILE, docker_container_name)
 from .bundle_options import (cli, engine_request_quantities, engine_size,
                              engines_per_node, ignored_options, is_openshift,
@@ -28,7 +27,8 @@ from .footprint import (API_BASE, CRANE_CPU_LIMIT, CRANE_CPU_REQUEST,
                         CRANE_MEM_REQUEST, ENGINE_DISK_GB, ENGINE_TMP_GB,
                         ENGINE_UPLOAD_HOSTS, NODE_OVERHEAD_CPU,
                         NODE_OVERHEAD_MEM, engine_requests)
-from .image_catalog import bundle_rows, cell, functionality_cell
+from .image_catalog import (cell, functionality_cell, location_rows,
+                            security_note)
 from .image_registry import crane_image
 from .markers import MARKER_RE, helm_token_at_install
 from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
@@ -125,13 +125,12 @@ def rules(body):
 
 def rbac(files):
     """Every Role and ClusterRole the rendered files carry, with its rules,
-    in apply order and the crane-hook check last."""
+    in apply order."""
     out = []
-    for name in [*APPLY_ORDER, HOOK_FILE]:
+    for name in APPLY_ORDER:
         for obj in objects(files.get(name, "")):
             if obj["kind"] in ("Role", "ClusterRole"):
-                out.append({**obj, "rules": rules(obj["body"]),
-                            "hook": obj["name"] == HOOK_ROLE_NAME})
+                out.append({**obj, "rules": rules(obj["body"])})
     return out
 
 
@@ -313,18 +312,11 @@ def _what_runs_cluster(facts, o, files):
         f"in the same namespace, {_slots_phrase(facts)}. They exist only while "
         f"the test runs. Crane starts them for these functionalities:",
     ]
-    hook = ""
-    if o["crane_hook"]:
-        how = ("`helm test` runs it" if o["output_format"] == "helm"
-               else "it runs once when it is applied")
-        hook = "\n" + _bullets([
-            f"**The crane-hook check**: a one-shot pod that reads the cluster "
-            f"and exits; {how}. It has its own read-only Role."])
     if o["output_format"] == "manifests":
         rows = [(obj["kind"], _code(obj["name"]),
                  "cluster" if obj["kind"] in CLUSTER_KINDS
                  else _code(obj["namespace"]), f"`{name}`")
-                for name in [*APPLY_ORDER, HOOK_FILE]
+                for name in APPLY_ORDER
                 for obj in objects(files.get(name, ""))]
         listing = ("The objects this bundle applies:\n\n"
                    + _table(("Kind", "Name", "Namespace", "File"), rows))
@@ -334,7 +326,7 @@ def _what_runs_cluster(facts, o, files):
             f"`helm template crane ./{CHART_DIR} -f {HELM_VALUES_FILE}` prints "
             f"them with their names.")
     return (f"\n## What runs\n\n{_bullets(items)}\n"
-            f"{_functionality_bullets(facts)}{hook}\n\n{listing}\n")
+            f"{_functionality_bullets(facts)}\n\n{listing}\n")
 
 
 def _what_runs_docker(facts, o):
@@ -357,7 +349,7 @@ def _what_runs_docker(facts, o):
 
 
 def _images(facts, o):
-    rows = bundle_rows(facts, o)
+    rows = location_rows(facts)
     table = _table(
         ("Image", "What it does", "Functionality", "When it is pulled"),
         [(f"`{r['ref']}`" + (" (floating tag)" if r["tag_mutable"] else ""),
@@ -375,7 +367,10 @@ def _images(facts, o):
     text += (f" `{IMAGES_FILE}` says when each image is pulled, the name each "
              f"must have in a registry, and the command that checks a mirror "
              f"(`bzm-opl-gen images --verify`).")
-    return f"\n## Images\n\n{table}\n\n{_para(text)}\n"
+    notes = list(dict.fromkeys(filter(None, (security_note(r["repo"])
+                                             for r in rows))))
+    tail = f"\n{_bullets(notes)}\n" if notes else ""
+    return f"\n## Images\n\n{table}\n\n{_para(text)}\n{tail}"
 
 
 def _egress_rows(facts, o, docker):
@@ -526,10 +521,6 @@ def _rbac_section(o, files):
             head = f"### ClusterRole{name} (cluster-wide)"
             use = (f"Optional (`cluster_rbac`). Bound to the ServiceAccount "
                    f"{_code(sa)} in {_code(ns)}.")
-        elif role["hook"]:
-            head = f"### Role{name} for the crane-hook check (namespace {_code(ns)})"
-            use = ("Bound to the same ServiceAccount. The check pod uses it, "
-                   "and crane does not need it.")
         else:
             head = f"### Role{name} (namespace {_code(ns)})"
             use = (f"Crane's own permissions, bound to the ServiceAccount "
@@ -587,17 +578,8 @@ def _pod_security(o, files):
             "starts its pods with its own default, a privileged container. "
             "Restricted Pod Security admission, OpenShift's restricted-v2 SCC "
             "and GKE Autopilot refuse such a pod.") + "\n"
-    hook = ""
-    if HOOK_FILE in files:
-        pod = [x for x in objects(files[HOOK_FILE]) if x["kind"] == "Pod"][0]
-        gaps = restricted_gaps(security_contexts(pod["body"]))
-        hook = "\n" + _para(
-            "The crane-hook check pod meets the `restricted` Pod Security "
-            "Standard." if not gaps else
-            "The crane-hook check pod does not meet the `restricted` Pod "
-            "Security Standard. It lacks " + ", ".join(gaps) + ".") + "\n"
     return (f"\n## Pod security\n\n{_para(uid)} Its security contexts, as "
-            f"rendered:\n\n```yaml\n{shown}\n```\n\n{engines}{hook}")
+            f"rendered:\n\n```yaml\n{shown}\n```\n\n{engines}")
 
 
 def _host_access(o):

@@ -163,6 +163,14 @@ def test_a_credential_passed_as_an_option_is_refused(fake_account, tmp_path):
     assert not list(tmp_path.iterdir()), "it wrote the bundle anyway"
 
 
+def test_the_removed_crane_hook_is_refused(fake_account, tmp_path):
+    text = err("opl_bundle", "generate",
+               {"facts": FACTS, "out_dir": str(tmp_path),
+                "options": {"crane_hook": True}})
+    assert "crane_hook was removed" in text and "doctor" in text
+    assert not list(tmp_path.iterdir()), "it wrote the bundle anyway"
+
+
 def test_the_refused_set_is_the_generator_s_own():
     """Not a list restated here: generate.SECRET_OPTIONS is what profile.json
     omits, and the two must mean the same thing."""

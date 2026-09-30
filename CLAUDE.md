@@ -231,8 +231,9 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
   `blazemeter/charmander/chrome_…` — the whole path is the repo). Keys don't
   match repos (`taurus-cloud`→`v4`); `FALLBACK_IMAGES` was read off live
   inventories. Image sources, per key: the location's `/versions` list (works
-  with no agent), then a live agent's inventory (adds `torero`, `richrach`),
-  then the catalogue. `facts.manual()` returns the same shape as `gather()`.
+  with no agent), then a live agent's inventory, then the catalogue. A
+  Kubernetes agent's inventory is BlazeMeter's `/versions` list, not the
+  node's images: `torero`/`richrach` in it do not mean they were pulled. `facts.manual()` returns the same shape as `gather()`.
 - **`latest` on BlazeMeter's registry is stale** (measured: v4 `latest` is
   1.24.169, crane `latest` 3.7.44), and no other moving tag is reliable. With
   an account the location's `/versions` list is exact. Without one,

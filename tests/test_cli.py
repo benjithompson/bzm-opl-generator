@@ -1254,6 +1254,22 @@ def test_the_cluster_defaults_to_kubernetes_and_openshift_has_a_flag(
     assert ("\noc -n " in readme) is expected
 
 
+def test_the_removed_crane_hook_is_refused_as_a_flag_and_in_a_profile(
+        monkeypatch, tmp_path):
+    """--crane-hook and a profile setting crane_hook get the sentence that names
+    the option as removed and points at doctor, and nothing is written."""
+    with pytest.raises(SystemExit) as flag:
+        _generate(monkeypatch, tmp_path, "--crane-hook")
+    assert "crane_hook was removed" in str(flag.value)
+    assert "bzm-opl-gen doctor" in str(flag.value)
+    profile = tmp_path / "old-profile.json"
+    profile.write_text(json.dumps({"crane_hook": True}))
+    with pytest.raises(SystemExit) as prof:
+        _generate(monkeypatch, tmp_path, "--profile", str(profile))
+    assert str(prof.value) == str(flag.value)
+    assert not (tmp_path / "out").exists()
+
+
 def test_openshift_and_not_openshift_are_exclusive(monkeypatch, tmp_path):
     with pytest.raises(SystemExit):
         _generate(monkeypatch, tmp_path, "--openshift", "--not-openshift")

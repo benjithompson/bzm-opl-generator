@@ -171,7 +171,8 @@ argument validation before exiting for want of the environment crane would have
 given it (`TEST_ID`, `COMMAND`). That is a configuration failure, not a refused
 capability, but it is weaker evidence than the rows above and is recorded as
 such: what a fully-configured torero does under no capabilities is untested,
-because nothing here can make one run.
+because nothing here can make one run. What each image does, read from its
+code, is in [images.md](images.md#torero-and-richrach).
 
 ## Where the UID comes from: an SCC, or a pinned value
 

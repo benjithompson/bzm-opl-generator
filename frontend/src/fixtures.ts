@@ -81,7 +81,6 @@ export const IGNORED_BY_FORMAT: Record<string, Record<string, string>> = {
     sv_tls_secret: "there is no Secret to name; this bundle mounts sv_tls_cert "
       + "and sv_tls_key as files",
     sv_istio_gateway: "istio is a Kubernetes service mesh",
-    crane_hook: "crane-hook is a Pod, and there is no cluster to run it in",
     registry_auth: "the stubs are ConfigMap lines; a docker host authenticates "
       + "with its own docker login",
   },

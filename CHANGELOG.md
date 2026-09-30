@@ -11,6 +11,42 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Changed
+
+- **torero and richrach are described from their own code.** `IMAGES.md`,
+  `images --explain` and the Images view now say what each one does: torero
+  checks a test's script files and sends the result to BlazeMeter (it runs no
+  load), and richrach zips a report's logs or the agent's logs into object
+  storage. The earlier text said a Kubernetes agent pulls them ahead of use;
+  it does not. The image list a Kubernetes agent reports is BlazeMeter's list
+  for the location. [docs/images.md](docs/images.md#torero-and-richrach) has
+  the commands, the environment each reads and what each connects to.
+
+- **`SECURITY-REVIEW.md` names two findings in these images** for a location
+  that uses them: torero sends the BlazeMeter API key it is given to each
+  dependency-validation address in its environment, and richrach does not
+  verify the TLS certificate of the object storage it uploads to.
+
+### Removed
+
+- **The `crane_hook` option and the crane-hook check pod are removed.**
+  Bundles no longer carry `bzm_cranehook.yaml`, and the chart no longer has
+  `craneHook.enabled` or its `helm test` pod. The `--crane-hook` flag, the
+  option in a profile, and the option in a page or MCP request are refused
+  with a message that names the option as removed. A `profile.json` from an
+  older bundle records `crane_hook: false`: it still generates, and the new
+  `profile.json` leaves the key out. `images` with `--profile` refuses a
+  profile that sets `crane_hook` to true in the same way. To check a cluster
+  before you deploy, run `bzm-opl-gen doctor` against the target namespace.
+  Its checks include node capacity and disk, LimitRange and ResourceQuota, admission
+  (Pod Security, Kyverno, Gatekeeper, ValidatingAdmissionPolicy and
+  webhooks), a ServiceAccount the bundle does not create, the ingress class
+  for service virtualization, and egress to BlazeMeter from inside the
+  cluster. After you deploy, `bzm-opl-gen smoke` checks the running agent. A
+  crane-hook Pod, Role and RoleBinding that an older bundle applied stay in
+  the namespace until you delete them, for example with
+  `kubectl delete -f bzm_cranehook.yaml` from that bundle.
+
 ## [0.5.0] — 2026-09-30
 
 ### Added

@@ -27,7 +27,6 @@ CLUSTERROLEBINDING_FILE = "bzm_clusterrolebinding.yaml"
 DEPLOYMENT_FILE = "bzm_deployment.yaml"
 
 CA_CONFIGMAP_FILE = "bzm_cacerts.yaml"
-HOOK_FILE = "bzm_cranehook.yaml"
 
 # The order the manifests README applies them in.
 APPLY_ORDER = [
@@ -72,10 +71,6 @@ CONFIGMAP_NAME = "blazemeter-configmap"
 # `bzm-opl.secretName` name it.
 SECRET_NAME = "blazemeter-secret"
 CA_CONFIGMAP = "blazemeter-cacerts"
-
-# crane-hook's Role: ours rather than upstream's `test-hookrole`, so the name
-# says which tool made it.
-HOOK_ROLE_NAME = "bzm-cranehook"
 
 # The compose service, which `docker compose logs -f` takes.
 DOCKER_COMPOSE_SERVICE = "crane"

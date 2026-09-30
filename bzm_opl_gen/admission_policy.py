@@ -20,12 +20,11 @@ import re
 
 from . import evidence
 from .bundle_options import (DEFAULT_OPTIONS, engine_request_quantities,
-                             engine_size, ignored_options)
+                             engine_size)
 from .facts import select_images
 from .footprint import (CRANE_CPU_LIMIT, CRANE_CPU_REQUEST, CRANE_MEM_LIMIT,
                         CRANE_MEM_REQUEST, PUBLIC_REGISTRY, engine_requests)
-from .image_registry import (HOOK_IMAGE_REPO, HOOK_IMAGE_TAG,
-                             composed_image_ref, crane_image)
+from .image_registry import composed_image_ref, crane_image
 from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 from .verdict import FAIL, PASS, WARN, Check
 
@@ -223,10 +222,6 @@ _WHY = {
     ("test-job", DROP_ALL): "crane creates them without the capability drop",
     ("test-job", None): "crane creates them without the restrict_engines "
                         "posture, and this field was not observed set on one",
-    ("crane-hook", DROP_ALL): "the crane-hook pod drops no capability",
-    ("crane-hook", SECCOMP): "the crane-hook pod sets no seccomp profile",
-    ("crane-hook", READONLY_ROOT): "the crane-hook pod sets no "
-                                   "readOnlyRootFilesystem",
 }
 
 
@@ -239,8 +234,7 @@ def _why(pod, demand):
 
 
 def _image_refs(facts, opts):
-    """(crane, engines, hook) image references; None where the facts name
-    none, [] for a hook the bundle does not carry."""
+    """(crane, engines) image references; None where the facts name none."""
     registry = opts.get("private_registry")
     crane = (crane_image(facts, {"private_registry": registry})
              if facts.get("crane_image") else None)
@@ -249,11 +243,7 @@ def _image_refs(facts, opts):
         engines = [composed_image_ref(i["repo"], i["tag"],
                                       registry or PUBLIC_REGISTRY)
                    for i in select_images(facts)]
-    hook = []
-    if opts.get("crane_hook") and "crane_hook" not in ignored_options(opts):
-        hook = [f"{(registry or PUBLIC_REGISTRY).rstrip('/')}/"
-                f"{HOOK_IMAGE_REPO}:{HOOK_IMAGE_TAG}"]
-    return crane, engines, hook
+    return crane, engines
 
 
 def _limitrange_defaults(limitranges):
@@ -282,7 +272,7 @@ def bundle_pods(facts, opts, limitranges):
     Crane's pod is the bundle's own. Engines carry the restrict_engines
     posture, read off live runs (docs/hardened-engines.md). test-job pods
     run the crane image without that posture or resources."""
-    crane_ref, engine_refs, hook_refs = _image_refs(facts, opts)
+    crane_ref, engine_refs = _image_refs(facts, opts)
     restricted = opts.get("restrict_engines", True)
     cpu, mem = engine_size(opts)
     req_cpu, req_mem = engine_requests(facts, engine_request_quantities(opts))
@@ -314,17 +304,7 @@ def bundle_pods(facts, opts, limitranges):
                    None, None,
                    {"requests": lr_requests, "limits": lr_limits,
                     "limit": None, "request": None})
-    pods = [crane, engine, test_job]
-    if hook_refs:
-        pods.append(Pod("crane-hook", "the crane-hook check pod", WARN,
-                        hook_refs,
-                        {**safe, DROP_ALL: False, SECCOMP: None,
-                         READONLY_ROOT: False},
-                        frozenset(), frozenset(),
-                        {"requests": True, "limits": True,
-                         "limit": (200, parse_memory("512Mi")),
-                         "request": (100, parse_memory("256Mi"))}))
-    return pods
+    return [crane, engine, test_job]
 
 
 def pod_security_refusals(level, facts, opts):
@@ -502,11 +482,9 @@ def _fix(finding, failing, engine, namespace):
     roles = {pod.role for pod, _, _ in failing}
     demand = finding.demand
     if demand == LATEST:
-        hook = (" Leave crane_hook off: crane-hook is published only as "
-                "latest." if "crane-hook" in roles else "")
         return ("Regenerate the bundle from the account, whose image list "
                 "pins each image to a release (bzm-opl-gen images lists "
-                f"them).{hook} For an image published only as latest, "
+                "them). For an image published only as latest, "
                 f"{exception}")
     if demand == REGISTRY:
         return ("Set private_registry to a registry the policy allows, and "

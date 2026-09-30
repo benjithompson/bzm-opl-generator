@@ -95,12 +95,6 @@ CASES = {
     "service-account-existing": {"platform": "k8s", "cluster_rbac": True,
                                  "service_account_name": "platform-sa",
                                  "service_account_create": False},
-    # crane-hook: three more objects on both sides.
-    "crane-hook": {"platform": "k8s", "crane_hook": True},
-    "crane-hook-openshift": {"platform": "openshift", "crane_hook": True},
-    "crane-hook-private-registry": {"platform": "k8s", "crane_hook": True,
-                                    "private_registry": "reg.example.com/bzm",
-                                    "service_account_name": "bzm-agent"},
     # Service virtualization: the KUBERNETES_WEB_EXPOSE_* env and the Role's
     # API group, per backend; `none` renders as a performance bundle.
     "sv-nginx": {"platform": "k8s", "sv_ingress": "nginx",
@@ -126,10 +120,6 @@ CASES = {
                      "sv_subdomain": "apps.example.com",
                      "sv_tls_secret": "wildcard-mocks"},
     "sv-declined": {"platform": "k8s", "sv_ingress": service_virt.SV_INGRESS_NONE},
-    "sv-nginx-crane-hook": {"platform": "k8s", "crane_hook": True,
-                            "sv_ingress": "nginx",
-                            "sv_subdomain": "mocks.example.com",
-                            "sv_tls_secret": "wildcard-mocks"},
     # extra_env: numbers and booleans must be quoted on both sides.
     "extra-env": {"platform": "k8s", "extra_env": {
         "PREFERRED_INTERFACE": "eth1", "DODUO_PORT": 8080,
@@ -147,25 +137,8 @@ CONTAINER_FIELDS = ("name", "image", "imagePullPolicy", "resources", "envFrom",
                     "readinessProbe")
 
 
-# crane-hook's objects, compared by name so they do not collide with the
-# agent's Role and RoleBinding.
-HOOK_NAMES = ("bzm-cranehook", "bzm-cranehook-binding", "cranehook")
-
-
-def _is_hook(d):
-    return d and d.get("metadata", {}).get("name") in HOOK_NAMES
-
-
 def _by_kind(docs):
-    out = {}
-    for d in docs:
-        if d and not _is_hook(d):
-            out[d["kind"]] = d
-    return out
-
-
-def _by_name(docs):
-    return {d["metadata"]["name"]: d for d in docs if _is_hook(d)}
+    return {d["kind"]: d for d in docs if d}
 
 
 def _helm_docs(outdir, namespace):
@@ -189,7 +162,6 @@ def compare(name, opts):
         shutil.rmtree(outdir, ignore_errors=True)
     helm = _by_kind(helm_docs)
 
-    # bzm_cranehook.yaml holds several documents.
     flat = [d
             for n, c in gen.generate(
                 FACTS, {**opts, "output_format": "manifests"}).items()
@@ -197,7 +169,7 @@ def compare(name, opts):
             for d in yaml.safe_load_all(c)]
     manifests = _by_kind(flat)
 
-    diffs = _hook_diffs(_by_name(flat), _by_name(helm_docs))
+    diffs = []
     if set(manifests) != set(helm):
         diffs.append(f"object kinds: manifests={sorted(manifests)} "
                      f"helm={sorted(helm)}")
@@ -237,41 +209,6 @@ def compare(name, opts):
                 diffs.append(f"{kind}.rules: {m['rules']} != {h['rules']}")
         elif kind == "Secret" and m["stringData"] != h["stringData"]:
             diffs.append(f"Secret.stringData: {m['stringData']} != {h['stringData']}")
-    return diffs
-
-
-def _hook_diffs(flat, helm):
-    """crane-hook's objects, compared by name; the Pod by what it runs, not by
-    its annotations (the chart's is a `helm test` hook)."""
-    if set(flat) != set(helm):
-        return [f"crane-hook objects: manifests={sorted(flat)} helm={sorted(helm)}"]
-    diffs = []
-    for name in sorted(flat):
-        m, h = flat[name], helm[name]
-        if m["kind"] != h["kind"]:
-            diffs.append(f"{name}.kind: {m['kind']} != {h['kind']}")
-        elif m["kind"] == "Role" and m["rules"] != h["rules"]:
-            diffs.append(f"{name}.rules: {m['rules']} != {h['rules']}")
-        elif m["kind"] == "RoleBinding":
-            for f in ("subjects", "roleRef"):
-                if m[f] != h[f]:
-                    diffs.append(f"{name}.{f}: {m[f]} != {h[f]}")
-        elif m["kind"] == "Pod":
-            mp, hp = m["spec"], h["spec"]
-            # securityContext: the pod's seccomp profile, which restricted
-            # Pod Security admission requires of both.
-            for f in ("serviceAccountName", "restartPolicy", "volumes",
-                      "securityContext"):
-                if mp.get(f) != hp.get(f):
-                    diffs.append(f"{name}.{f}: {mp.get(f)!r} != {hp.get(f)!r}")
-            mc, hc = mp["containers"][0], hp["containers"][0]
-            for f in ("image", "securityContext", "resources", "volumeMounts"):
-                if mc.get(f) != hc.get(f):
-                    diffs.append(f"{name}.container.{f}: {mc.get(f)!r} != {hc.get(f)!r}")
-            me = {e["name"]: e["value"] for e in mc["env"]}
-            he = {e["name"]: e["value"] for e in hc["env"]}
-            if me != he:
-                diffs.append(f"{name}.env: {me} != {he}")
     return diffs
 
 
