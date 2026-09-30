@@ -19,6 +19,7 @@ import subprocess
 import textwrap
 
 from . import kube, service_virt
+from .admission_policy import ENGINE_NO_RUN_AS_NON_ROOT, run_as_non_root_fix
 from .verdict import FAIL, WARN
 
 # kubectl retries an unreachable API server rather than failing; both bounds
@@ -374,12 +375,13 @@ RULES = (
     _rule("pod-security", FAIL, "Pod Security admission refused a pod",
           "event log", r"violates PodSecurity",
           "Pod Security admission refused a pod.",
-          "Keep restrict_engines on (the default): it gives engines a "
-          "restricted-compliant security context. On plain Kubernetes, "
-          "run_as_user must be a non-root UID. If restrict_engines is on and "
-          "this persists, the evidence names the field that failed; a looser "
-          "level on the namespace (the pod-security.kubernetes.io/enforce "
-          "label) is a decision for your platform team.",
+          "Crane's own pod meets the restricted level, but the engines meet "
+          "baseline, not restricted: " + ENGINE_NO_RUN_AS_NON_ROOT + ". "
+          + run_as_non_root_fix("<namespace>") + ". The level on the "
+          "namespace is a decision for your platform team. Keep "
+          "restrict_engines on (the default): without it the engines are "
+          "privileged and even baseline refuses them. On plain Kubernetes, "
+          "run_as_user must be a non-root UID.",
           subject=_first_group(r'violates PodSecurity "([^"]+)"'),
           options=("restrict_engines", "run_as_user", "platform")),
     _rule("openshift-scc", FAIL, "no SecurityContextConstraints admitted a pod",

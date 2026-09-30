@@ -130,7 +130,11 @@ bzm-opl-gen doctor --facts facts.json --manifests out/ -n my-project
 kubectl get namespace my-project >/dev/null 2>&1 || kubectl create namespace my-project
 kubectl apply -n my-project -f out/
 
-# 7. agent offline, or a run stuck at BOOT_STARTING? name the cause and the fix
+# 7. check the deployed agent: cluster, BlazeMeter and configuration.
+#    --run-test <test-id> also starts that test, a real run, and checks its engine
+bzm-opl-gen smoke --api-key api-key.json -n my-project
+
+# 8. agent offline, or a run stuck at BOOT_STARTING? name the cause and the fix
 bzm-opl-gen triage -n my-project
 ```
 
@@ -141,11 +145,17 @@ its answer is what you raise the cluster request *with*
 `out/README.md` is written for whoever receives the bundle, and `out/IMAGES.md`
 lists the images the agent pulls and what each does; `out/profile.json`
 is the resolved options minus the token, replayed with `generate --profile`.
+`out/SECURITY-REVIEW.md` is for whoever approves the deployment: what the agent
+runs, the hosts it connects to, its RBAC rules, pod security, resources and
+secrets. `bzm-opl-gen review` prints it without writing a bundle
+([docs/security-review.md](docs/security-review.md)).
 
 Also: `--format helm` for a chart ([docs/helm.md](docs/helm.md)),
 `--format docker` for one agent as one container
 ([docs/docker.md](docs/docker.md)), `--private-registry` plus `images --pull
---mirror` for an air-gapped cluster (`images --explain` says what each image
+--mirror` for a cluster that pulls from your own registry, `images --save` and
+`images --load` to carry the images as files to a site that cannot reach
+BlazeMeter's registry at all (`images --explain` says what each image
 does, `images --verify` checks the mirror: [docs/images.md](docs/images.md)),
 and `livetest` to start a bundle for real
 and wait for the agent to come online -- a cluster for the manifests, `docker
@@ -225,9 +235,11 @@ option or only narrows it
 | [docs/helm.md](docs/helm.md) | `--format helm`, and `helm upgrade` |
 | [docs/docker.md](docs/docker.md) | `--format docker`, and which options reach it |
 | [docs/service-virtualization.md](docs/service-virtualization.md) | ingress backends for `mockServices`, and `sv-expose` |
-| [docs/images.md](docs/images.md) | `images` — what each image does, mirroring, and checking a mirror |
+| [docs/images.md](docs/images.md) | `images` — what each image does, mirroring, carrying images to an air-gapped site, and checking a mirror |
 | [docs/preflight.md](docs/preflight.md) | `doctor`, `suggest`, `toolcheck`, engine sizing |
+| [docs/security-review.md](docs/security-review.md) | `review` — the document for a change-approval board, in every bundle |
 | [docs/ca-trust.md](docs/ca-trust.md) | `ca-check` — a corporate CA, checked against the network before deploying |
+| [docs/smoke.md](docs/smoke.md) | `smoke` — after deploying, check the agent in the cluster, in BlazeMeter and in its configuration, and optionally with one real engine run |
 | [docs/triage.md](docs/triage.md) | `triage` — after deploying, the known failures in a namespace and the fix for each |
 | [docs/live-test.md](docs/live-test.md) | the live rig: registry, proxy + CA, egress containment |
 | [docs/hardened-engines.md](docs/hardened-engines.md) | the security context crane stamps on the pods it spawns |

@@ -46,8 +46,11 @@ SV_EXPOSE_FILE = "bzm_sv_expose.yaml"
 # Every bundle's list of the images its agent pulls.
 IMAGES_FILE = "IMAGES.md"
 
+# Every bundle's document for a change-approval board or security team.
+REVIEW_FILE = "SECURITY-REVIEW.md"
+
 # Listed last when a bundle is shown (see generate.preview_order).
-PREVIEW_TAIL = [MIRROR_SCRIPT_FILE, IMAGES_FILE, "README.md"]
+PREVIEW_TAIL = [MIRROR_SCRIPT_FILE, REVIEW_FILE, IMAGES_FILE, "README.md"]
 
 # The docker bundle.
 DOCKER_RUN_FILE = "bzm-opl-agent.sh"

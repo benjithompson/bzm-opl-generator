@@ -13,6 +13,49 @@ anything that breaks.
 
 ### Added
 
+- **Every bundle carries `SECURITY-REVIEW.md`**, one document for a
+  change-approval board or security team. It says what the agent runs, the
+  images it pulls, the hosts and ports it connects to, the proxy and CA in
+  force, the exact RBAC rules the bundle grants, crane's security contexts and
+  the engine posture, requests and limits at full concurrency, and what each
+  Secret holds. The RBAC rules, security contexts and Secret keys are read from
+  the bundle's own rendered objects, so the document matches what you apply. It
+  never contains the AUTH_TOKEN, a proxy password or a private key. A docker
+  bundle describes the container and the docker socket instead.
+  `bzm-opl-gen review --facts facts.json --profile profile.json` prints it
+  without writing a bundle, and the MCP server has `opl_bundle review`. See
+  [docs/security-review.md](docs/security-review.md).
+
+- **`smoke` checks an agent you have already deployed.** Run
+  `bzm-opl-gen smoke --api-key api-key.json -n <namespace>` after `kubectl
+  apply`. It reads the crane Deployment, pod, ConfigMap and Secret (key names
+  only) in the cluster; the agent's heartbeat and the location's slots and
+  threads per engine in BlazeMeter; and the engine sizing, location engine
+  overrides, CA trust, proxy and registry settings crane runs with. The
+  location and agent ids come from the deployed ConfigMap. Each check is PASS,
+  WARN, UNREAD, SKIP or FAIL with a fix, and any FAIL adds the `triage`
+  findings for the namespace. It exits 1 only for a FAIL. It creates, changes
+  and deletes nothing. `--run-test <test-id>` also starts that test (a real
+  run in your account, announced before it starts), and checks that crane's
+  engine is limited as the ConfigMap says, is QoS `Guaranteed`, ends, produces
+  samples and exits 0. The test must already run on this location: `smoke`
+  never repoints it. The MCP server offers the read-only checks as
+  `opl_agent smoke`; `run_test` there needs `BZM_OPL_ENABLE_LIVETEST=1`. See
+  [docs/smoke.md](docs/smoke.md).
+
+- **`doctor` reads admission policy engines.** Kyverno policies, Gatekeeper
+  constraints and ValidatingAdmissionPolicy bindings that enforce on the
+  namespace are judged against the pods the bundle and crane create. A policy
+  that refuses crane or the engine pods (a `latest` tag, a registry not on the
+  allowed list, a read-only root filesystem, a missing label) is a FAIL that
+  names the image or field and the option or policy exception that fixes it.
+  Policies in audit mode, or scoped to other namespaces, are counted and not
+  judged. Other validating webhooks on pods are named for review. An engine
+  that is not installed is a PASS; one whose policies could not be read is a
+  WARN. The evidence collector reads the same objects, and writes
+  `"not-served"` for a policy resource the cluster does not have. See
+  [docs/preflight.md](docs/preflight.md#admission-policy-engines).
+
 - **Every bundle carries `IMAGES.md`.** It lists the images the agent pulls,
   what each one does, which functionality needs it, when it is pulled, and
   whether that was seen in a live run. With `--private-registry` it also lists
@@ -33,8 +76,10 @@ anything that breaks.
   or unread. It exits 1 when an image is missing. Pass the bundle's
   `--profile profile.json` for a docker bundle's names, and `--ca-file` for a
   registry signed by your own CA. Credentials come from `BZM_REGISTRY_USER` and
-  `BZM_REGISTRY_PASSWORD` or your docker config, never from a flag. See
-  [docs/images.md](docs/images.md).
+  `BZM_REGISTRY_PASSWORD` or your docker config, never from a flag. Prefix
+  the registry with `http://` or `https://` to choose the scheme. Without a
+  prefix, `localhost` and `127.0.0.0/8` are plain HTTP, as docker treats
+  them, and every other host is HTTPS. See [docs/images.md](docs/images.md).
 
 - **`images --pull --mirror` takes `--profile profile.json`**, and pushes to
   the same names as the bundle's own `bzm-opl-image-mirror.sh` for every
@@ -42,6 +87,22 @@ anything that breaks.
   this way for a docker bundle was not where the docker agent looks. The MCP
   server's `opl_bundle images` takes the bundle's `options` for the same
   reason. Without a profile the names are a Kubernetes bundle's, as before.
+
+- **`images --save` and `images --load` carry the images to an air-gapped
+  site.** On a connected machine, `images --save <dir>` writes each image the
+  location needs (every image with `--all`) to an archive file, with
+  `images-manifest.json` and `SHA256SUMS`. The manifest records each image's
+  digest, size, source, checksum and the name the agent asks for. Carry the
+  directory across. There, `images --load <dir> --mirror <registry>` checks
+  every checksum, pushes each image to the name the agent asks for, and then
+  runs the `--verify` check over the same scheme as the push, so
+  `--mirror http://host:port` works for both tools. The load needs no API
+  key. skopeo is used when it
+  is on `PATH`, else docker. The save checks free space against the sizes the
+  registry answered with, and warns when it could not read them. `--dry-run`
+  prints the commands only. The MCP server's `opl_bundle images` returns the
+  same plan (`transfer`) and never runs it. See
+  [docs/images.md](docs/images.md#air-gapped-sites).
 
 - **`GET /api/images`** serves the catalogue to the web UI, and the MCP
   server's `opl_bundle images` returns it as `catalogue`.
@@ -192,6 +253,23 @@ anything that breaks.
   material moved to `CONTRIBUTING.md`.
 
 ### Fixed
+
+- **The crane-hook check pod now meets the `restricted` Pod Security
+  Standard.** It drops every capability and sets the `RuntimeDefault` seccomp
+  profile, as crane's own pod does, in the manifests (`crane_hook`) and in the
+  chart's `helm test` pod. Before, a namespace that enforces `restricted`
+  refused the check pod. On OpenShift the SCC still assigns its UID.
+
+- **`doctor` passed restricted namespaces that reject every engine.** A
+  namespace labelled `pod-security.kubernetes.io/enforce=restricted` refuses
+  the engine pods: `restrict_engines` gives them a non-root UID but no
+  `runAsNonRoot`, and no agent variable sets it. Crane itself is accepted, so
+  the agent comes online and every run hangs. This is now a FAIL, with the
+  fix: label the namespace `enforce=baseline` (the engines meet it), add a
+  mutating policy that sets `runAsNonRoot: true`, or exempt the namespace.
+  A `baseline` namespace with `restrict_engines` off is now a FAIL too.
+  Measured on Kubernetes v1.36 with a server-side dry run; see
+  [docs/hardened-engines.md](docs/hardened-engines.md).
 
 - **A bundle made without an account deployed an old agent.** Manual-entry
   facts named crane and the other images by `latest`, and on BlazeMeter's

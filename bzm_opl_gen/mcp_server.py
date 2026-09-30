@@ -59,13 +59,16 @@ The path through it:
   7. opl_agent triage           -- if not, or a run hangs at BOOT_STARTING:
                                    the known failures in the namespace, each
                                    with its fix (see triage.md)
+  8. opl_agent smoke            -- the whole post-install check: cluster,
+                                   BlazeMeter and configuration (see smoke.md)
 
 Step 5 is deliberately not a tool. This server does not apply anything to a
 cluster: the person you are working with needs to see what is being applied to
 theirs, and `kubectl apply` in their shell is where they see it. The same goes
 for `helm install` when the bundle is a chart. (The one tool that does deploy is
-opl_agent livetest, which is off unless its own variable is set.) Step 7 reads
-the namespace with this machine's own kubectl or oc context and writes nothing.
+opl_agent livetest, which is off unless its own variable is set.) Steps 7 and
+8 read the namespace with this machine's own kubectl or oc context and write
+nothing; smoke starts a test only with run_test, behind the same variable.
 
 Sizing before there is a cluster: `opl_plan capacity` turns what a customer has
 to run ("5,000 virtual users", "40 browsers at once") into pods, nodes and a
@@ -109,7 +112,9 @@ options.md (every generate option), preflight.md (evidence files and what the
 checks mean), triage.md (what a deployed namespace shows, and each fix),
 capacity-planning.md (sizing a cluster nobody has yet), helm.md
 and docker.md (the two non-manifest output formats), service-virtualization.md,
-hardened-engines.md, images.md (what each image does, mirroring and checking
+hardened-engines.md, security-review.md (the document an approval board
+reads: what the agent runs, reaches and may do), images.md (what each image
+does, mirroring and checking
 a mirror), live-test.md, ca-trust.md (a corporate CA, and the
 `bzm-opl-gen ca-check` command the customer runs on their own network to test
 it). Read the one that covers the question rather
@@ -205,7 +210,9 @@ DOC_SUMMARIES = {
     "hardened-engines.md": "The restricted engine posture, and which images "
                            "have run under it.",
     "images.md": "What each image does and which functionality needs it, "
-                 "mirroring them, and checking a mirror with images --verify.",
+                 "mirroring them, carrying them to an air-gapped site with "
+                 "images --save and --load, and checking a mirror with "
+                 "images --verify.",
     "live-test.md": "The live rig: what it proves and what it costs.",
     "ca-trust.md": "A corporate TLS-inspecting CA: the four ways to supply it, "
                    "and checking it with ca-check before deploying.",
@@ -218,6 +225,11 @@ DOC_SUMMARIES = {
     "mcp.md": "This server: its tools, its gates, and what it will not do.",
     "triage.md": "After deploying: the known failures triage recognises in "
                  "a namespace, and the fix for each.",
+    "security-review.md": "SECURITY-REVIEW.md, the document every bundle "
+                          "carries for an approval board, and opl_bundle "
+                          "review.",
+    "smoke.md": "After deploying: the smoke check of an agent, stage by stage, "
+                "and what starting one real engine run adds.",
 }
 
 
@@ -526,7 +538,7 @@ def _after_facts(facts):
 
 # -- opl_bundle ----------------------------------------------------------------
 
-BUNDLE_ACTIONS = ("generate", "read", "options", "images")
+BUNDLE_ACTIONS = ("generate", "read", "options", "images", "review")
 
 DESCRIPTIONS["opl_bundle"] = (
     "The manifests, written to a directory you name.\n"
@@ -548,6 +560,17 @@ DESCRIPTIONS["opl_bundle"] = (
     "into that registry, under the names the bundle's own mirror script "
     "uses (pass the bundle's options, e.g. output_format, for a docker "
     "bundle), which writes to it -- confirm before calling it that way.\n"
+    "             For a site that cannot reach BlazeMeter's registry: "
+    "transfer='save' {facts, dir, all?, options?, tool?} plans saving each "
+    "image to an archive in dir; transfer='load' {dir, mirror, options?, "
+    "tool?} plans pushing a finished save to mirror. Both are dry runs: "
+    "they return the commands, and the user runs `images --save` and "
+    "`images --load` themselves.\n"
+    "  review   -- {facts, options?}: the SECURITY-REVIEW.md that the "
+    "bundle for these options carries, for a change-approval board or "
+    "security team. What runs, images, network egress, TLS trust, RBAC "
+    "rules, pod security, resources and secrets. Writes nothing and never "
+    "contains the AUTH_TOKEN.\n"
     "Applying the bundle is yours: `kubectl apply -f <out_dir>`. No "
     "action on this tool touches a cluster at all.")
 
@@ -591,6 +614,34 @@ def _bundle(action, args):
                             "intact on disk. opl_location reveal_token returns "
                             "the value -- and rotates it."} if redacted else {})}
 
+    if action == "images" and args.get("transfer") and \
+            not os.path.isabs(args.get("dir") or ""):
+        raise ToolError("transfer needs dir, an absolute path: a relative one "
+                        "resolves against this server's working directory")
+
+    if action == "images" and args.get("transfer") == "save":
+        facts, directory = _need(args, "facts", "dir")
+        # A plan only: the save pulls gigabytes, so the user runs it.
+        return {**core.save_images(
+            facts, directory, options=_no_secrets(args.get("options") or {}),
+            all_images=bool(args.get("all")), tool=args.get("tool"),
+            dry_run=True),
+            "next": [f"bzm-opl-gen images --save {directory} ... on a machine "
+                     f"that reaches BlazeMeter's registry (YOU run it)"]}
+
+    if action == "images" and args.get("transfer") == "load":
+        directory, mirror = _need(args, "dir", "mirror")
+        return {**core.load_images(
+            directory, mirror, options=_no_secrets(args["options"])
+            if args.get("options") is not None else None,
+            tool=args.get("tool"), dry_run=True),
+            "next": [f"bzm-opl-gen images --load {directory} --mirror {mirror} "
+                     f"on the air-gapped side (YOU run it)"]}
+
+    if action == "images" and args.get("transfer"):
+        raise ToolError(f"transfer is 'save' or 'load', not "
+                        f"{args['transfer']!r}")
+
     if action == "images":
         facts, = _need(args, "facts")
         refs = core.bundle_images(facts, all_images=bool(args.get("all")))
@@ -610,6 +661,15 @@ def _bundle(action, args):
             platform=args.get("platform", "linux/amd64"),
             dry_run=bool(args.get("dry_run")), all_images=bool(args.get("all")),
             options=_no_secrets(args.get("options") or {}))
+
+    if action == "review":
+        facts, = _need(args, "facts")
+        options = _no_secrets(args.get("options") or {})
+        return {"document": core.security_review(facts, options),
+                "file": bundle_names.REVIEW_FILE,
+                "next": ["hand the document to whoever approves the "
+                         "deployment; every generated bundle carries the same "
+                         f"file as {bundle_names.REVIEW_FILE}"]}
 
     raise _unknown(action, BUNDLE_ACTIONS)
 
@@ -815,7 +875,7 @@ def _preflight(action, args):
 
 # -- opl_agent -----------------------------------------------------------------
 
-AGENT_ACTIONS = ("status", "triage", "livetest")
+AGENT_ACTIONS = ("status", "triage", "smoke", "livetest")
 
 DESCRIPTIONS["opl_agent"] = (
     "The deployed agent.\n"
@@ -827,6 +887,15 @@ DESCRIPTIONS["opl_agent"] = (
     "finding names the option or action that fixes it; `unread` lists "
     "reads the cluster refused, which are not findings, and "
     "`unrecognised` lists warnings no rule knows. Report both.\n"
+    "  smoke    -- the post-install check of an agent already deployed "
+    "{namespace, harbor_id?, ship_id?}: crane's Deployment, pod, ConfigMap "
+    "and Secret in the cluster; the agent's heartbeat and the location in "
+    "BlazeMeter; and the engine sizing, CA trust, proxy and registry crane "
+    "runs with. Reads only; the ids come from the deployed ConfigMap when "
+    "not given. Each check is PASS, WARN, UNREAD, SKIP or FAIL with a fix, "
+    "and any FAIL adds a triage of the namespace. `run_test` (a test id) "
+    "also STARTS that test, a real run in the account, and is off unless "
+    + ENABLE_LIVETEST_ENV + "=1.\n"
     "  livetest -- deploy a bundle to a cluster and wait for the agent "
     "{manifests, namespace, harbor_id, ship_id, cluster?, timeout?}. "
     "Off unless " + ENABLE_LIVETEST_ENV + "=1, blocks for minutes, and "
@@ -850,6 +919,19 @@ def _agent(action, args):
         report = core.triage(namespace, since=args.get("since"),
                              log_lines=args.get("crane_log_lines"))
         return dict(report, next=_after_triage(report))
+
+    if action == "smoke":
+        namespace, = _need(args, "namespace")
+        if args.get("run_test"):
+            _gate(ENABLE_LIVETEST_ENV,
+                  "starting a test from smoke (it is a real run in the account)")
+        report = core.smoke(_client(args), namespace,
+                            harbor_id=args.get("harbor_id"),
+                            ship_id=args.get("ship_id"),
+                            run_test=args.get("run_test"),
+                            engine_timeout=args.get("engine_timeout"),
+                            run_timeout=args.get("timeout"))
+        return dict(report, next=_after_smoke(report))
 
     if action == "livetest":
         _gate(ENABLE_LIVETEST_ENV,
@@ -907,6 +989,24 @@ def _after_triage(report):
                      "as found rather than guessing a cause")
     return steps or ["nothing known is wrong in the namespace. opl_agent "
                      "status says whether the agent is reporting"]
+
+
+def _after_smoke(report):
+    """Where a smoke check leads."""
+    if not report["ok"]:
+        return ["apply the fix each FAIL names, regenerating with opl_bundle "
+                "generate where it names an option, then run smoke again",
+                "the triage in this answer names what the namespace shows"]
+    steps = []
+    if report["counts"].get("UNREAD"):
+        steps.append("some reads were refused, so those checks say nothing: "
+                     "ask someone with read access to the namespace to run "
+                     "bzm-opl-gen smoke")
+    if not any(s["stage"] == "engine run" for s in report["stages"]):
+        steps.append("nothing here started an engine. bzm-opl-gen smoke "
+                     "--run-test <test-id> starts one real run and checks the "
+                     "engine crane creates for it")
+    return steps or ["the agent is ready to run tests"]
 
 
 # -- the server ----------------------------------------------------------------

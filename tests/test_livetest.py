@@ -396,6 +396,18 @@ def test_a_starved_run_looks_healthier_than_a_good_one():
     assert livetest.assert_engine_exited_cleanly(healthy, 1) == []
 
 
+def test_the_shared_readers_tell_an_unread_run_from_a_bad_one():
+    """smoke reuses these to report a read it could not make as unread."""
+    assert livetest.taurus_exit_codes(_EventClient(DIED), 1) == ["1"]
+    assert livetest.taurus_exit_codes(_EventClient(["Status changed"]), 1) == []
+    assert livetest.run_summary(
+        _FakeClient({"hits": 3, "avg": 9, "failed": 1}), 1) == (3, 9, 1)
+    assert livetest.proxy_credentials_in(
+        {"HTTPS_PROXY": "http://u:p@h:1"}) == ["HTTPS_PROXY"]
+    with pytest.raises(ValueError):
+        livetest.missing_image_overrides({"IMAGE_OVERRIDES": "{not json"}, FACTS)
+
+
 def test_a_missing_exit_status_is_unverified_not_passed():
     """No Taurus exit status is unverified, not passed."""
     fails = livetest.assert_engine_exited_cleanly(_EventClient(["Status changed to ENDED (140)"]), 1)

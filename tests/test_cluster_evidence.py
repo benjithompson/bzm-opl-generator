@@ -15,11 +15,11 @@ from bzm_opl_gen import (cli, doctor, evidence, facts as facts_mod, kube)  # noq
 # wrote. The cluster objects inside it are `test_doctor`'s, so the imported and
 # the live paths are fed literally the same objects.
 from evidence_fixtures import (CLASSES, CLUSTER_SCOPED_DENIED,  # noqa: E402
-                               DEGRADED, FILES as FIXTURES, HALF_READ,
-                               NAMESPACE_DENIED, NODES, SCOPED, document,
-                               load, raw)
-from test_doctor import (FACTS, NS_BASELINE, SV_NGINX, _big,  # noqa: E402
-                         _find, _statuses)
+                               DEGRADED, EMPTY_LIST, FILES as FIXTURES,
+                               HALF_READ, NAMESPACE_DENIED, NODES, SCOPED,
+                               document, load, raw)
+from test_doctor import (FACTS, NS_BASELINE, POLICY_SECTIONS,  # noqa: E402
+                         SV_NGINX, _big, _find, _statuses)
 
 EXAMPLE_FACTS = os.path.join(os.path.dirname(__file__), "..", "examples",
                              "facts.example.json")
@@ -31,12 +31,20 @@ def _live(monkeypatch, **served):
     """gather_cluster() against a kubectl that answers with the same documents.
     `served` overrides a kind with kget's failure shape ({})."""
     answers = {"nodes": NODES, "ingressclass": CLASSES, "ns": NS_BASELINE,
-               "limitrange,resourcequota,serviceaccount": SCOPED}
+               "limitrange,resourcequota,serviceaccount": SCOPED,
+               "validatingwebhookconfigurations": EMPTY_LIST,
+               # No policy engine: what raw() carries by default.
+               **{kind: (evidence.NOT_SERVED if "gatekeeper" in kind
+                         or "kyverno" in kind or kind == "constraints"
+                         else EMPTY_LIST)
+                  for _, _, kind in doctor.POLICY_READS}}
     answers.update(served)
     monkeypatch.setattr(kube, "kget",
                         lambda cli, ns, kind, name=None: answers[kind])
     monkeypatch.setattr(kube, "kget_named",
                         lambda cli, ns, kind, name=None: answers[kind])
+    monkeypatch.setattr(kube, "kget_served",
+                        lambda cli, ns, kind, timeout=None: answers[kind])
     return doctor.gather_cluster("kubectl", "blazemeter")
 
 
@@ -185,7 +193,8 @@ def test_the_script_output_from_a_machine_with_no_cluster_is_usable():
     imported = doctor.cluster_from_evidence(doc, "some-ns")
     assert imported.cluster == {"nodes": None, "ingressclasses": None,
                                 "limitranges": None, "quotas": None,
-                                "serviceaccounts": None, "namespace": None}
+                                "serviceaccounts": None, "namespace": None,
+                                **dict.fromkeys(POLICY_SECTIONS)}
     checks = doctor.evaluate(FACTS, OPTS, "some-ns", cluster_data=imported.cluster,
                              probes=imported.probes, extra_checks=imported.checks)
     assert doctor.FAIL not in _statuses(checks)
@@ -377,7 +386,7 @@ def test_doctor_runs_from_an_evidence_file_with_no_cluster(monkeypatch, capsys,
     assert "WARN" in out and "FAIL" not in out
     # The count pins that every null section was noticed (@reads and the source
     # guards in test_doctor.py name the check). Update it when a check is added.
-    assert out.count("WARN") == 9, out
+    assert out.count("WARN") == 13, out
 
 
 def test_doctor_takes_the_namespace_from_the_evidence(monkeypatch, capsys):
@@ -434,7 +443,7 @@ DOCUMENT_MARKER = "# -- the document"
 # same depth -- get_json/get_names inside a section, can_i inside a permission
 # group.
 _PRINTF_KEY = re.compile(r"""^\s*printf '(\s*)"([^"%]+)":""")
-_COLLECT = re.compile(r"^(?:get_json|get_names)\s+(\S+)")
+_COLLECT = re.compile(r"^(?:get_json|get_names|get_served)\s+(\S+)")
 _PROBE = re.compile(r'^can_i\s+"([^"]+)"')
 
 

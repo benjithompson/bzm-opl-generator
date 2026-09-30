@@ -237,8 +237,10 @@ OPTIONS = [
         doc="The UID crane's pod runs as, on `platform: k8s` only. On OpenShift "
             "the SCC assigns a UID from the namespace's range and rejects a "
             "pinned one, so nothing is emitted there. Any non-root UID satisfies "
-            "restricted PodSecurity. With `restrict_engines` on, this is also "
-            "the UID:GID the engines inherit."),
+            "restricted PodSecurity for crane's pod. With `restrict_engines` "
+            "on, this is also the UID:GID the engines inherit; they meet "
+            "baseline, not restricted, because no agent variable sets "
+            "`runAsNonRoot` on them."),
     Option(
         "restrict_engines", "boolean", "Security and RBAC",
         summary="Engines crane spawns drop all capabilities and inherit crane's UID:GID.",
