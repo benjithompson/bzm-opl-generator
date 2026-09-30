@@ -18,7 +18,7 @@ pipx install "bzm-opl-gen[mcp]"
 
 `[ui,mcp]` installs the web UI as well. To track `main` or a tag PyPI has not
 seen, install from git instead —
-`pipx install "bzm-opl-gen[mcp] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.4.1"`
+`pipx install "bzm-opl-gen[mcp] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.5.0"`
 — and see the [README](../README.md#install) for the release-wheel route.
 
 Then add it to your client. The API key goes in the server's environment — never

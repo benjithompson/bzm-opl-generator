@@ -11,6 +11,8 @@ anything that breaks.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-30
+
 ### Added
 
 - **Every bundle carries `SECURITY-REVIEW.md`**, one document for a
@@ -2019,7 +2021,8 @@ First packaged release.
   and OpenShift routes, plus `sv-expose` for reaching a virtual service where
   crane's own nginx Ingress doesn't resolve.
 
-[Unreleased]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.1...v0.3.2
