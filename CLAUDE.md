@@ -71,6 +71,10 @@ cli.py  server.py  mcp_server.py      three front doors, thin
    bundle_check.py  sv_read.py  verdict.py  evidence.py  cert.py  options.py
    image_catalog.py (what each image is; release rules)   registry_client.py
    ca_check.py (TLS chain against the network)   triage.py (post-deploy rules)
+   smoke.py (post-install check of a deployed agent; reuses livetest readers)
+   security_review.py (SECURITY-REVIEW.md, derived from the rendered objects)
+   image_transfer.py (air-gapped save/load plans)   admission_policy.py
+   (Kyverno, Gatekeeper, VAP: which enforcing policy refuses which pod)
 frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
 ```
 
@@ -103,8 +107,9 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
   descriptions, `INSTRUCTIONS` and `docs/*.md` are all the documentation there
   is. It never returns an AUTH_TOKEN (`reveal_token` is its own action), never
   takes a secret as an argument, and never writes to a cluster except gated
-  `opl_agent livetest` (`BZM_OPL_ENABLE_LIVETEST`); `opl_agent triage` only
-  reads one. Anticipated failures raise
+  `opl_agent livetest` (`BZM_OPL_ENABLE_LIVETEST`, which also gates
+  `opl_agent smoke` with `run_test`); `opl_agent triage` and `smoke` only
+  read one. Anticipated failures raise
   the SDK's `ToolError`; anything else reaches the client as a bare
   "Error executing tool".
 - **Options:** a new option needs a row in `options.py` (`summary` ≤20 words,
@@ -131,7 +136,9 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
    parse, [] = no names), `ui_build.staleness`, `ca_trust.CA_UNRESOLVED`,
    `core.NotFound` (404 only), `registry_client` states (read / unread /
    not-asked; present / missing / unread), `doctor.Unprobed`, `triage.gather`
-   sections (None = unread), frontend `stale.ts` (status, never message).
+   sections (None = unread), `kube.kget_served` (`evidence.NOT_SERVED` = the
+   API is not installed, None = unread), frontend `stale.ts` (status, never
+   message).
    A denied read is a WARN and exits 0; an empty result can be a FAIL. The
    evidence document's section names live once in `evidence.py`, and
    `test_cluster_evidence` holds the shell collector to them.
@@ -202,6 +209,19 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
   `overrideCPU/overrideMemory`, when set, become the limits
   (`resolve_engine_limits`) and replace the requests (measured: 1/4096 gave
   requests {1, 4Gi}); unset everywhere, crane uses 250m/256Mi.
+- **With no `engineXmx`, Taurus sizes the JMeter heap itself**, on the java
+  command line inside the engine, never in the pod spec. Measured at 2/8Gi:
+  `-Xms3328m -Xmx6656m` (81% of the limit), beside a second JVM (`jetpack.jar`)
+  with no `-Xmx`. Read the heap from the running process, not the pod.
+- **Crane's readiness does not test BlazeMeter.** Measured on crane 3.8.0: with
+  an unreachable proxy crane hangs at its first call (the startup connectivity
+  check) and the pod stays `1/1 Ready`; only the heartbeat shows it. Crane also
+  logs its AUTH_TOKEN in plain text at startup, so its log holds a secret.
+- **Engines meet PodSecurity `baseline`, not `restricted`.** `restrict_engines`
+  gives them crane's UID and drops every capability, but no agent variable
+  sets `runAsNonRoot`. Measured (kind v1.36, server dry run): `restricted`
+  refuses that spec and `baseline` accepts it. Crane's own pod meets
+  `restricted`. The fact lives once, in `admission_policy.ENGINE_NO_RUN_AS_NON_ROOT`.
 - No LimitRange is emitted: crane sets requests explicitly, so a LimitRange
   only hits crane's `test-job-*` pods. `doctor` still reads an existing one.
 - Crane requests 250m/512Mi and limits 1 CPU/2Gi: the scheduler places on the

@@ -17,13 +17,24 @@ parse. It judges the file alone; `ca_check` judges it against a network.
 import collections
 import datetime
 import re
+import warnings
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.serialization import pkcs7
+from cryptography.utils import CryptographyDeprecationWarning
 from cryptography.x509.oid import ExtensionOID, NameOID
 
 from .verdict import FAIL, WARN
+
+def _load(loader, data):
+    """`loader(data)` with cryptography's deprecation warnings silenced. Real
+    roots, certifi's among them, carry a serial of zero, which it warns about
+    on every load. A load that raises still raises."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", CryptographyDeprecationWarning)
+        return loader(data)
+
 
 _PEM_BLOCK = re.compile(
     r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", re.S)
@@ -46,7 +57,8 @@ def dns_names(pem):
     if not block:
         return None
     try:
-        certificate = x509.load_pem_x509_certificate(block.group(0).encode())
+        certificate = _load(x509.load_pem_x509_certificate,
+                            block.group(0).encode())
     except Exception:      # noqa: BLE001
         # Any load failure means not read; never `[]`, which would be a refusal.
         return None
@@ -137,11 +149,12 @@ def read_bundle(data):
     if not raw.strip():
         return Parsed([], [], None)
     try:
-        return Parsed([x509.load_der_x509_certificate(raw)], [], "der")
+        return Parsed([_load(x509.load_der_x509_certificate, raw)], [], "der")
     except Exception:      # noqa: BLE001
         pass
     try:
-        return Parsed(list(pkcs7.load_der_pkcs7_certificates(raw)), [], "pkcs7")
+        return Parsed(list(_load(pkcs7.load_der_pkcs7_certificates, raw)),
+                      [], "pkcs7")
     except Exception:      # noqa: BLE001
         pass
     return Parsed([], ["The file is not PEM, not a DER certificate and not a "
@@ -157,9 +170,9 @@ def _read_pem(text):
         pem = block.group(0).encode()
         try:
             if label == "CERTIFICATE":
-                certs.append(x509.load_pem_x509_certificate(pem))
+                certs.append(_load(x509.load_pem_x509_certificate, pem))
             elif label == "PKCS7":
-                certs.extend(pkcs7.load_pem_pkcs7_certificates(pem))
+                certs.extend(_load(pkcs7.load_pem_pkcs7_certificates, pem))
             elif "PRIVATE KEY" in label:
                 problems.append(
                     f"Block {n} is a private key, which a trust bundle never "
@@ -203,7 +216,8 @@ def normalise(data):
         if block.group(1) != "PKCS7":
             return block.group(0)
         try:
-            certs = pkcs7.load_pem_pkcs7_certificates(block.group(0).encode())
+            certs = _load(pkcs7.load_pem_pkcs7_certificates,
+                          block.group(0).encode())
         except Exception:      # noqa: BLE001
             return block.group(0)      # left in place; the lint names it
         return "".join(_pem_of(c) for c in certs).rstrip("\n")
@@ -262,7 +276,7 @@ def describe(certificate, now=None):
 def describe_der(der, now=None):
     """describe() for one DER certificate, or None where it does not parse."""
     try:
-        return describe(x509.load_der_x509_certificate(der), now)
+        return describe(_load(x509.load_der_x509_certificate, der), now)
     except Exception:      # noqa: BLE001
         return None
 
@@ -338,7 +352,7 @@ def missing_issuer(chain_der, data):
     presented = []
     for der in chain_der:
         try:
-            presented.append(x509.load_der_x509_certificate(der))
+            presented.append(_load(x509.load_der_x509_certificate, der))
         except Exception:      # noqa: BLE001
             continue
     if not presented:

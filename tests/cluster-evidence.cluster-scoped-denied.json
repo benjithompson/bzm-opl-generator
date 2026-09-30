@@ -60,7 +60,21 @@
           }
         }
       ]
-    }
+    },
+    "kyverno_clusterpolicies": null,
+    "kyverno_policies": {
+      "apiVersion": "v1",
+      "items": [],
+      "kind": "List",
+      "metadata": {
+        "resourceVersion": ""
+      }
+    },
+    "gatekeeper_templates": null,
+    "gatekeeper_constraints": null,
+    "validating_admission_policies": null,
+    "validating_admission_policy_bindings": null,
+    "validating_webhooks": null
   },
   "inventory": {
     "configmaps": [
@@ -114,6 +128,12 @@
   },
   "notes": [
     "nodes: Error from server (Forbidden): nodes is forbidden: User \"system:serviceaccount:blazemeter:deployer\" cannot list resource \"nodes\" in API group \"\" at the cluster scope",
-    "ingressclasses: Error from server (Forbidden): ingressclasses.networking.k8s.io is forbidden: User \"system:serviceaccount:blazemeter:deployer\" cannot list resource \"ingressclasses\" in API group \"networking.k8s.io\" at the cluster scope"
+    "ingressclasses: Error from server (Forbidden): ingressclasses.networking.k8s.io is forbidden: User \"system:serviceaccount:blazemeter:deployer\" cannot list resource \"ingressclasses\" in API group \"networking.k8s.io\" at the cluster scope",
+    "kyverno_clusterpolicies: Error from server (Forbidden): clusterpolicies.kyverno.io is forbidden: User \"system:serviceaccount:blazemeter:deployer\" cannot list resource \"clusterpolicies\" in API group \"kyverno.io\" at the cluster scope ",
+    "gatekeeper_templates: Error from server (Forbidden): constrainttemplates.templates.gatekeeper.sh is forbidden: User \"system:serviceaccount:blazemeter:deployer\" cannot list resource \"constrainttemplates\" in API group \"templates.gatekeeper.sh\" at the cluster scope ",
+    "gatekeeper_constraints: Error from server (Forbidden): k8sallowedrepos.constraints.gatekeeper.sh is forbidden: User \"system:serviceaccount:blazemeter:deployer\" cannot list resource \"k8sallowedrepos\" in API group \"constraints.gatekeeper.sh\" at the cluster scope ",
+    "validating_admission_policies: Error from server (Forbidden): validatingadmissionpolicies.admissionregistration.k8s.io is forbidden: User \"system:serviceaccount:blazemeter:deployer\" cannot list resource \"validatingadmissionpolicies\" in API group \"admissionregistration.k8s.io\" at the cluster scope ",
+    "validating_admission_policy_bindings: Error from server (Forbidden): validatingadmissionpolicybindings.admissionregistration.k8s.io is forbidden: User \"system:serviceaccount:blazemeter:deployer\" cannot list resource \"validatingadmissionpolicybindings\" in API group \"admissionregistration.k8s.io\" at the cluster scope ",
+    "validating_webhooks: Error from server (Forbidden): validatingwebhookconfigurations.admissionregistration.k8s.io is forbidden: User \"system:serviceaccount:blazemeter:deployer\" cannot list resource \"validatingwebhookconfigurations\" in API group \"admissionregistration.k8s.io\" at the cluster scope "
   ]
 }

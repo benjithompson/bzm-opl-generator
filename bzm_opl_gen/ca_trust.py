@@ -27,6 +27,10 @@ CA_MODES = {
     "ca_openshift_inject": "OpenShift injection",
 }
 
+# Each mode ca_cfg resolves to, and the option that picks it.
+MODE_OPTION = {"existing": "ca_existing_configmap", "inline": "ca_bundle",
+               "file": "ca_bundle_slot", "inject": "ca_openshift_inject"}
+
 # Every CA option, for a caller that removes CA trust rather than picking a
 # mode.
 CA_OPTIONS = tuple(CA_MODES) + ("ca_configmap_key", "ca_cert_file")
@@ -68,8 +72,7 @@ def ca_cfg(o):
     # Inject's key is what OpenShift's operator writes. Inline writes the file
     # itself, so a blank name defaults; the file mode names a file somebody
     # else supplies, so a blank name is the marker.
-    mode = {"ca_bundle": "inline", "ca_bundle_slot": "file"}.get(
-        active[0], "inject")
+    mode = {opt: m for m, opt in MODE_OPTION.items()}[active[0]]
     key = {
         "inject": CA_FILENAME,
         "inline": o["ca_cert_file"] or CA_FILENAME,

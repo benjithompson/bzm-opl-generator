@@ -11,7 +11,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bzm_opl_gen import (doctor, evidence, facts as facts_mod, kube)  # noqa: E402
-from bzm_opl_gen import bundle_options, ca_trust, footprint  # noqa: E402
+from bzm_opl_gen import (admission_policy, bundle_options,  # noqa: E402
+                         ca_trust, footprint)
 
 
 # -- fixtures ---------------------------------------------------------------
@@ -53,6 +54,22 @@ LR_MATCHING = {
 
 NS_BASELINE = {"metadata": {"name": "blazemeter",
                             "labels": {"pod-security.kubernetes.io/enforce": "baseline"}}}
+
+
+# The admission policy sections, and a cluster that runs no policy engine: no
+# Kyverno or Gatekeeper CRDs, no ValidatingAdmissionPolicy, no webhooks.
+POLICY_SECTIONS = ("kyverno_clusterpolicies", "kyverno_policies",
+                   "gatekeeper_templates", "gatekeeper_constraints",
+                   "validating_admission_policies",
+                   "validating_admission_policy_bindings",
+                   "validating_webhooks")
+NO_POLICY_ENGINE = {"kyverno_clusterpolicies": evidence.NOT_SERVED,
+                    "kyverno_policies": evidence.NOT_SERVED,
+                    "gatekeeper_templates": evidence.NOT_SERVED,
+                    "gatekeeper_constraints": evidence.NOT_SERVED,
+                    "validating_admission_policies": [],
+                    "validating_admission_policy_bindings": [],
+                    "validating_webhooks": []}
 
 
 def _find(checks, needle):
@@ -359,6 +376,10 @@ def test_unknown_heap_is_a_warn_not_a_pass():
     c = _find(doctor.check_engine_heap(_heap_facts(None), {"engine_mem_limit": "8Gi"},
                                        {}), "engine heap")
     assert c.status == doctor.WARN
+    # The measured fact: Taurus sizes the heap when the location does not.
+    assert "Taurus picks the heap itself" in c.detail
+    assert "-Xmx6656m in an 8Gi engine" in c.detail and "jetpack" in c.detail
+    assert not any(t in c.detail for t in ("`", "--", "->"))
 
 
 # -- two node pools ---------------------------------------------------------
@@ -823,11 +844,38 @@ NS_RESTRICTED = {"metadata": {"labels":
                  {"pod-security.kubernetes.io/enforce": "restricted"}}}
 
 
-def test_admission_k8s_restricted_passes_now_that_engines_drop_privileges():
-    """Restricted PSA passes with restrict_engines on."""
+def test_admission_k8s_restricted_fails_the_engines_even_with_them_restricted():
+    """Restricted PSA refuses the engines: they carry no runAsNonRoot, and no
+    agent variable sets it (measured on a server-side dry run). Crane's own
+    Deployment meets restricted, which is why the agent still comes online."""
     c = doctor.check_admission(FACTS, {"platform": "k8s"},
                                {"namespace": NS_RESTRICTED})[0]
-    assert c.status == doctor.PASS
+    assert c.status == doctor.FAIL
+    assert admission_policy.ENGINE_NO_RUN_AS_NON_ROOT in c.detail
+    assert "Crane's own Deployment meets restricted" in c.detail
+    assert "enforce=baseline" in c.detail
+    assert "mutating policy" in c.detail
+    assert "restrict_engines back on" not in c.detail
+
+
+def test_admission_k8s_baseline_fails_unrestricted_engines():
+    """Crane's default engine pod is privileged, which baseline forbids."""
+    c = doctor.check_admission(FACTS,
+                               {"platform": "k8s", "restrict_engines": False},
+                               {"namespace": NS_BASELINE})[0]
+    assert c.status == doctor.FAIL
+    assert "no privileged container" in c.detail
+    assert "restrict_engines back on" in c.detail
+
+
+def test_admission_k8s_privileged_passes_either_way():
+    ns = {"metadata": {"labels":
+                       {"pod-security.kubernetes.io/enforce": "privileged"}}}
+    for restricted in (True, False):
+        c = doctor.check_admission(
+            FACTS, {"platform": "k8s", "restrict_engines": restricted},
+            {"namespace": ns})[0]
+        assert c.status == doctor.PASS
 
 
 def test_admission_k8s_restricted_still_fails_with_engine_restriction_off():
@@ -1239,6 +1287,8 @@ def test_gather_cluster_splits_one_namespaced_get_by_kind(monkeypatch):
 
     monkeypatch.setattr(kube, "kget", fake_kget)
     monkeypatch.setattr(kube, "kget_named", fake_kget)
+    monkeypatch.setattr(kube, "kget_served",
+                        lambda *a, **k: evidence.NOT_SERVED)
     data = doctor.gather_cluster("kubectl", "ns1")
     assert [n["metadata"]["name"] for n in data["nodes"]] == ["a"]
     assert data["limitranges"] == [dict(LR_MATCHING, kind="LimitRange")]
@@ -1256,17 +1306,20 @@ def test_gather_cluster_survives_a_missing_namespace(monkeypatch):
     normal pre-flight case, not a crash."""
     monkeypatch.setattr(kube, "kget", lambda *a, **k: {})
     monkeypatch.setattr(kube, "kget_named", lambda *a, **k: {})
+    monkeypatch.setattr(kube, "kget_served", lambda *a, **k: None)
     data = doctor.gather_cluster("kubectl", "ns1")
     # A failed get ({} from kget) is None, not [], so a denied list is unread
     # rather than empty. The namespace stays {}: "not created yet".
     assert data == {"nodes": None, "ingressclasses": None, "limitranges": None,
-                    "quotas": None, "serviceaccounts": None, "namespace": {}}
+                    "quotas": None, "serviceaccounts": None, "namespace": {},
+                    **dict.fromkeys(POLICY_SECTIONS)}
 
 
 def test_a_namespace_nobody_may_read_is_unread_not_absent(monkeypatch):
     """A refused `get ns` is None (unread), not {} (absent)."""
     monkeypatch.setattr(kube, "kget", lambda *a, **k: {})
     monkeypatch.setattr(kube, "kget_named", lambda *a, **k: None)
+    monkeypatch.setattr(kube, "kget_served", lambda *a, **k: None)
     data = doctor.gather_cluster("kubectl", "ns1")
     assert data["namespace"] is None
     [check] = doctor.run_check(doctor.check_admission, FACTS, {}, data)
@@ -1288,6 +1341,7 @@ def test_gather_cluster_keeps_unreadable_ingressclasses_apart_from_empty(
     monkeypatch.setattr(kube, "kget_named",
                         lambda cli, ns, kind, name=None:
                         served if kind == "ingressclass" else {})
+    monkeypatch.setattr(kube, "kget_served", lambda *a, **k: None)
     data = doctor.gather_cluster("kubectl", "ns1")
     assert data["ingressclasses"] == expected
     assert _statuses(doctor.check_ingress_class(FACTS, SV_NGINX, data)) == {status}
@@ -1300,9 +1354,11 @@ def test_gather_cluster_keeps_unreadable_ingressclasses_apart_from_empty(
 # section with no key at all raises MissingSection.
 
 UNREAD_ALL = {"nodes": None, "ingressclasses": None, "limitranges": None,
-              "quotas": None, "serviceaccounts": None, "namespace": None}
+              "quotas": None, "serviceaccounts": None, "namespace": None,
+              **dict.fromkeys(POLICY_SECTIONS)}
 EMPTY_ALL = {"nodes": [], "ingressclasses": [], "limitranges": [],
-             "quotas": [], "serviceaccounts": [], "namespace": {}}
+             "quotas": [], "serviceaccounts": [], "namespace": {},
+             **dict.fromkeys(POLICY_SECTIONS, [])}
 
 # Every check that reads a cluster section, with the sections it declares and
 # the options that make it read them. The three not here -- check_location,
@@ -1318,6 +1374,14 @@ DECLARING = {
     doctor.check_admission: ("namespace",),
     doctor.check_service_account: ("serviceaccounts",),
     doctor.check_ingress_class: ("ingressclasses",),
+    doctor.check_kyverno: ("kyverno_clusterpolicies", "kyverno_policies",
+                           "namespace", "limitranges"),
+    doctor.check_gatekeeper: ("gatekeeper_constraints", "gatekeeper_templates",
+                              "namespace", "limitranges"),
+    doctor.check_admission_policies: ("validating_admission_policies",
+                                      "validating_admission_policy_bindings",
+                                      "namespace", "limitranges"),
+    doctor.check_policy_webhooks: ("validating_webhooks", "namespace"),
     doctor.check_egress: ("probes",),
 }
 FACTS_ONLY = (doctor.check_location, doctor.check_threads_per_engine,
@@ -1454,6 +1518,7 @@ def test_every_declared_section_is_one_the_cluster_data_actually_carries(
     else:
         monkeypatch.setattr(kube, "kget", lambda *a, **k: {})
         monkeypatch.setattr(kube, "kget_named", lambda *a, **k: {})
+        monkeypatch.setattr(kube, "kget_served", lambda *a, **k: None)
         carried = set(doctor.gather_cluster("kubectl", "ns1"))
     for check, keys in DECLARING.items():
         for key in keys:
@@ -1573,7 +1638,7 @@ def test_a_declared_check_says_something_different_when_it_did_look(check):
 # -- run() ------------------------------------------------------------------
 
 HEALTHY = {"nodes": [_big("a"), _big("b")], "limitranges": [LR_MATCHING],
-           "quotas": [], "namespace": NS_BASELINE}
+           "quotas": [], "namespace": NS_BASELINE, **NO_POLICY_ENGINE}
 
 
 def test_run_healthy_cluster_has_no_failures(capsys):
@@ -1590,7 +1655,8 @@ def test_run_broken_cluster_fails(capsys):
               "limitranges": [],
               "quotas": [_quota(hard={"pods": "1"}, used={"pods": "0"})],
               "namespace": {"metadata": {"labels":
-                            {"pod-security.kubernetes.io/enforce": "restricted"}}}}
+                            {"pod-security.kubernetes.io/enforce": "restricted"}}},
+              **NO_POLICY_ENGINE}
     checks = doctor.run({**FACTS, "threads_per_engine": None},
                         {"platform": "k8s"}, "blazemeter",
                         cluster_data=broken, probes={doctor.API_PROBE_URL: 28})

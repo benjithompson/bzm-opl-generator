@@ -609,6 +609,50 @@ def test_the_create_command_follows_the_cluster_not_the_posture():
     assert "kubectl -n ns1 create configmap corp-trust" in _commands(plain)
 
 
+# -- the pull Secret reaches the engines through the default ServiceAccount ---
+# Measured: engine pods carry none of crane's imagePullSecrets and run as the
+# namespace's `default` ServiceAccount, and a plain patch replaces its list.
+
+
+def _sa_patches(readme):
+    return [shlex.split(part) for ln in readme.splitlines()
+            if "patch serviceaccount default" in ln
+            for part in ln.split(" || ")]
+
+
+@pytest.mark.parametrize("fmt", ["manifests", "helm"])
+def test_a_pull_secret_is_created_and_given_to_the_default_service_account(fmt):
+    readme = gen.generate(FACTS, {"namespace": "ns1", "output_format": fmt,
+                                  "openshift_cluster": False,
+                                  "private_registry": "registry.corp.example/bzm",
+                                  "pull_secret": "corp-pull"})["README.md"]
+    assert ("kubectl -n ns1 create secret docker-registry corp-pull "
+            "--docker-server=registry.corp.example " in readme)
+    assert (readme.index("create namespace ns1")
+            < readme.index("create secret docker-registry"))
+    append, create = _sa_patches(readme)
+    # Append to an existing list first; create the list only when that fails.
+    assert json.loads(append[append.index("-p") + 1]) == [
+        {"op": "add", "path": "/imagePullSecrets/-",
+         "value": {"name": "corp-pull"}}]
+    assert json.loads(create[create.index("-p") + 1]) == {
+        "imagePullSecrets": [{"name": "corp-pull"}]}
+
+
+@pytest.mark.parametrize("fmt", ["manifests", "helm", "docker"])
+def test_no_service_account_patch_without_a_pull_secret(fmt):
+    readme = gen.generate(FACTS, {"namespace": "ns1",
+                                  "output_format": fmt})["README.md"]
+    assert "patch serviceaccount" not in readme
+
+
+def test_a_docker_bundle_never_patches_a_service_account():
+    """Docker ignores pull_secret; the host's docker login authenticates."""
+    readme = gen.generate(FACTS, {"output_format": "docker",
+                                  "pull_secret": "corp-pull"})["README.md"]
+    assert "patch serviceaccount" not in readme
+
+
 def test_a_plain_kubernetes_bundle_is_what_you_get_without_answering():
     """By default the bundle's commands use kubectl."""
     files = gen.generate(FACTS, {"namespace": "ns1",
@@ -828,6 +872,22 @@ def test_the_cluster_check_follows_the_platform_uid_rule():
     ocp = _hook_docs(gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True,
                                           "platform": "openshift"}))
     assert "runAsUser" not in ocp["cranehook"]["spec"]["containers"][0]["securityContext"]
+
+
+@pytest.mark.parametrize("platform", ["k8s", "openshift"])
+def test_the_cluster_check_pod_has_cranes_restricted_posture(platform):
+    """crane-hook's pod carries what restricted Pod Security admission
+    requires, as crane's own pod does, on both platforms."""
+    files = gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True,
+                                 "platform": platform})
+    hook = _hook_docs(files)["cranehook"]["spec"]
+    crane = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
+    assert hook["securityContext"] == crane["securityContext"] == \
+        {"seccompProfile": {"type": "RuntimeDefault"}}
+    sc = hook["containers"][0]["securityContext"]
+    assert sc == crane["containers"][0]["securityContext"]
+    assert sc["runAsNonRoot"] is True and sc["allowPrivilegeEscalation"] is False
+    assert sc["capabilities"] == {"drop": ["ALL"]}
 
 
 def test_the_cluster_check_is_told_about_the_ingress_it_should_check():
@@ -2475,7 +2535,7 @@ def test_a_pkcs1_key_is_refused_by_name_with_the_conversion():
     assert "passphrase" in str(e.value)
     # ...and something that is not a key at all.
     with pytest.raises(ValueError) as e:
-        gen.generate(FACTS, {**SV_DOCKER, "sv_tls_key": "hunter2"})
+        gen.generate(FACTS, {**SV_DOCKER, "sv_tls_key": "%3Cpassword%3E"})
     assert "sv_tls_key" in str(e.value)
 
 

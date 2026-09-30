@@ -179,16 +179,18 @@ OPTIONS = [
         summary="Name of an existing docker-registry Secret used to pull the crane image.",
         doc="`imagePullSecrets` name for the crane image. The Secret itself is not "
             "generated -- it holds credentials, so create it in the namespace with "
-            "`kubectl create secret docker-registry`. Crane passes the same name to "
-            "the engine pods it spawns."),
+            "`kubectl create secret docker-registry`. Crane does not pass it to the "
+            "engine pods it creates: they run as the namespace's `default` "
+            "ServiceAccount, so the bundle's README adds the Secret there too."),
     Option(
         "registry_auth", "boolean", "Private registry",
         summary="Emit commented-out DOCKER_REGISTRY_USERNAME/PASSWORD lines for crane to fill in.",
         doc="Emit commented `DOCKER_REGISTRY_USERNAME` / `DOCKER_REGISTRY_PASSWORD` "
             "entries, so the variable names are in place for you to fill in. "
             "Commented rather than set, so no credential is ever written to a "
-            "generated file. `pull_secret` covers the crane image itself; this "
-            "pair is what crane uses for the images *it* pulls."),
+            "generated file. BlazeMeter documents this pair for docker agents "
+            "only; on Kubernetes the engines pull with the `default` "
+            "ServiceAccount's pull secrets (see `pull_secret`)."),
 
     # ---- Agent lifecycle -----------------------------------------------
     Option(
@@ -237,8 +239,10 @@ OPTIONS = [
         doc="The UID crane's pod runs as, on `platform: k8s` only. On OpenShift "
             "the SCC assigns a UID from the namespace's range and rejects a "
             "pinned one, so nothing is emitted there. Any non-root UID satisfies "
-            "restricted PodSecurity. With `restrict_engines` on, this is also "
-            "the UID:GID the engines inherit."),
+            "restricted PodSecurity for crane's pod. With `restrict_engines` "
+            "on, this is also the UID:GID the engines inherit; they meet "
+            "baseline, not restricted, because no agent variable sets "
+            "`runAsNonRoot` on them."),
     Option(
         "restrict_engines", "boolean", "Security and RBAC",
         summary="Engines crane spawns drop all capabilities and inherit crane's UID:GID.",

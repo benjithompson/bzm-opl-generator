@@ -59,8 +59,13 @@ def engine(**kw):
     return pod(name=ENGINE, image=ENGINE_IMAGE, container="jmeter", **kw)
 
 
+# The pods of a namespace whose engine is waiting to be placed or pulled.
+PENDING = [pod(), engine(phase="Pending", state={"waiting": {
+    "reason": "ContainerCreating"}})]
+
+
 def run(events=(), pods=None, log="", previous=None, namespace_obj=None,
-        unread=(), since="1h"):
+        unread=(), since="1h", service_accounts=None):
     """evaluate() over what a gather would have returned."""
     pods = [pod()] if pods is None else pods
     logs = [triage.LogRead(CRANE, False, log, None)]
@@ -68,7 +73,8 @@ def run(events=(), pods=None, log="", previous=None, namespace_obj=None,
         logs.append(triage.LogRead(CRANE, True, previous, None))
     gathered = triage.Gathered(
         {"metadata": {"name": NS}} if namespace_obj is None else namespace_obj,
-        None if events is None else list(events), pods, logs, list(unread))
+        None if events is None else list(events), pods, logs, list(unread),
+        service_accounts)
     return triage.as_dict(triage.evaluate(gathered, NS, since, now=NOW))
 
 
@@ -100,6 +106,27 @@ API_ERR = ('kubernetes.client.exceptions.ApiException: (403) Reason: Forbidden '
            'HTTP response body: {"kind":"Status","message":"%s",'
            '"reason":"Forbidden","code":403}')
 
+# Measured on kind with crane 3.8.0 and an HTTPS_PROXY nothing answers at: the
+# pod stays Ready and the log ends here, JSON line then plain duplicate.
+SHIP_URL = ("/private-locations/6abd2c584b89ee8ca70e83e4/ships/"
+            "6abd2c63d0038ff162084824/status")
+PROXY_LINE = "INFO:agent.config:HTTPS Proxy: http://10.255.255.1:3128\n"
+HANG_LOG = (
+    PROXY_LINE
+    + "INFO:agent.config:Defaulting NO_PROXY to '127.0.0.1,localhost'\n"
+    + '{"asctime": "2026-09-30 15:57:51,996", "funcName": '
+      '"check_startup_connectivity", "levelname": "INFO", "pathname": '
+      '"agent/command_handler.py", "message": "Checking startup connectivity '
+      f'to URL {SHIP_URL} ...", "taskName": null}}\n'
+    + f"INFO:agent.config:Checking startup connectivity to URL {SHIP_URL} ...\n")
+
+# Measured on a fresh deploy: the files apply in alphabetical order, so the
+# Deployment comes before its ServiceAccount.
+SA_EVENT = event(
+    "FailedCreate", 'Error creating: pods "crane-6659cc6b9c-" is forbidden: '
+    "error looking up service account bzm-livetest/crane: serviceaccount "
+    '"crane" not found', kind="ReplicaSet", name="crane-6659cc6b9c", count=6)
+
 # rule id -> (evaluate() arguments, expected subject)
 CASES = {
     "namespace-missing": (dict(pods=[], namespace_obj={}), None),
@@ -120,7 +147,7 @@ CASES = {
     "image-pull-unreachable": (dict(events=[_pull_event(
         'failed to do request: Head "https://registry.corp/v2/": dial tcp: '
         'lookup registry.corp on 10.96.0.10:53: no such host')]), CRANE_IMAGE),
-    "image-pull": (dict(events=[event(
+    "image-pull": (dict(pods=PENDING, events=[event(
         "BackOff", f'Back-off pulling image "{ENGINE_IMAGE}"', name=ENGINE,
         field_path="spec.containers{jmeter}", count=7)]), ENGINE_IMAGE),
     "missing-reference": (dict(events=[event(
@@ -156,10 +183,20 @@ CASES = {
         "/api/v4/ships/abc/status (Caused by ConnectTimeoutError(<urllib3."
         "connection.HTTPSConnection object at 0x7f2a>, 'Connection to "
         "a.blazemeter.com timed out. (connect timeout=30)'))"), None),
+    "crane-hung-proxy": (_log(HANG_LOG), "10.255.255.1:3128"),
+    "crane-hung": (_log(HANG_LOG.replace(PROXY_LINE, "")), None),
+    "service-account-missing": (dict(events=[SA_EVENT], service_accounts={
+        "crane": False}), "crane"),
+    "service-account-unread": (dict(events=[SA_EVENT], service_accounts={
+        "crane": None}), "crane"),
+    "service-account-late": (dict(events=[SA_EVENT], service_accounts={
+        "crane": True}), "crane"),
+    "engine-prestop": (dict(events=[event(
+        "FailedPreStopHook", "PreStopHook failed", name=ENGINE)]), "engine"),
     "auth-token": (_log(
         "requests.exceptions.HTTPError: 404 Client Error: Not Found for url: "
         "https://a.blazemeter.com/api/v4/ships/abc/status"), None),
-    "disk-pressure": (dict(events=[event(
+    "disk-pressure": (dict(pods=PENDING, events=[event(
         "FailedScheduling", "0/1 nodes are available: 1 node(s) had untolerated "
         "taint {node.kubernetes.io/disk-pressure: }. preemption: 0/1 nodes are "
         "available: 1 Preemption is not helpful for scheduling.", name=ENGINE)]),
@@ -169,12 +206,12 @@ CASES = {
         "untolerated taint {dedicated: engines}. preemption: 0/3 nodes are "
         "available: 3 Preemption is not helpful for scheduling.")]),
         "dedicated: engines"),
-    "schedule-resources": (dict(events=[event(
+    "schedule-resources": (dict(pods=PENDING, events=[event(
         "FailedScheduling", "0/3 nodes are available: 3 Insufficient cpu, 2 "
         "Insufficient memory. preemption: 0/3 nodes are available: 3 No "
         "preemption victims found for incoming pod.", name=ENGINE, count=4)]),
         "cpu, memory"),
-    "schedule-selector": (dict(events=[event(
+    "schedule-selector": (dict(pods=PENDING, events=[event(
         "FailedScheduling", "0/3 nodes are available: 3 node(s) didn't match "
         "Pod's node affinity/selector. preemption: 0/3 nodes are available: 3 "
         "Preemption is not helpful for scheduling.", name=ENGINE)]), None),
@@ -617,3 +654,339 @@ def test_the_triage_doc_names_every_rule():
         doc = fh.read()
     missing = [r.id for r in triage.RULES if f"| `{r.id}` |" not in doc]
     assert not missing, f"docs/triage.md has no row for {missing}"
+
+
+# -- a crane hung at its first call ------------------------------------------------
+
+def _running_for(seconds, **kw):
+    started = (NOW - datetime.timedelta(seconds=seconds)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    return pod(state={"running": {"startedAt": started}}, **kw)
+
+
+def test_a_crane_hung_at_its_first_call_fails_though_its_pod_is_ready():
+    """Measured: an unreachable proxy leaves crane Running and Ready with no
+    restarts, and its log ends at the connectivity check."""
+    doc = run(pods=[_running_for(300)], log=HANG_LOG)
+    assert rules(doc) == ["crane-hung-proxy"] and doc["ok"] is False
+    f = finding(doc, "crane-hung-proxy")
+    assert f["subject"] == "10.255.255.1:3128"
+    assert "Checking startup connectivity" in f["evidence"]
+    assert "Ready" in f["finding"] and "curl" in f["fix"]
+    assert f["objects"] == [f"Pod/{CRANE}"] and doc["unrecognised"] == []
+
+
+def test_a_hung_crane_with_no_proxy_names_egress():
+    doc = run(pods=[_running_for(300)], log=HANG_LOG.replace(PROXY_LINE, ""))
+    f = finding(doc, "crane-hung")
+    assert f["subject"] is None
+    assert "firewall" in f["finding"] and "DNS" in f["finding"]
+
+
+def test_a_crane_that_just_started_is_not_hung():
+    assert rules(run(pods=[_running_for(triage.HANG_AFTER_S - 10)],
+                     log=HANG_LOG)) == []
+
+
+def test_a_crane_with_no_start_time_is_not_judged():
+    p = pod(state={"running": {}})
+    assert rules(run(pods=[p], log=HANG_LOG)) == []
+
+
+def test_a_crane_whose_log_goes_on_past_the_check_is_not_hung():
+    """Measured: a revoked token answers the check with a 404, and the
+    traceback after it is the auth-token finding."""
+    tail = ("Traceback (most recent call last):\n"
+            '  File "/app/agent/command_handler.py", line 88, in '
+            "check_startup_connectivity\n"
+            "requests.exceptions.HTTPError: 404 Client Error: Not Found for url: "
+            f"https://a.blazemeter.com/api/v4{SHIP_URL}\n")
+    doc = run(pods=[_running_for(300)], log=HANG_LOG + tail)
+    assert rules(doc) == ["auth-token"]
+
+
+def test_only_the_current_log_can_show_a_hang():
+    doc = run(pods=[_running_for(300, restarts=1)], log="heartbeat sent",
+              previous=HANG_LOG)
+    assert rules(doc) == []
+
+
+def test_a_crane_hung_for_longer_than_since_is_read_from_its_last_lines(
+        monkeypatch):
+    """Nothing within --since: the last lines, read without it, still end at
+    the connectivity check."""
+    calls = []
+
+    def quiet(cmd, timeout=None):
+        calls.append(cmd)
+        if cmd[3] == "logs":
+            out = "" if any(a.startswith("--since=") for a in cmd) else HANG_LOG
+        else:
+            out = json.dumps({"items": [_running_for(7200)] if cmd[4] == "pods"
+                              else []})
+        return subprocess.CompletedProcess(cmd, 0, out, "")
+    monkeypatch.setattr(kube, "quiet", quiet)
+    monkeypatch.setattr(kube, "kget_named", lambda *a, **k: {"metadata": {}})
+    g = triage.gather("kubectl", NS, 3600, 200)
+    assert g.logs[0].text == "" and "Checking startup" in g.logs[0].last
+    doc = triage.as_dict(triage.evaluate(g, NS, now=NOW))
+    assert rules(doc) == ["crane-hung-proxy"]
+    assert f"crane log {CRANE} (0 lines)" in doc["read"]
+    assert len([c for c in calls if c[3] == "logs"]) == 2
+
+
+def test_a_proxy_named_with_credentials_is_named_without_them():
+    log = HANG_LOG.replace("http://10.255.255.1:3128",
+                           "http://svc-user:%3Cpassword%3E@proxy.corp:3128")
+    doc = run(pods=[_running_for(300)], log=log)
+    assert finding(doc, "crane-hung-proxy")["subject"] == "proxy.corp:3128"
+    assert "%3Cpassword%3E" not in json.dumps(doc)
+
+
+# -- the ServiceAccount a pod waited for --------------------------------------------
+
+@pytest.mark.parametrize("answer,rule,ok", [
+    ((0, "serviceaccount/crane"), "service-account-late", True),
+    ((1, 'Error from server (NotFound): serviceaccounts "crane" not found'),
+     "service-account-missing", False),
+    ((1, 'Error from server (Forbidden): serviceaccounts "crane" is forbidden: '
+         'User "alice" cannot get resource "serviceaccounts"'),
+     "service-account-unread", True),
+])
+def test_a_pod_that_waited_for_its_service_account(monkeypatch, answer, rule, ok):
+    """Exists now: a note. NotFound: a failure. A refused read is neither."""
+    g, fake = _gather(monkeypatch, {
+        "get events": (0, json.dumps({"items": [SA_EVENT]})),
+        "get pods": (0, json.dumps({"items": [pod()]})),
+        "logs": (0, "heartbeat sent"),
+        "get serviceaccount": answer}, ns_obj={"metadata": {"name": NS}})
+    doc = triage.as_dict(triage.evaluate(g, NS, now=NOW))
+    assert rules(doc) == [rule] and doc["ok"] is ok
+    assert doc["unrecognised"] == []
+    f = finding(doc, rule)
+    assert f["subject"] == "crane" and f["count"] == 6
+    assert f["status"] == {"service-account-late": triage.NOTE,
+                           "service-account-missing": FAIL,
+                           "service-account-unread": WARN}[rule]
+    # A refusal of triage's own read is unread, never crane's RBAC failure.
+    assert [u["section"] for u in doc["unread"]] == (
+        ["service account crane"] if rule == "service-account-unread" else [])
+    sa_reads = [c for c in fake.calls if c[3:5] == ["get", "serviceaccount"]]
+    assert len(sa_reads) == 1 and sa_reads[0][5] == "crane"
+
+
+def test_the_service_account_is_read_only_when_an_event_names_it(monkeypatch):
+    _, fake = _gather(monkeypatch, {
+        "get events": (0, '{"items": []}'),
+        "get pods": (0, json.dumps({"items": [pod()]})),
+        "logs": (0, "")})
+    assert not any("serviceaccount" in c for c in fake.calls)
+
+
+# -- findings from pods that are gone -----------------------------------------------
+
+# Measured after a bad-tag rollout was reverted: the events outlive the pods.
+GONE_PULL = "crane-7fc5c6859-5xkq7"
+GONE_CRASH = "crane-5d8c5cc4c4-rwf9q"
+
+
+def _history_events():
+    return [
+        event("Failed", f'Failed to pull image "{CRANE_IMAGE}-bad": rpc error: '
+                        f'code = NotFound desc = failed to pull and unpack image: '
+                        f'{CRANE_IMAGE}-bad: not found', name=GONE_PULL,
+              field_path="spec.containers{crane}", count=4),
+        event("BackOff", "Back-off restarting failed container "
+                         "bzm-crane-6abd63d0038ff162084824 in pod "
+                         f"{GONE_CRASH}_bzm-livetest(1a2b)", name=GONE_CRASH,
+              count=3)]
+
+
+def test_findings_from_pods_that_are_gone_are_history_and_not_failures():
+    doc = run(events=_history_events())
+    assert rules(doc) == ["image-not-found", "crash-loop"]
+    assert all(f["history"] and f["status"] == triage.NOTE for f in doc["findings"])
+    assert doc["ok"] is True
+    assert doc["summary"].startswith("0 known failures, 2 notes")
+
+
+def test_history_comes_after_the_current_cause(capsys):
+    doc = run(events=_history_events(), pods=[_running_for(300)], log=HANG_LOG)
+    assert rules(doc) == ["crane-hung-proxy", "image-not-found", "crash-loop"]
+    assert [f["history"] for f in doc["findings"]] == [False, True, True]
+    assert doc["ok"] is False
+    triage.report(doc)
+    out = capsys.readouterr().out
+    assert "NOTE  image-not-found" in out and "(pod gone; history)" in out
+    assert out.index("FAIL  crane-hung-proxy") < out.index("NOTE  image-not-found")
+
+
+def test_a_finding_on_one_current_pod_is_current():
+    events = _history_events()[:1] + [event(
+        "Failed", f'Failed to pull image "{CRANE_IMAGE}-bad": not found',
+        field_path="spec.containers{crane}")]
+    f = finding(run(events=events), "image-not-found")
+    assert f["history"] is False and f["status"] == FAIL
+
+
+def test_nothing_is_history_when_the_pods_are_unread():
+    """Unread pods say nothing about which pods are gone."""
+    gathered = triage.Gathered({"metadata": {}}, _history_events(), None,
+                               [], [("pods", "forbidden")])
+    unread = triage.as_dict(triage.evaluate(gathered, NS, now=NOW))
+    assert not any(f["history"] for f in unread["findings"])
+    assert unread["ok"] is False
+
+
+def test_a_replicaset_event_is_never_history():
+    f = finding(run(**CASES["quota"][0]), "quota")
+    assert f["history"] is False and f["status"] == FAIL
+
+
+# -- repeats and benign lines ------------------------------------------------------
+
+LIVE_TRACEBACK = (
+    "Traceback (most recent call last):\n"
+    '  File "/app/agent/command_handler.py", line 88, in check_startup_connectivity\n'
+    "    response.raise_for_status()\n"
+    "requests.exceptions.HTTPError: 404 Client Error: Not Found for url: "
+    f"https://a.blazemeter.com/api/v4{SHIP_URL}\n")
+
+
+def test_a_traceback_header_a_rule_explains_is_not_listed_again():
+    doc = run(log=LIVE_TRACEBACK + LIVE_TRACEBACK)
+    assert rules(doc) == ["auth-token"]
+    assert doc["unrecognised"] == []
+
+
+def test_a_traceback_nothing_explains_is_still_listed():
+    doc = run(log="Traceback (most recent call last):\n"
+                  '  File "/app/agent/loop.py", line 3, in run\n'
+                  "    slots = cfg['slots']\n")
+    assert rules(doc) == []
+    assert [u["example"] for u in doc["unrecognised"]] == [
+        "Traceback (most recent call last):"]
+
+
+def test_a_container_error_on_a_crash_looping_pod_folds_into_the_crash_loop():
+    crane = pod(name=GONE_CRASH, container="bzm-crane-6abd63d0038ff162084824",
+                labels={"role": "role-crane"}, restarts=3,
+                state={"waiting": {"reason": "CrashLoopBackOff",
+                                   "message": "back-off 40s restarting failed "
+                                              "container"}},
+                last_state={"terminated": {"reason": "Error", "exitCode": 1,
+                                           "finishedAt": _ts(1)}})
+    doc = run(pods=[crane])
+    assert rules(doc) == ["crash-loop"] and doc["unrecognised"] == []
+    f = finding(doc, "crash-loop")
+    assert f["also"] == ["container bzm-crane-6abd63d0038ff162084824 last "
+                         "terminated: Error, exit code 1, restarts 3"]
+
+
+def test_a_container_error_with_no_crash_loop_is_still_listed():
+    crane = pod(restarts=1, last_state={"terminated": {
+        "reason": "Error", "exitCode": 1, "finishedAt": _ts(1)}})
+    doc = run(pods=[crane])
+    assert [u["reason"] for u in doc["unrecognised"]] == ["Error"]
+
+
+FINISHED_ENGINE = "r-v4-6abd30abba934698129140-0-0-c-fbrsr"
+RACED_PROBE = event(
+    "Unhealthy", "Readiness probe errored and resulted in unknown state: rpc "
+    "error: code = Unknown desc = failed to exec in container: container is "
+    "in CONTAINER_EXITED state", name=FINISHED_ENGINE)
+
+
+@pytest.mark.parametrize("pods,listed", [
+    ([pod(), pod(name=FINISHED_ENGINE, phase="Succeeded", state={
+        "terminated": {"reason": "Completed", "exitCode": 0}})], False),
+    ([pod()], False),                                   # the engine is gone
+    ([pod(), pod(name=FINISHED_ENGINE)], True),         # still running
+])
+def test_a_probe_that_raced_a_finished_engine_is_dropped(pods, listed):
+    doc = run(events=[RACED_PROBE], pods=pods)
+    assert bool(doc["unrecognised"]) is listed
+
+
+def test_an_engine_prestop_failure_is_a_note_that_blocks_nothing():
+    """Measured: FailedPreStopHook on every engine of runs with full results."""
+    doc = run(events=[event("FailedPreStopHook", "PreStopHook failed",
+                            name=FINISHED_ENGINE)], pods=[pod()])
+    assert rules(doc) == ["engine-prestop"] and doc["ok"] is True
+    assert doc["unrecognised"] == []
+    assert finding(doc, "engine-prestop")["status"] == triage.NOTE
+
+
+def test_a_raced_probe_is_kept_when_the_pods_are_unread():
+    gathered = triage.Gathered({"metadata": {}}, [RACED_PROBE], None, [],
+                               [("pods", "forbidden")])
+    doc = triage.as_dict(triage.evaluate(gathered, NS, now=NOW))
+    assert [u["reason"] for u in doc["unrecognised"]] == ["Unhealthy"]
+
+
+# -- a container with no log yet ------------------------------------------------------
+
+def test_a_crane_waiting_to_start_has_no_log_yet_and_that_is_not_unread(monkeypatch):
+    """Measured: kubectl answers BadRequest for a container stuck pulling."""
+    g, _ = _gather(monkeypatch, {
+        "get events": (0, '{"items": []}'),
+        "get pods": (0, json.dumps({"items": [pod()]})),
+        "logs": (1, 'Error from server (BadRequest): container '
+                    '"bzm-crane-6abd63d0038ff162084824" in pod '
+                    f'"{CRANE}" is waiting to start: trying and failing to '
+                    'pull image')}, ns_obj={"metadata": {"name": NS}})
+    assert g.unread == []
+    assert g.logs == [triage.LogRead(CRANE, False, "", triage.NO_LOG_YET)]
+    doc = triage.as_dict(triage.evaluate(g, NS, now=NOW))
+    assert f"crane log {CRANE} (no log yet: the container has not started)" \
+        in doc["read"]
+    assert doc["unread"] == [] and doc["ok"] is True
+
+
+def test_a_refused_log_read_stays_unread(monkeypatch):
+    g, _ = _gather(monkeypatch, {
+        "get events": (0, '{"items": []}'),
+        "get pods": (0, json.dumps({"items": [pod()]})),
+        "logs": (1, 'Error from server (Forbidden): pods "crane" is forbidden: '
+                    'User "alice" cannot get resource "pods/log"')})
+    assert [s for s, _ in g.unread] == [f"crane log ({CRANE})"]
+    assert g.logs[0].text is None
+
+
+# -- the AUTH_TOKEN never reaches a report ---------------------------------------------
+
+FAKE_TOKEN = "0123456789abcdef" * 4
+
+
+def test_no_auth_token_value_reaches_any_output(monkeypatch, capsys):
+    """Crane 3.8 logs its token at startup, in both log forms."""
+    log = "\n".join([
+        f"INFO:agent.config:AUTH_TOKEN: {FAKE_TOKEN}",
+        '{"asctime": "2026-09-30 15:57:50,001", "levelname": "INFO", '
+        f'"message": "AUTH_TOKEN: {FAKE_TOKEN}", "taskName": null}}',
+        f"ERROR:agent.config:could not use AUTH_TOKEN={FAKE_TOKEN}",
+        f"requests.exceptions.HTTPError: 401 Client Error: Unauthorized for "
+        f"url: https://a.blazemeter.com/api/v4/ships?AUTH_TOKEN={FAKE_TOKEN}"])
+    g, _ = _gather(monkeypatch, {
+        "get events": (0, '{"items": []}'),
+        "get pods": (0, json.dumps({"items": [pod()]})),
+        "logs": (0, log)}, ns_obj={"metadata": {"name": NS}})
+    assert FAKE_TOKEN not in repr(g)
+    doc = triage.as_dict(triage.evaluate(g, NS, now=NOW))
+    assert rules(doc) == ["auth-token"] and doc["unrecognised"]
+    triage.report(doc)
+    out = capsys.readouterr().out + json.dumps(doc)
+    assert FAKE_TOKEN not in out and "<redacted>" in out
+
+
+def test_a_log_handed_straight_to_evaluate_is_redacted_too():
+    doc = run(log=f"ERROR:agent:bad AUTH_TOKEN: {FAKE_TOKEN}")
+    assert FAKE_TOKEN not in json.dumps(doc)
+
+
+def test_redact_replaces_token_values_and_url_credentials():
+    assert triage.redact(f"'AUTH_TOKEN': '{FAKE_TOKEN}'") == \
+        "'AUTH_TOKEN': '<redacted>'"
+    assert triage.redact("HTTPS Proxy: http://u:%3Cpassword%3E@proxy:3128") == \
+        "HTTPS Proxy: http://<redacted>@proxy:3128"
+    assert triage.redact("AUTH_TOKEN is set") == "AUTH_TOKEN is set"

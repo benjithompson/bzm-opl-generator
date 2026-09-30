@@ -258,7 +258,10 @@ def _hook_diffs(flat, helm):
                     diffs.append(f"{name}.{f}: {m[f]} != {h[f]}")
         elif m["kind"] == "Pod":
             mp, hp = m["spec"], h["spec"]
-            for f in ("serviceAccountName", "restartPolicy", "volumes"):
+            # securityContext: the pod's seccomp profile, which restricted
+            # Pod Security admission requires of both.
+            for f in ("serviceAccountName", "restartPolicy", "volumes",
+                      "securityContext"):
                 if mp.get(f) != hp.get(f):
                     diffs.append(f"{name}.{f}: {mp.get(f)!r} != {hp.get(f)!r}")
             mc, hc = mp["containers"][0], hp["containers"][0]

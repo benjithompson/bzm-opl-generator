@@ -396,6 +396,18 @@ def test_a_starved_run_looks_healthier_than_a_good_one():
     assert livetest.assert_engine_exited_cleanly(healthy, 1) == []
 
 
+def test_the_shared_readers_tell_an_unread_run_from_a_bad_one():
+    """smoke reuses these to report a read it could not make as unread."""
+    assert livetest.taurus_exit_codes(_EventClient(DIED), 1) == ["1"]
+    assert livetest.taurus_exit_codes(_EventClient(["Status changed"]), 1) == []
+    assert livetest.run_summary(
+        _FakeClient({"hits": 3, "avg": 9, "failed": 1}), 1) == (3, 9, 1)
+    assert livetest.proxy_credentials_in(
+        {"HTTPS_PROXY": "http://u:p@h:1"}) == ["HTTPS_PROXY"]
+    with pytest.raises(ValueError):
+        livetest.missing_image_overrides({"IMAGE_OVERRIDES": "{not json"}, FACTS)
+
+
 def test_a_missing_exit_status_is_unverified_not_passed():
     """No Taurus exit status is unverified, not passed."""
     fails = livetest.assert_engine_exited_cleanly(_EventClient(["Status changed to ENDED (140)"]), 1)
@@ -451,6 +463,125 @@ def test_engine_heap_note_is_quiet_when_the_pairing_is_sane():
     note = livetest.engine_heap_note(_heap_pod("6g", limit="8Gi"))
     assert "OOMKill" not in note and "unused" not in note
     assert "6Gi" in note and "8Gi" in note
+
+
+# The java processes read live from a v4 engine (crane 3.8.0, 8Gi limit, no
+# engineXmx on the location): Taurus starts JMeter with its own heap.
+JMETER_LINE = (
+    "PID 606: /usr/bin/java -Djpgc.repo.address=https://jmeter-plugins-fallback"
+    ".blazemeter.com/jmeter-plugins.json;https://jmeter-plugins.org/repo/ "
+    "-Djpgc.repo.sendstats=False -Xms3328m -Xmx6656m -XX:NewSize=64m "
+    "-XX:MaxNewSize=128m -XX:MaxTenuringThreshold=2 "
+    "-Dsun.rmi.dgc.client.gcInterval=600000 "
+    "-Dsun.rmi.dgc.server.gcInterval=600000 -Dsun.net.inetaddr.ttl=20 "
+    "-Dnetworkaddress.cache.ttl=20 -jar "
+    "/shared/.bzt/jmeter-taurus/5.5/bin/ApacheJMeter.jar -j "
+    "/tmp/jmetern1obrn7plog --version")
+JETPACK_LINE = (
+    "PID 625: /usr/lib/jvm/java-11-openjdk-amd64/bin/java -jar "
+    "/usr/local/taurus-cloud/files/jetpack.jar /tmp/artifacts/jetpack.properties")
+
+
+def test_the_measured_jvm_command_lines_parse():
+    jvms = livetest.parse_jvm_cmdlines(JMETER_LINE + " \n" + JETPACK_LINE + "\n")
+    assert jvms == [
+        {"pid": 606, "name": "JMeter", "jmeter": True, "xmx": 6656 * 1024 ** 2},
+        {"pid": 625, "name": "jetpack.jar", "jmeter": False, "xmx": None}]
+
+
+def test_the_last_xmx_on_a_command_line_is_the_heap():
+    [j] = livetest.parse_jvm_cmdlines("PID 7: java -Xmx1g -Xmx2g -cp /x Main")
+    assert j["xmx"] == 2 * 1024 ** 3 and j["name"] == "java"
+
+
+def _exec(monkeypatch, *results):
+    """Fake kube.quiet: each call takes the next (rc, stdout, stderr), and the
+    command run is recorded."""
+    calls, queue = [], list(results)
+
+    def quiet(cmd, timeout=None, input=None):
+        calls.append(cmd)
+        rc, out, err = queue.pop(0) if len(queue) > 1 else queue[0]
+        return subprocess.CompletedProcess(cmd, rc, out, err)
+
+    monkeypatch.setattr(kube, "quiet", quiet)
+    return calls
+
+
+def test_the_heap_watch_reports_jmeter_against_the_limit_and_the_bare_jvm(
+        monkeypatch):
+    """JMeter appears after the first read; the note gives its heap as a share
+    of the limit and names the JVM with no -Xmx without inventing a number."""
+    calls = _exec(monkeypatch, (0, JETPACK_LINE + "\n", ""),
+                  (0, JMETER_LINE + "\n" + JETPACK_LINE + "\n", ""))
+    watch = livetest.EngineHeapWatch("kubectl", "ns1", _heap_pod(None))
+    watch.poll()
+    assert not watch.done
+    watch.poll()
+    watch.poll()                  # JMeter was seen: nothing more is read
+    assert watch.done and len(calls) == 2
+    assert calls[0][:7] == ["kubectl", "-n", "ns1", "exec", "engine-abc",
+                            "-c", "ctr"]
+    # Only process command lines are read, never the environment.
+    assert "cmdline" in calls[0][-1] and "environ" not in calls[0][-1]
+    note = watch.note()
+    assert "JMeter (PID 606) heap is 6656Mi against a 8Gi limit (81%)" in note
+    assert "jetpack.jar (PID 625): no -Xmx, so the JVM default ceiling applies" in note
+    assert "OOMKill" not in note and "unused" not in note
+
+
+@pytest.mark.parametrize("stderr, said, final", [
+    ('Error from server (Forbidden): pods "engine-abc" is forbidden: cannot '
+     'create resource "pods/exec"', "was denied", True),
+    ('Error from server (NotFound): pods "engine-abc" not found',
+     "was gone", True),
+    ("error: Internal error occurred: error executing command", "failed", False),
+])
+def test_an_unread_heap_says_why_and_is_not_an_empty_one(monkeypatch, stderr,
+                                                         said, final):
+    _exec(monkeypatch, (1, "", stderr))
+    watch = livetest.EngineHeapWatch("kubectl", "ns1", _heap_pod(None))
+    watch.poll()
+    assert watch.done is final
+    note = watch.note()
+    assert "unread" in note and said in note
+    assert "no java process" not in note
+
+
+def test_no_java_process_is_not_an_unread_one(monkeypatch):
+    _exec(monkeypatch, (0, "", ""))
+    watch = livetest.EngineHeapWatch("kubectl", "ns1", _heap_pod(None))
+    watch.poll()
+    assert "no java process was running" in watch.note()
+    assert "unread" not in watch.note()
+
+
+def test_a_run_that_ends_before_any_read_leaves_the_heap_unread():
+    watch = livetest.EngineHeapWatch("kubectl", "ns1", _heap_pod(None))
+    assert "unread" in watch.note() and "ended before" in watch.note()
+
+
+def test_jvms_without_jmeter_say_jmeter_was_not_seen(monkeypatch):
+    _exec(monkeypatch, (0, JETPACK_LINE, ""))
+    watch = livetest.EngineHeapWatch("kubectl", "ns1", _heap_pod(None))
+    watch.poll()
+    assert watch.note().startswith("no JMeter process seen before the run ended")
+
+
+def test_the_run_wait_reads_the_heap_only_while_the_run_lasts():
+    statuses = iter(["INIT_SCRIPT", "RUNNING", "ENDED"])
+    seen = []
+    client = type("C", (), {"master_status": lambda self, m: next(statuses)})()
+    got = livetest.wait_master_done(client, 1, timeout=60, poll=0,
+                                    while_running=lambda: seen.append(1))
+    assert got == "ENDED" and len(seen) == 2
+
+
+@pytest.mark.parametrize("hb, label", [
+    (0, "heartbeat=never"), (None, "heartbeat=never"),
+    (1000, "heartbeat_age=30s")])
+def test_an_agent_that_never_reported_has_no_heartbeat_age(hb, label):
+    assert livetest.heartbeat_label(hb, now=1030) == label
 
 
 def _sized_pod(requests, limits, annotations=None):

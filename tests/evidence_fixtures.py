@@ -91,11 +91,26 @@ SERVED = {"clientVersion": {"gitVersion": "v1.29.4"},
           "serverVersion": {"gitVersion": "v1.29.4"}}
 
 
+# A cluster that runs no admission policy engine: Kyverno's and Gatekeeper's
+# resources are not served, and the built-in policy kinds hold nothing.
+EMPTY_LIST = {"apiVersion": "v1", "kind": "List", "items": []}
+NO_POLICY_ENGINE = {
+    evidence.KYVERNO_CLUSTERPOLICIES: evidence.NOT_SERVED,
+    evidence.KYVERNO_POLICIES: evidence.NOT_SERVED,
+    evidence.GATEKEEPER_TEMPLATES: evidence.NOT_SERVED,
+    evidence.GATEKEEPER_CONSTRAINTS: evidence.NOT_SERVED,
+    evidence.ADMISSION_POLICIES: EMPTY_LIST,
+    evidence.ADMISSION_POLICY_BINDINGS: EMPTY_LIST,
+    evidence.VALIDATING_WEBHOOKS: EMPTY_LIST,
+}
+
+
 def raw(**over):
     """The `raw` sections, with any of them replaced -- `scoped=None` is a
     denied read, which is the shape the collector writes for one."""
     sections = {"nodes": NODES, "ingressclasses": CLASSES,
-                "namespace": NS_BASELINE, "scoped": SCOPED}
+                "namespace": NS_BASELINE, "scoped": SCOPED,
+                **NO_POLICY_ENGINE}
     sections.update(over)
     return sections
 

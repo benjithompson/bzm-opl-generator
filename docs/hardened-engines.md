@@ -27,6 +27,44 @@ spec:
       readOnlyRootFilesystem: false
 ```
 
+## Restricted PodSecurity refuses the engines; baseline accepts them
+
+The posture above has no `runAsNonRoot`. `restrict_engines` writes only
+`INHERIT_RUNNING_USER_AND_GROUP` and the capability drop, and BlazeMeter's
+environment-variable reference has no variable that sets `runAsNonRoot` on the
+pods crane creates. The Pod Security Standards `restricted` level requires
+`runAsNonRoot: true`; a non-zero `runAsUser` does not satisfy it.
+
+Measured on 2026-09-29, on a kind cluster (Kubernetes v1.36), with a
+server-side dry run (nothing was created). The pod had exactly the spec above:
+pod seccomp `RuntimeDefault`; container `privileged: false`,
+`allowPrivilegeEscalation: false`, `drop: [ALL]`, `runAsUser: 1337`,
+`runAsGroup: 1337`, no `runAsNonRoot`.
+
+| namespace label | the spec above | the spec plus `runAsNonRoot: true` |
+|---|---|---|
+| `pod-security.kubernetes.io/enforce=restricted` | refused: `violates PodSecurity "restricted:latest": runAsNonRoot != true` | accepted |
+| `pod-security.kubernetes.io/enforce=baseline` | accepted | – |
+
+Crane's own Deployment sets `runAsNonRoot: true` and meets `restricted`. So in
+a `restricted` namespace the agent comes online, and every engine is refused
+when a run starts. The run hangs; nothing in the deploy fails. The live runs in
+the table below were on GKE Autopilot and OpenShift `restricted-v2`, never
+under PodSecurity `restricted`.
+
+What to do, in the order that costs least:
+
+1. Label the namespace `pod-security.kubernetes.io/enforce=baseline`. The
+   engines meet baseline. Keep `warn` and `audit` at `restricted` to still see
+   violations.
+2. Add a mutating policy (a Kyverno `mutate` rule, for example) that sets
+   `runAsNonRoot: true` on the pods crane creates in the namespace.
+3. Exempt the namespace from PodSecurity enforcement.
+
+`bzm-opl-gen doctor` reports a `restricted` namespace as a FAIL for this
+reason, and a Kyverno, Gatekeeper or ValidatingAdmissionPolicy rule that
+demands `runAsNonRoot` the same way.
+
 **This is a Kubernetes posture; `--format docker` ignores it.** A docker bundle
 has no pod spec to stamp, so neither key is emitted and nothing on this page
 applies to it. A docker agent's engines are containers on the host, started

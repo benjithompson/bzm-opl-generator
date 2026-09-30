@@ -26,6 +26,8 @@ bzm-opl-gen triage -n <namespace> --json
 It needs `get` and `list` on `events` and `pods`, and `get` on `pods/log`, in
 the namespace. It also reads the Namespace object to tell a missing namespace
 from an empty one; many namespaced roles cannot, and that is not an error.
+When an event says a pod waited for a ServiceAccount, it reads that
+ServiceAccount (`get` on `serviceaccounts`).
 
 ## What it reads
 
@@ -39,7 +41,14 @@ from an empty one; many namespaced roles cannot, and that is not an error.
 3. **Crane's log**, within `--since`. If crane restarted, it also reads the log
    of the previous run, whatever its age, because the crash is in that log.
    Crane creates engine pods itself, so a quota, Pod Security or webhook
-   refusal of an engine shows in crane's log, not in an event.
+   refusal of an engine shows in crane's log, not in an event. A crane
+   container that has not started has no log yet; the report says so under
+   `read`, and that is not an unread section.
+
+Crane 3.8 writes its AUTH_TOKEN to its log when it starts. `triage` replaces
+every AUTH_TOKEN value, and every user name and password in a URL, with
+`<redacted>` as it reads the log, so no report and no `--json` document
+carries them.
 
 Engine pods are deleted when a run ends. To see an engine failure, run `triage`
 while the test is still starting.
@@ -53,9 +62,23 @@ Each finding shows:
   message names one;
 - `seen on:` the objects that showed it, and how many times;
 - `evidence:` the first line that matched, with a long middle elided;
+- `also:` container states on the same pod that the finding explains, for
+  example the exit code of a crash-looping container;
 - the finding, and `fix:` what to change.
 
-Failures come first, then warnings. After them the report lists:
+Failures come first, then warnings, then notes. A `NOTE` needs no action now.
+Events outlive their pods by about one hour, so a finding seen only on pods that
+no longer exist is history: it shows as `NOTE` with `(pod gone; history)`, comes
+after the current findings, and does not count as a failure. A finding about a
+ReplicaSet or Deployment is never history. When the pods could not be read,
+nothing is marked as history.
+
+Two lines are not listed, because a finding already explains them or they are
+harmless: a bare `Traceback (most recent call last):` header in a log where a
+rule matched the error, and a readiness probe that raced its container's exit
+on a pod that has finished or is gone.
+
+After the findings the report lists:
 
 - **unread**: a read the cluster refused or did not answer, with its reason. An
   unread section is not an empty section. A report with unread sections can
@@ -68,7 +91,7 @@ Failures come first, then warnings. After them the report lists:
 
 | exit | when |
 |---|---|
-| `0` | no known failure. Unread sections and unrecognised warnings still exit 0, as in `doctor`. |
+| `0` | no known failure. Unread sections, unrecognised warnings and notes, history included, still exit 0, as in `doctor`. |
 | `1` | at least one known failure (`FAIL`) |
 
 A report with nothing read says so in its last line.
@@ -80,7 +103,7 @@ A report with nothing read says so in its last line.
 | `namespace-missing` | the namespace does not exist on this cluster | the right namespace and context; apply the bundle |
 | `crane-missing` | no crane pod in the namespace | apply the bundle; the other findings say why the Deployment made no pod |
 | `image-pull-registry-tls` | the node does not trust the registry's certificate | node runtime trust (containerd registry hosts, OpenShift image configuration). The CA options do not reach image pulls. |
-| `image-pull-auth` | the registry refused the pull | `pull_secret` for the crane image, `registry_auth` for the images crane pulls |
+| `image-pull-auth` | the registry refused the pull | `pull_secret` for the crane image; the same Secret on the `default` ServiceAccount for engines |
 | `image-not-found` | the registry has no such image or tag | `bzm-opl-gen images --mirror`; tags follow BlazeMeter releases, so a mirror goes stale |
 | `image-pull-unreachable` | the node cannot reach the registry | node egress, or a mirror and `private_registry` |
 | `image-pull` | a pull failed for another reason | the evidence line; `private_registry`, `pull_secret`, `registry_auth` |
@@ -90,6 +113,8 @@ A report with nothing read says so in its last line.
 | `proxy-auth` | the proxy answered 407 | `proxy.username` and `proxy.password` |
 | `proxy-unreachable` | crane cannot connect through the proxy | `proxy.http` and `proxy.https` |
 | `egress-blocked` | crane cannot reach BlazeMeter | egress to `a.blazemeter.com`, `data.blazemeter.com`, `storage.blazemeter.com`; `proxy`; `doctor` probes it |
+| `crane-hung-proxy` | crane's log ends at its first call to BlazeMeter after a minute of running, and names a proxy. The pod still shows Ready. | test from a curl pod in the namespace through the proxy; `proxy.http`, `proxy.https`, `proxy.no_proxy` |
+| `crane-hung` | the same with no proxy: a firewall, NetworkPolicy or DNS drops the connection | test from a curl pod in the namespace; egress to `a.blazemeter.com`, or `proxy` |
 | `auth-token` | BlazeMeter refused the AUTH_TOKEN, or the agent is gone | apply the current token; issue a new one only if nothing else runs on the agent |
 | `disk-pressure` | a node is short of disk | about 60GB per concurrent engine; `engines_per_node`, `engine_ephemeral_request_mb` |
 | `schedule-taint` | no node tolerated the pod | `tolerations`, `engine_tolerations`, with a matching node selector |
@@ -99,6 +124,10 @@ A report with nothing read says so in its last line.
 | `pod-security` | Pod Security admission refused a pod | `restrict_engines` (on by default), a non-root `run_as_user` |
 | `openshift-scc` | no SCC admitted the pod | `platform: openshift`, `restrict_engines`; an SCC for `service_account_name` |
 | `admission-webhook` | Kyverno, Gatekeeper or similar refused a pod | the policy the evidence names: `restrict_engines`, `run_as_user`, `private_registry`, engine size, or an exception |
+| `service-account-missing` | the ReplicaSet cannot create crane's pod: its ServiceAccount does not exist | apply the bundle's ServiceAccount; with `service_account_create` off, your platform team creates the one `service_account_name` names |
+| `service-account-unread` | a pod waited for its ServiceAccount, and whether it exists now could not be read (warning) | `kubectl get serviceaccount` in the namespace |
+| `service-account-late` | a pod waited for its ServiceAccount, which exists now: the files were applied Deployment first (note) | nothing |
+| `engine-prestop` | an engine's preStop hook failed as the pod ended; seen on engines whose runs returned all their results (note) | nothing on its own |
 | `rbac` | the API refused crane's service account | the bundle's Role and RoleBinding, `service_account_name`, `cluster_rbac` for nodes |
 | `oom-engine` | an engine ran out of memory | `engine_mem_limit`, or a lower `threadsPerEngine` on the location |
 | `oom` | another container ran out of memory | for crane, its 2Gi limit in the Deployment; tell BlazeMeter support |

@@ -87,6 +87,10 @@ kubectl get ns | grep bzm-livetest ; docker ps -a | grep bzm-opl ; minikube stat
 - `ENGINE SIZING:` prints only when an engine's requests differ from its
   limits; its absence is the pass. Read `kubectl get pod -o json` for the
   numbers: a correct engine is QoS `Guaranteed`.
+- `ENGINE HEAP:` reads the JMeter `-Xmx` from the engine's running processes:
+  Taurus starts JMeter only after `INIT_SCRIPT`, and the pod is gone soon
+  after the run ends. To read a pod by hand, match processes on argv0 (`java`),
+  never on the whole command line, or the probe finds itself.
 - An engine `Pending` for the whole run, a master stuck at `BOOT_STARTING` and
   0 samples mean the engine image never arrived — usually disk (the v4 image is
   ~3.5GB), not the agent.
@@ -94,6 +98,13 @@ kubectl get ns | grep bzm-livetest ; docker ps -a | grep bzm-opl ; minikube stat
   so the next start answers 403 `Not enough available resources`. Terminate the
   master (`POST /masters/{id}/terminate`); the slot can stay held after it
   ends, so give a scratch location a second slot.
+
+## Inducing failures for triage
+
+Break the kept deployment one way at a time and restore it between: a wrong
+AUTH_TOKEN in the Secret, a crane tag that does not exist (`kubectl set image`),
+an unreachable `HTTPS_PROXY` in the ConfigMap. `kubectl apply` of the bundle
+does not remove keys a patch added; remove them with a JSON patch.
 
 ## Local environment
 

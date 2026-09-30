@@ -329,6 +329,26 @@ def deploy_steps(o, verb):
             "**{n}. Mirror the images** (needs push access to the registry; "
             "the pull side needs none):\n\n"
             f"```\n./{MIRROR_SCRIPT_FILE}\n```\n\n")
+    if o["pull_secret"]:
+        # Measured: engine pods carry no imagePullSecrets of crane's and run as
+        # `default`. A plain patch replaces that list, so append, or create it.
+        kc, ns, name = cli(o), o["namespace"], o["pull_secret"]
+        server = (o["private_registry"] or "<registry>").split("/")[0]
+        steps.append(
+            f"**{{n}}. Create the pull Secret and give it to the engines** -- "
+            f"this bundle names\n`{name}` for crane's own image and does not "
+            f"create it. The engine pods crane\ncreates run as the namespace's "
+            f"`default` ServiceAccount and get no pull secret\nfrom crane, so "
+            f"add it there too (once):\n\n"
+            f"```\n{create_namespace_cmd(o)}\n"
+            f"{kc} -n {ns} create secret docker-registry {name} "
+            f"--docker-server={server} --docker-username=<user> "
+            f"--docker-password=<password>\n"
+            f"{kc} -n {ns} patch serviceaccount default --type json -p "
+            f"'[{{{{\"op\":\"add\",\"path\":\"/imagePullSecrets/-\","
+            f"\"value\":{{{{\"name\":\"{name}\"}}}}}}}}]' 2>/dev/null || "
+            f"{kc} -n {ns} patch serviceaccount default -p "
+            f"'{{{{\"imagePullSecrets\":[{{{{\"name\":\"{name}\"}}}}]}}}}'\n```\n\n")
     ca = ca_cfg(o)
     if ca and ca["mode"] == "existing":
         # `--from-file=<key>=<path>` rather than BlazeMeter's documented bare

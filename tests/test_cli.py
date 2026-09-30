@@ -274,6 +274,19 @@ def test_generate_with_an_api_key_alone_mints_nothing(monkeypatch, tmp_path,
             in (tmp_path / "out" / "bzm_secret.yaml").read_text())
 
 
+def test_generate_refuses_a_token_file_of_two_lines(monkeypatch, tmp_path,
+                                                   capsys):
+    """`--auth-token "$(cat file)"` over a two-line file exits with a sentence
+    naming the flag and the line count; nothing is written and nothing echoed."""
+    fake = "0123456789abcdef" * 4
+    with pytest.raises(SystemExit) as caught:
+        _generate(monkeypatch, tmp_path, "--auth-token", fake + "\nthat")
+    msg = str(caught.value)
+    assert "--auth-token" in msg and "has 2 lines" in msg
+    assert fake not in msg + capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+
+
 def test_generate_says_a_ca_slot_out_loud(monkeypatch, tmp_path, capsys):
     """generate names a CA slot beside the token line, before `wrote`."""
     _generate(monkeypatch, tmp_path, "--ca-placeholder")

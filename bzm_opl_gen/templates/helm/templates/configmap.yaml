@@ -39,8 +39,8 @@ data:
   {{- if .Values.privateRegistry }}
   IMAGE_OVERRIDES: {{ .Values.imageOverrides | toJson | squote }}
   {{- if .Values.registryAuth }}
-  # Registry credentials for engine image pulls. Readable by anyone who can read
-  # ConfigMaps; prefer a cluster pull secret.
+  # BlazeMeter documents these for docker agents. Engine pods pull with the
+  # default ServiceAccount's pull secrets (see the README).
   # DOCKER_REGISTRY_USERNAME: <user>
   # DOCKER_REGISTRY_PASSWORD: <password>
   # DOCKER_REGISTRY_EMAIL: <email>

@@ -65,7 +65,42 @@
       ]
     },
     "namespace": null,
-    "scoped": null
+    "scoped": null,
+    "kyverno_clusterpolicies": {
+      "apiVersion": "v1",
+      "items": [],
+      "kind": "List",
+      "metadata": {
+        "resourceVersion": ""
+      }
+    },
+    "kyverno_policies": null,
+    "gatekeeper_templates": "not-served",
+    "gatekeeper_constraints": "not-served",
+    "validating_admission_policies": {
+      "apiVersion": "v1",
+      "items": [],
+      "kind": "List",
+      "metadata": {
+        "resourceVersion": ""
+      }
+    },
+    "validating_admission_policy_bindings": {
+      "apiVersion": "v1",
+      "items": [],
+      "kind": "List",
+      "metadata": {
+        "resourceVersion": ""
+      }
+    },
+    "validating_webhooks": {
+      "apiVersion": "v1",
+      "items": [],
+      "kind": "List",
+      "metadata": {
+        "resourceVersion": ""
+      }
+    }
   },
   "inventory": {
     "configmaps": null,
@@ -112,6 +147,7 @@
   "notes": [
     "namespace: Error from server (Forbidden): namespaces \"blazemeter\" is forbidden: User \"system:serviceaccount:tooling:reader\" cannot get resource \"namespaces\" in API group \"\" in the namespace \"blazemeter\"",
     "scoped: Error from server (Forbidden): limitranges is forbidden: User \"system:serviceaccount:tooling:reader\" cannot list resource \"limitranges\" in API group \"\" in the namespace \"blazemeter\"",
+    "kyverno_policies: Error from server (Forbidden): policies.kyverno.io is forbidden: User \"system:serviceaccount:tooling:reader\" cannot list resource \"policies\" in API group \"kyverno.io\" in the namespace \"blazemeter\" ",
     "configmaps: Error from server (Forbidden): configmaps is forbidden: User \"system:serviceaccount:tooling:reader\" cannot list resource \"configmaps\" in API group \"\" in the namespace \"blazemeter\"",
     "secrets: Error from server (Forbidden): secrets is forbidden: User \"system:serviceaccount:tooling:reader\" cannot list resource \"secrets\" in API group \"\" in the namespace \"blazemeter\""
   ]

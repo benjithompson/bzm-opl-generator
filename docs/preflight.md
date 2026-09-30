@@ -38,8 +38,13 @@ Every check below is named exactly as `doctor` prints it.
 | limitrange | an existing `max` below the engine size (LimitRanger rejects the pod at admission) | existing defaults conflict with the engine size; none exists and none is emitted; or they could not be read |
 | resourcequota | `hard − used` can't fit `slots ×` engine, or `pods` can't fit slots + crane | the quotas could not be read |
 | quota defaults | – | a cpu/memory ResourceQuota is in force and there is no LimitRange: every pod must then declare requests and limits, and crane sets none on the job pods it spawns |
-| admission (PodSecurity) | `pod-security…/enforce=restricted` **with `restrict_engines` off** — crane passes, but the engine pods it spawns keep crane's privileged default and are rejected after the agent is already online, so runs hang rather than fail | no PSA label at all (nothing is enforced, so nothing was proved) |
+| admission (PodSecurity) | `pod-security…/enforce=restricted`: crane passes, but the engine pods carry no `runAsNonRoot`, and no agent variable sets it, so every engine is refused when a run starts (measured, [hardened engines](hardened-engines.md#restricted-podsecurity-refuses-the-engines-baseline-accepts-them)). The fix: `enforce=baseline` (the engines meet it), a mutating policy that adds `runAsNonRoot: true`, or a namespace exemption. Also `enforce=baseline` **with `restrict_engines` off**: the engines keep crane's privileged default | no PSA label at all (nothing is enforced, so nothing was proved) |
 | admission (SCC) | – | OpenShift namespace with no `sa.scc.uid-range` |
+| policy: Kyverno | – | the ClusterPolicies could not be read, or the Policies in the namespace could not be read. Not installed is a PASS. |
+| policy: Kyverno *(kind) (name)* *(one per enforcing policy)* | a policy in `Enforce` mode that reaches the namespace refuses crane's pod or the engine pods — see [admission policy engines](#admission-policy-engines) | it refuses only crane's `test-job` pods or the crane-hook pod, its reach or one of the pod fields is unknown, or it enforces a rule this preflight does not recognise |
+| policy: Gatekeeper, policy: Gatekeeper *(kind) (name)* | as Kyverno, for a constraint with `enforcementAction: deny` | as Kyverno |
+| policy: ValidatingAdmissionPolicy, policy: ValidatingAdmissionPolicy *(name)* | as Kyverno, for a policy with a binding whose `validationActions` include `Deny` | as Kyverno |
+| policy: other webhooks | – | a validating webhook outside Kyverno and Gatekeeper inspects pod creation in the namespace; it may enforce a policy nobody can read |
 | service account | `service_account_create: false` and no ServiceAccount of that name in the namespace — the Deployment applies and no pod is ever created, the reason being an event on the ReplicaSet | the namespace's ServiceAccounts could not be read, so the name is unverified |
 | sv ingress class | `sv_ingress: nginx` with no IngressClass named `nginx` — crane hardcodes that name, so nothing claims the Ingress and the published endpoint 503s while the virtual service is healthy ([details](service-virtualization.md#reaching-a-virtual-service-from-outside-sv-expose)) | the IngressClasses could not be read |
 | egress *(one check per target)* | any of `a.blazemeter.com`, `data.blazemeter.com`, `storage.blazemeter.com` — plus the private registry when one is set — unreachable from the namespace | that target could not be probed with the profile's proxy/CA honoured; the profile's CA could not be had yet, with the reason ([CA trust](ca-trust.md#the-doctors-egress-probe)); or nothing was probed at all (an evidence file cannot carry a probe: it takes a pod in the namespace, and a collector must not create one) |
@@ -55,6 +60,94 @@ why, never a FAIL. A chain the CA does not verify (curl exit 60) is a FAIL;
 Capacity is measured against node **allocatable**, which is an upper bound:
 other workloads already hold part of it. A doctor pass means "nothing here
 stops a test", not "there is headroom".
+
+## Admission policy engines
+
+PodSecurity labels and OpenShift SCCs are not the only admission control a
+corporate cluster runs. Kyverno, OPA Gatekeeper and ValidatingAdmissionPolicy
+refuse pods when they are created. Crane creates the engine pods only when a
+run starts, after the agent reads online. A policy that refuses them makes the
+run hang; nothing in the deploy fails. `doctor` reads these policies and
+judges each one against the pods this bundle and its crane create.
+
+**What is read.** All reads are `get`, cluster-wide unless noted:
+
+| engine | objects | evidence section |
+|---|---|---|
+| Kyverno | ClusterPolicies, and Policies in the target namespace | `raw.kyverno_clusterpolicies`, `raw.kyverno_policies` |
+| Gatekeeper | ConstraintTemplates, and every constraint (`get constraints`) | `raw.gatekeeper_templates`, `raw.gatekeeper_constraints` |
+| ValidatingAdmissionPolicy | the policies and their bindings | `raw.validating_admission_policies`, `raw.validating_admission_policy_bindings` |
+| other engines | ValidatingWebhookConfigurations, by name only | `raw.validating_webhooks` |
+
+Each read has three results, and they do not share a verdict:
+
+- **Read.** The policies are judged.
+- **Not installed.** The API server serves no such resource type (kubectl
+  says `the server doesn't have a resource type`). The collector writes the
+  string `"not-served"`. This is a PASS.
+- **Unread.** Any other failure, usually `Forbidden`. The collector writes
+  `null` and a note. This is a WARN that names the missing permission, and it
+  never becomes a FAIL.
+
+**Which policies count.** Only a policy that enforces and that reaches the
+target namespace:
+
+- Kyverno: `validationFailureAction: Enforce`, or a rule's own
+  `failureAction: Enforce`, after any `validationFailureActionOverrides` for
+  the namespace. Only `validate` and `verifyImages` rules count.
+- Gatekeeper: `enforcementAction: deny` (the default), or `scoped` with a
+  `deny` action. `dryrun` and `warn` are counted, not judged.
+- ValidatingAdmissionPolicy: a binding with `Deny` in `validationActions`.
+
+Reach is decided from namespace names, `excludedNamespaces`, exclude blocks and
+namespace selectors, against the namespace's own labels. Where the answer
+depends on something that was not read (the namespace's labels, a pod label
+selector, a user or role filter, a CEL match condition), the policy "may apply".
+It is then judged, and its worst verdict is a WARN.
+
+**The pods it judges against.**
+
+| pod | what is known | a refusal is |
+|---|---|---|
+| crane's own pod | the bundle's Deployment: `runAsNonRoot`, `allowPrivilegeEscalation: false`, all capabilities dropped, `RuntimeDefault` seccomp, requests and limits, labels `role`, `harbor_id`, `ship_id`, no `readOnlyRootFilesystem` | FAIL |
+| engine pods | the `restrict_engines` posture as read off live runs ([hardened engines](hardened-engines.md)): crane's UID, no privilege escalation, all capabilities dropped, requests equal to the limits. They carry no `runAsNonRoot`, and no agent variable sets it (measured: restricted PodSecurity refuses them, baseline accepts them). `readOnlyRootFilesystem` is `false`. Their labels are crane's choice. | FAIL |
+| crane's `test-job` pods | the crane image, without the `restrict_engines` posture and without requests or limits | WARN: what a refused housekeeping pod costs a run is not verified |
+| the crane-hook pod | only when `crane_hook` is on; its image is published only as `latest` | WARN: the check fails, the agent does not |
+
+Images are the ones the facts name: `crane_image` and the location's image
+list, moved to `private_registry` where one is set. Hand-entered facts carry
+catalogue images, whose tags are `latest` unless release pins were read.
+
+**What is recognised,** by rule shape, constraint kind, CEL expression, and
+as a last resort the policy name:
+
+| policy | examples | verdict for this bundle | fix it names |
+|---|---|---|---|
+| no `latest` tag, a tag required | Kyverno `disallow-latest-tag`, Gatekeeper `K8sDisallowedTags`, CEL `endsWith(':latest')` | FAIL for each image the bundle pulls with a `latest` tag | regenerate from the account so every image is pinned; an exception for an image published only as `latest` |
+| a digest required | Gatekeeper `K8sImageDigests`, a Kyverno `*@*` pattern | FAIL: crane names engine images by tag | a policy exception |
+| allowed or disallowed registries | Kyverno `restrict-image-registries`, Gatekeeper `K8sAllowedRepos`/`K8sDisallowedRepos`, CEL `image.startsWith(...)` | each image is compared with the list | `private_registry` and the bundle's mirror script |
+| requests and limits | Kyverno `require-requests-limits`, Gatekeeper `K8sRequiredResources`, `K8sContainerLimits`, `K8sContainerRequests` | crane and engines declare both; `test-job` pods do not, unless a LimitRange gives defaults. A maximum below the engine size is a FAIL. | a LimitRange of your own for the `test-job` pods; `engine_cpu_limit`, `engine_mem_limit` |
+| `runAsNonRoot`, non-root user | Kyverno `require-run-as-nonroot`, Kyverno `podSecurity` at `restricted`, a CEL rule on `runAsNonRoot`; Gatekeeper `K8sPSPAllowedUsers` (`MustRunAsNonRoot`) | a `runAsNonRoot` demand: crane passes, engines FAIL. `MustRunAsNonRoot` accepts the engines' non-zero `runAsUser`. | a mutating policy that adds `runAsNonRoot: true`, or a policy exception |
+| privilege escalation, capabilities, privileged | Kyverno `disallow-privilege-escalation`, `require-drop-all`, Gatekeeper `K8sPSP*` | pass with `restrict_engines` on; FAIL with it off | turn `restrict_engines` back on |
+| read-only root filesystem | Kyverno `require-ro-rootfs`, Gatekeeper `K8sPSPReadOnlyRootFilesystem` | FAIL: no option sets it, and crane and the engines write to their filesystem | a policy exception |
+| required labels or annotations | Kyverno `require-labels`, Gatekeeper `K8sRequiredLabels`, `K8sRequiredAnnotations` | FAIL where crane's pod lacks a key; WARN for the engines, whose labels crane chooses | a policy exception |
+| hostPath, host namespaces, host ports | Kyverno `disallow-host-path`, `disallow-host-namespaces`, Gatekeeper `K8sPSPHost*` | pass | – |
+| Pod Security Standards | Kyverno `podSecurity: {level: baseline or restricted}` | the demands of that level, as above | as above |
+| image signatures | Kyverno `verifyImages` | WARN: not checked here | confirm with a run, or an exception |
+
+An enforcing policy that matches none of these is named with its rule names
+and its own description, as a WARN to review. A policy on kinds the bundle
+never makes (Namespaces, Nodes) is counted and not judged.
+
+The exception each engine grants: a Kyverno `PolicyException`, the namespace
+in the Gatekeeper constraint's `excludedNamespaces`, or a
+ValidatingAdmissionPolicy binding whose `namespaceSelector` leaves the
+namespace out.
+
+**Not verified.** No live cluster with these engines has been run against
+this check. That `test-job` pods carry no security context rests on one
+observation. After a deploy, `bzm-opl-gen triage` reads the refusal itself from
+the namespace's events ([triage](triage.md)).
 
 ## A cluster you cannot reach
 
@@ -196,7 +289,12 @@ worth of CPU and memory for jobs that need neither, and taking capacity a real
 engine then cannot get. So this generator emits no LimitRange.
 
 `livetest --run-test` prints the live gap under `ENGINE SIZING:` and the JVM
-heap against the limit under `ENGINE HEAP:`.
+heap against the limit under `ENGINE HEAP:`. When the engine's pod spec carries
+no `-Xmx` (the location sets no `engineXmx`), Taurus starts JMeter with a heap
+of its own choosing. The rig then reads the running java processes' command
+lines in the engine while the run lasts, and reports JMeter's `-Xmx` against the
+limit. Measured on an 8Gi engine: JMeter ran with `-Xmx6656m` (about 81%),
+beside a second JVM (jetpack) with no `-Xmx`.
 
 ## Two node pools, and the ceiling that makes them work
 
