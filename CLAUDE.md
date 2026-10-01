@@ -24,6 +24,11 @@ runs a real kubectl/oc/docker/minikube/kind/helm.
 **Worktrees:** `.venv` is an editable install of the checkout it was built in.
 In a git worktree, build a venv inside the worktree or you test the wrong code.
 
+**`CRANE_INTERNALS.md`** — read it before you rely on what crane does: a
+variable it reads, a pod field it writes, a Role rule, a probe or a timeout.
+It is read from crane 3.8.0's code and lists where crane contradicts this
+project.
+
 **`LIVE_RIG.md`** — read it before running `livetest`, verifying a virtual
 service by hand, releasing an agent, or freeing local disk for a cluster. It
 holds the run command, what each flag proves, how to read an engine run, the
@@ -182,10 +187,11 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
 
 ## Generator facts that bite
 
-- Crane composes `${DOCKER_REGISTRY}/<repo path>:<tag>` for engines and ignores
-  `IMAGE_OVERRIDES` there, so the override value *is* the composed name
-  (`cluster_composed_targets`, shared with every mirror). Only the engine
-  reference was observed live.
+- Crane resolves every engine image through one map: `<dockerTag>:latest` →
+  `${DOCKER_REGISTRY}/<repo path>:<version>` from `/versions`, with
+  `IMAGE_OVERRIDES` merged over it (read from crane 3.8.0's code). The
+  generator's override value equals the composed name
+  (`cluster_composed_targets`, shared with every mirror), so both paths agree.
 - Docker is its own platform: one container, no namespace/SA/pod; BlazeMeter's
   real command carries `-u 0` and `DOCKER_PORT_RANGE` — check against the
   command their API returns, not their docs. `compose.yaml` ships beside the
@@ -213,14 +219,16 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
   command line inside the engine, never in the pod spec. Measured at 2/8Gi:
   `-Xms3328m -Xmx6656m` (81% of the limit), beside a second JVM (`jetpack.jar`)
   with no `-Xmx`. Read the heap from the running process, not the pod.
-- **Crane's readiness does not test BlazeMeter.** Measured on crane 3.8.0: with
-  an unreachable proxy crane hangs at its first call (the startup connectivity
-  check) and the pod stays `1/1 Ready`; only the heartbeat shows it. Crane also
-  logs its AUTH_TOKEN in plain text at startup, so its log holds a secret.
+- **Crane's readiness does not test BlazeMeter during startup.** Measured on
+  crane 3.8.0: with an unreachable proxy crane hangs at its first call (the
+  startup connectivity check) and the pod stays `1/1 Ready`; only the heartbeat
+  shows it. Its code bounds the hang at about an hour; after startup `/healtz`
+  fails within 120 s of failed heartbeats. Crane logs its AUTH_TOKEN in plain
+  text at startup and puts it in every engine pod spec, so both hold a secret.
 - **Engines meet PodSecurity `baseline`, not `restricted`.** `restrict_engines`
   gives them crane's UID and drops every capability, but no agent variable
-  sets `runAsNonRoot`. Measured (kind v1.36, server dry run): `restricted`
-  refuses that spec and `baseline` accepts it. Crane's own pod meets
+  sets `runAsNonRoot` or `seccompProfile`. Measured (kind v1.36, server dry
+  run): `restricted` refuses that spec and `baseline` accepts it. Crane's own pod meets
   `restricted`. The fact lives once, in `admission_policy.ENGINE_NO_RUN_AS_NON_ROOT`.
 - No LimitRange is emitted: crane sets requests explicitly, so a LimitRange
   only hits crane's `test-job-*` pods. `doctor` still reads an existing one.
