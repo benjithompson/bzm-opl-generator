@@ -17,10 +17,10 @@ export default [
         babelOptions: {
           babelrc: false,
           configFile: false,
-          presets: [
-            ["@babel/preset-typescript", { isTSX: true, allExtensions: true }],
-            ["@babel/preset-react", { runtime: "automatic" }],
-          ],
+          // Babel 8's eslint-parser parses directly, without loading presets,
+          // when babelrc and configFile are both off, so the syntax plugins are
+          // named here. "jsx" in .ts files matches the old isTSX/allExtensions.
+          parserOpts: { plugins: ["typescript", "jsx"] },
         },
       },
     },
